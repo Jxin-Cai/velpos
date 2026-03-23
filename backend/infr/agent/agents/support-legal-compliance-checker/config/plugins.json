@@ -1,0 +1,11 @@
+{
+  "marketplaces": [
+    {
+      "name": "agents-plugin",
+      "source": "Jxin-Cai/agents-plugin"
+    }
+  ],
+  "plugins": [
+    "support-legal-compliance-checker@agents-plugin"
+  ]
+}

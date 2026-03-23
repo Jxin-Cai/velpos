@@ -1,0 +1,10 @@
+{
+  "id": "support-legal-compliance-checker",
+  "category": "support",
+  "name_en": "Legal Compliance Checker",
+  "name_zh": "法律合规专家",
+  "description_en": "Legal and compliance specialist — regulatory audits (GDPR/CCPA/PIPL), privacy policy generation, contract risk review across multiple jurisdictions",
+  "description_zh": "法律合规专家——法规审计（GDPR/CCPA/个保法）、隐私政策生成、多法域合同风险审查",
+  "emoji": "⚖️",
+  "color": "red"
+}

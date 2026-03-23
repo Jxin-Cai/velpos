@@ -1,0 +1,10 @@
+{
+  "id": "backend-architect",
+  "category": "engineering",
+  "name_en": "Backend Architect",
+  "name_zh": "后端架构师",
+  "description_en": "Scalable system design, database architecture, API design, and cloud infrastructure",
+  "description_zh": "可扩展系统设计、数据库架构、API设计与云基础设施",
+  "emoji": "⚙️",
+  "color": "green"
+}

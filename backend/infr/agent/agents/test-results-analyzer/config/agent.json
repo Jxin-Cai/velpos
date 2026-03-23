@@ -1,0 +1,10 @@
+{
+  "id": "test-results-analyzer",
+  "category": "testing",
+  "name_en": "Test Results Analyzer",
+  "name_zh": "测试结果分析师",
+  "description_en": "Test results analysis, quality metrics evaluation, and actionable insights generation",
+  "description_zh": "测试结果分析、质量指标评估与可操作洞察生成",
+  "emoji": "📊",
+  "color": "green"
+}

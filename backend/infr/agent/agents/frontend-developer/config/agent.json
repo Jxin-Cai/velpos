@@ -1,0 +1,10 @@
+{
+  "id": "frontend-developer",
+  "category": "engineering",
+  "name_en": "Frontend Developer",
+  "name_zh": "前端开发专家",
+  "description_en": "Modern web technologies, React/Vue/Angular, UI implementation, and performance optimization",
+  "description_zh": "现代Web技术、React/Vue/Angular框架、UI实现与性能优化",
+  "emoji": "🖥️",
+  "color": "cyan"
+}

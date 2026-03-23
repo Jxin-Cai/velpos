@@ -1,0 +1,10 @@
+{
+  "id": "api-tester",
+  "category": "testing",
+  "name_en": "API Tester",
+  "name_zh": "API测试专家",
+  "description_en": "Comprehensive API validation, performance testing, and quality assurance",
+  "description_zh": "全面的API验证、性能测试与质量保障",
+  "emoji": "🔌",
+  "color": "orange"
+}

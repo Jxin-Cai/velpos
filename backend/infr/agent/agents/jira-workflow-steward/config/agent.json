@@ -1,0 +1,10 @@
+{
+  "id": "jira-workflow-steward",
+  "category": "project-management",
+  "name_en": "Jira Workflow Steward",
+  "name_zh": "Jira工作流管理员",
+  "description_en": "Jira-Git workflow integration, traceable commits, structured PRs, and release branch strategies",
+  "description_zh": "Jira关联Git工作流、可追溯提交、结构化PR与发布分支策略",
+  "emoji": "🔀",
+  "color": "blue"
+}

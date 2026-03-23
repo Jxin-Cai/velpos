@@ -1,0 +1,10 @@
+{
+  "id": "project-shepherd",
+  "category": "project-management",
+  "name_en": "Project Shepherd",
+  "name_zh": "项目引路人",
+  "description_en": "Cross-functional project coordination, timeline management, and stakeholder alignment",
+  "description_zh": "跨职能项目协调、时间线管理与利益相关者对齐",
+  "emoji": "🐑",
+  "color": "green"
+}

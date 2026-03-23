@@ -1,0 +1,10 @@
+{
+  "id": "sprint-prioritizer",
+  "category": "product",
+  "name_en": "Sprint Prioritizer",
+  "name_zh": "迭代优先级规划师",
+  "description_en": "Agile sprint planning, feature prioritization, and data-driven priority frameworks",
+  "description_zh": "敏捷迭代规划、特性优先级排序与数据驱动优先级框架",
+  "emoji": "🎯",
+  "color": "red"
+}

@@ -1,0 +1,47 @@
+# 忽略现有内容
+../claude-cookbooks/
+docs/
+../jiaxin/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.claude
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+target/
+dist/
+node_modules/
+
+# Build env files (templates are tracked, actual .env are not)
+build/dev/.env
+build/prod/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+uv.lock
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Runtime
+.pids/
+.logs/
+
+# Lark credentials
+.lark_credentials.json
+
+# Thoughtworks
+.thoughtworks/
+.playwright-mcp

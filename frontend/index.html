@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Velpos</title>
+    <!-- Preconnect to Google Fonts for faster resolution -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Async font loading: render immediately, swap fonts when ready -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+    <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" /></noscript>
+    <style>
+      /* Splash screen — pure CSS, zero JS dependency */
+      .vp-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+        background: #282c34;
+        z-index: 9999;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        transition: opacity 0.3s ease;
+      }
+      .vp-splash.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .vp-splash-logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .vp-splash-icon {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-weight: 700;
+        font-size: 18px;
+        color: #282c34;
+        background: linear-gradient(135deg, #61afef, #c678dd);
+        padding: 6px 10px;
+        border-radius: 6px;
+        letter-spacing: 1px;
+      }
+      .vp-splash-text {
+        font-weight: 600;
+        font-size: 18px;
+        color: #abb2bf;
+        letter-spacing: -0.3px;
+      }
+      .vp-splash-loader {
+        width: 120px;
+        height: 2px;
+        background: #3e4451;
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .vp-splash-loader-bar {
+        width: 40%;
+        height: 100%;
+        background: linear-gradient(90deg, #61afef, #c678dd);
+        border-radius: 2px;
+        animation: vp-slide 1.2s ease-in-out infinite;
+      }
+      @keyframes vp-slide {
+        0% { transform: translateX(-100%); }
+        50% { transform: translateX(200%); }
+        100% { transform: translateX(-100%); }
+      }
+      /* Respect user theme preference for splash */
+      @media (prefers-color-scheme: light) {
+        .vp-splash { background: #ffffff; }
+        .vp-splash-icon { color: #ffffff; }
+        .vp-splash-text { color: #18181b; }
+        .vp-splash-loader { background: #e4e4e7; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <!-- Splash screen: visible until Vue mounts and replaces #app content -->
+      <div class="vp-splash" id="vp-splash">
+        <div class="vp-splash-logo">
+          <span class="vp-splash-icon">VP</span>
+          <span class="vp-splash-text">Velpos</span>
+        </div>
+        <div class="vp-splash-loader">
+          <div class="vp-splash-loader-bar"></div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/app/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "id": "performance-benchmarker",
+  "category": "testing",
+  "name_en": "Performance Benchmarker",
+  "name_zh": "性能基准测试专家",
+  "description_en": "System performance measurement, analysis, and optimization recommendations",
+  "description_zh": "系统性能度量、分析与优化建议",
+  "emoji": "⚡",
+  "color": "yellow"
+}

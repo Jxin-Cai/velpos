@@ -1,0 +1,10 @@
+{
+  "id": "ui-designer",
+  "category": "design",
+  "name_en": "UI Designer",
+  "name_zh": "UI设计师",
+  "description_en": "Visual design systems, component libraries, and accessible interface design",
+  "description_zh": "视觉设计系统、组件库与无障碍界面设计",
+  "emoji": "🎨",
+  "color": "pink"
+}

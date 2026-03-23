@@ -1,0 +1,10 @@
+{
+  "id": "product-manager",
+  "category": "product",
+  "name_en": "Product Manager",
+  "name_zh": "产品经理",
+  "description_en": "Full lifecycle product ownership: discovery, strategy, roadmap, stakeholder alignment, and GTM",
+  "description_zh": "全生命周期产品负责：发现、策略、路线图、利益相关者对齐与GTM",
+  "emoji": "📋",
+  "color": "blue"
+}

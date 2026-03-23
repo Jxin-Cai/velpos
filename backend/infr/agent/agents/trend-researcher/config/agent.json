@@ -1,0 +1,10 @@
+{
+  "id": "trend-researcher",
+  "category": "product",
+  "name_en": "Trend Researcher",
+  "name_zh": "趋势研究员",
+  "description_en": "Market intelligence, emerging trend identification, competitive analysis, and opportunity assessment",
+  "description_zh": "市场情报分析、新兴趋势识别、竞品分析与机会评估",
+  "emoji": "📈",
+  "color": "green"
+}

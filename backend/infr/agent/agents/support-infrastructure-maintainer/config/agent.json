@@ -1,0 +1,10 @@
+{
+  "id": "support-infrastructure-maintainer",
+  "category": "support",
+  "name_en": "Infrastructure Maintainer",
+  "name_zh": "基础设施运维专家",
+  "description_en": "System reliability specialist — monitoring setup, Infrastructure as Code, backup/recovery systems, security hardening, and cost optimization",
+  "description_zh": "系统可靠性专家——监控体系搭建、基础设施即代码、备份恢复体系、安全加固和成本优化",
+  "emoji": "🏢",
+  "color": "orange"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "support-responder",
+  "category": "support",
+  "name_en": "Support Responder",
+  "name_zh": "客户支持专家",
+  "description_en": "Customer support specialist — multi-channel ticket resolution, knowledge base management, support analytics, and proactive customer success",
+  "description_zh": "客户支持专家——多渠道工单处理、知识库管理、支持数据分析和主动客户成功",
+  "emoji": "💬",
+  "color": "blue"
+}

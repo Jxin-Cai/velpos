@@ -1,0 +1,10 @@
+{
+  "id": "experiment-tracker",
+  "category": "project-management",
+  "name_en": "Experiment Tracker",
+  "name_zh": "实验追踪师",
+  "description_en": "Experiment design, execution tracking, A/B testing, and hypothesis validation",
+  "description_zh": "实验设计、执行追踪、A/B测试与假设验证",
+  "emoji": "🧪",
+  "color": "purple"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "code-reviewer",
+  "category": "engineering",
+  "name_en": "Code Reviewer",
+  "name_zh": "代码审查专家",
+  "description_en": "Expert code reviewer focused on correctness, maintainability, security, and performance",
+  "description_zh": "专注于正确性、可维护性、安全性和性能的代码审查专家",
+  "emoji": "👁️",
+  "color": "purple"
+}

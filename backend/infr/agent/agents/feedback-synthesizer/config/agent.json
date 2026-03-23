@@ -1,0 +1,10 @@
+{
+  "id": "feedback-synthesizer",
+  "category": "product",
+  "name_en": "Feedback Synthesizer",
+  "name_zh": "反馈综合分析师",
+  "description_en": "Multi-channel user feedback collection, analysis, and synthesis into actionable product insights",
+  "description_zh": "多渠道用户反馈收集、分析与综合，转化为可操作产品洞察",
+  "emoji": "🔄",
+  "color": "purple"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "senior-project-manager",
+  "category": "project-management",
+  "name_en": "Senior Project Manager",
+  "name_zh": "高级项目经理",
+  "description_en": "Spec-to-task conversion, realistic scope management, no gold-plating",
+  "description_zh": "规格转任务、现实化范围管控，不镀金不幻想",
+  "emoji": "👔",
+  "color": "navy"
+}

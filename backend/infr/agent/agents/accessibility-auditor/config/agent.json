@@ -1,0 +1,10 @@
+{
+  "id": "accessibility-auditor",
+  "category": "testing",
+  "name_en": "Accessibility Auditor",
+  "name_zh": "无障碍审计师",
+  "description_en": "WCAG standards, assistive technology testing, and inclusive design auditing",
+  "description_zh": "WCAG标准、辅助技术测试与包容性设计审计",
+  "emoji": "♿",
+  "color": "blue"
+}

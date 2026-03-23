@@ -1,0 +1,10 @@
+{
+  "id": "software-architect",
+  "category": "engineering",
+  "name_en": "Software Architect",
+  "name_zh": "软件架构师",
+  "description_en": "System design, DDD, architecture patterns, and technical decision-making for scalable, maintainable systems",
+  "description_zh": "系统设计、DDD、架构模式与技术决策，构建可扩展可维护的系统",
+  "emoji": "🏗️",
+  "color": "blue"
+}

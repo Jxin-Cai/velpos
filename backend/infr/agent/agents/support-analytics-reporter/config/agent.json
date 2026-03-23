@@ -1,0 +1,10 @@
+{
+  "id": "support-analytics-reporter",
+  "category": "support",
+  "name_en": "Analytics Reporter",
+  "name_zh": "数据分析师",
+  "description_en": "Business intelligence specialist — executive dashboards, customer segmentation (RFM), marketing attribution modeling, and data-driven decision support",
+  "description_zh": "商业智能专家——高管仪表盘、客户分群（RFM）、营销归因建模和数据驱动决策支持",
+  "emoji": "📊",
+  "color": "teal"
+}
