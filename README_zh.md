@@ -97,7 +97,7 @@ cd velpos
 cp build/dev/.env.example build/dev/.env
 ```
 
-所有开发环境配置都在这一个文件中。编辑 `CLAUDE_CLI_PATH` 为你本机的 Claude CLI 路径。
+所有开发环境配置都在这一个文件中。`CLAUDE_CLI_PATH` 会在启动时从 PATH 中 **自动探测**，一般不需要手动设置。
 
 <details>
 <summary><b>build/dev/.env</b></summary>
@@ -110,7 +110,7 @@ cp build/dev/.env.example build/dev/.env
 | `DATABASE_URL` | `mysql+aiomysql://root:root123456@localhost:3307/velpos` | 后端数据库连接（需与上面 MySQL 配置一致） |
 | `BACKEND_PORT` | `8083` | 后端端口 |
 | `FRONTEND_PORT` | `3000` | 前端端口 |
-| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | 宿主机上 `claude` 可执行文件路径 |
+| `CLAUDE_CLI_PATH` | *（自动探测）* | 仅当 `claude` 不在 PATH 中时需手动设置 |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | **宿主机文件系统**上的项目根目录 |

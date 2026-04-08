@@ -28,6 +28,22 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 PID_DIR="$ROOT_DIR/.pids"
 LOG_DIR="$ROOT_DIR/.logs"
 
+# Auto-detect Claude CLI if not set in .env
+if [ -z "${CLAUDE_CLI_PATH:-}" ]; then
+    if command -v claude &>/dev/null; then
+        CLAUDE_CLI_PATH="$(command -v claude)"
+        export CLAUDE_CLI_PATH
+    else
+        echo -e "\033[0;31m[ERROR]\033[0m Claude Code CLI not found."
+        echo ""
+        echo "  Install it with:  npm install -g @anthropic-ai/claude-code"
+        echo "  More info:        https://github.com/anthropics/claude-code"
+        echo ""
+        echo "  Or set CLAUDE_CLI_PATH in build/dev/.env manually."
+        exit 1
+    fi
+fi
+
 BACKEND_PID_FILE="$PID_DIR/backend.pid"
 FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
 BACKEND_LOG="$LOG_DIR/backend.log"

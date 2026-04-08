@@ -97,7 +97,7 @@ cd velpos
 cp build/dev/.env.example build/dev/.env
 ```
 
-All dev settings are in this single file. Edit `CLAUDE_CLI_PATH` to match your local Claude CLI path.
+All dev settings are in this single file. `CLAUDE_CLI_PATH` is **auto-detected** from your PATH at startup — no need to set it manually unless `claude` is installed in a non-standard location.
 
 <details>
 <summary><b>build/dev/.env</b></summary>
@@ -110,7 +110,7 @@ All dev settings are in this single file. Edit `CLAUDE_CLI_PATH` to match your l
 | `DATABASE_URL` | `mysql+aiomysql://root:root123456@localhost:3307/velpos` | Backend database connection (must match MySQL settings above) |
 | `BACKEND_PORT` | `8083` | Backend port |
 | `FRONTEND_PORT` | `3000` | Frontend port |
-| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | Path to the `claude` binary on the host |
+| `CLAUDE_CLI_PATH` | *(auto-detected)* | Override only if `claude` is not in PATH |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project root on the **host filesystem** |
