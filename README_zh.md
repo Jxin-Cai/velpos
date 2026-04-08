@@ -26,10 +26,11 @@ Velpos（意成）是一个基于 [Claude Agent SDK](https://github.com/anthropi
 
 - [为什么需要 Agent 打包](#为什么需要-agent-打包)
 - [亮点能力](#亮点能力)
-- [快速开始](#快速开始)
+- [部署](#部署)
+  - [开发环境](#开发环境)
+  - [生产环境](#生产环境)
 - [首次使用配置](#首次使用配置)
 - [使用概览](#使用概览)
-- [生产部署](#生产部署)
 - [架构概览](#架构概览)
 - [技术栈](#技术栈)
 - [参与贡献](#参与贡献)
@@ -77,65 +78,62 @@ Velpos 把这些分散的部分打包成可复用能力：
 
 <br/>
 
-## 快速开始
-
-### 前置条件
-
-| 依赖 | 版本 |
-|---|---|
-| [Node.js](https://nodejs.org/) | >= 18 |
-| [Python](https://www.python.org/) | >= 3.11, < 3.13 |
-| [Docker](https://www.docker.com/) | 含 Compose |
-| [uv](https://docs.astral.sh/uv/) | 最新版 |
-| [Claude Code CLI](https://github.com/anthropics/claude-code) | `claude` 命令可用 |
-
-### 1. 克隆
+## 部署
 
 ```bash
 git clone git@github.com:Jxin-Cai/velpos.git
 cd velpos
 ```
 
-### 2. 配置
+### 开发环境
+
+> 仅 MySQL 运行在 Docker 中。后端和前端运行在 **宿主机**，直接管理 **宿主机文件系统** 上的项目目录。
+
+**前置条件：** Node.js >= 18、Python >= 3.11、Docker、[uv](https://docs.astral.sh/uv/)、Claude Code CLI（`claude` 命令可用）
+
+**1. 配置**
 
 ```bash
-cp build/dev/.env.example build/dev/.env
-cp backend/.env.example backend/.env
+cp build/dev/.env.example build/dev/.env    # Docker MySQL + 服务端口 + Claude 设置
+cp backend/.env.example backend/.env        # 后端数据库连接
 ```
 
 <details>
-<summary><b>环境变量参考</b></summary>
-
-#### `build/dev/.env`
+<summary><b>build/dev/.env — 服务端口与 Claude 设置</b></summary>
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `MYSQL_ROOT_PASSWORD` | `root123456` | MySQL root 密码 |
 | `MYSQL_DATABASE` | `velpos` | 数据库名 |
-| `MYSQL_HOST_PORT` | `3307` | MySQL 映射端口 |
+| `MYSQL_HOST_PORT` | `3307` | MySQL 映射到宿主机的端口 |
 | `BACKEND_PORT` | `8083` | 后端端口 |
 | `FRONTEND_PORT` | `3000` | 前端端口 |
-| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | Claude CLI 路径 |
+| `CLAUDE_CLI_PATH` | *（你本机的路径）* | 宿主机上 `claude` 可执行文件路径 |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
-| `PROJECTS_ROOT_DIR` | `~/claude-projects` | 项目根目录 |
+| `PROJECTS_ROOT_DIR` | `~/claude-projects` | **宿主机文件系统**上的项目根目录 |
 | `CORS_ALLOW_ORIGINS` | `*` | 允许的浏览器来源 |
-
-#### `backend/.env`
-
-```env
-DATABASE_URL=mysql+aiomysql://root:yourpassword@localhost:3307/velpos
-```
 
 </details>
 
-### 3. 启动
+<details>
+<summary><b>backend/.env — 数据库连接</b></summary>
+
+```env
+DATABASE_URL=mysql+aiomysql://root:root123456@localhost:3307/velpos
+```
+
+其中 host/port/password 需要与 `build/dev/.env` 保持一致。
+
+</details>
+
+**2. 启动**
 
 ```bash
 build/dev/start.sh start
 ```
 
-脚本会启动 MySQL（Docker）、后端（`uv run uvicorn`）和前端（`npm run dev`）。数据库迁移在后端启动时自动执行。
+脚本会启动 MySQL（Docker）、后端（宿主机 `uv run uvicorn`）和前端（宿主机 `npm run dev`）。数据库迁移在后端启动时自动执行。
 
 | 服务 | 地址 |
 |---|---|
@@ -143,7 +141,7 @@ build/dev/start.sh start
 | API 文档 | http://localhost:8083/docs |
 
 <details>
-<summary><b>服务管理命令</b></summary>
+<summary><b>服务管理</b></summary>
 
 ```bash
 build/dev/start.sh start     # 启动全部
@@ -154,6 +152,48 @@ build/dev/start.sh logs      # 查看后端日志
 ```
 
 </details>
+
+### 生产环境
+
+> 所有服务运行在 Docker 中（MySQL + 后端 + 前端/nginx）。后端管理的是 **容器内** 的文件目录。宿主机目录通过 bind mount 挂载进容器以持久化项目数据。
+
+**1. 配置**
+
+```bash
+cp build/prod/.env.example build/prod/.env
+```
+
+<details>
+<summary><b>build/prod/.env — 统一配置</b></summary>
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MYSQL_ROOT_PASSWORD` | — | MySQL root 密码 |
+| `MYSQL_DATABASE` | `velpos` | 数据库名 |
+| `APP_PORT` | `80` | nginx 对外暴露端口 |
+| `PROJECTS_HOST_DIR` | `~/.agent_projects` | 宿主机目录，挂载到容器的 `/data/projects` |
+| `ANTHROPIC_API_KEY` | — | Anthropic API Key |
+| `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
+| `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
+
+以下变量由 docker-compose **自动配置**，无需手动设置：
+
+| 变量 | 固定值 | 原因 |
+|---|---|---|
+| `DATABASE_URL` | `mysql+aiomysql://root:...@mysql:3306/velpos` | 容器间网络互通 |
+| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | 在后端镜像中已安装 |
+| `PROJECTS_ROOT_DIR` | `/data/projects` | 容器内挂载点 |
+
+</details>
+
+**2. 构建并启动**
+
+```bash
+cd build/prod
+docker compose up --build -d
+```
+
+栈包含 MySQL、后端和前端（nginx）。通过 `http://localhost`（或你配置的端口）访问界面。
 
 <br/>
 
@@ -201,33 +241,6 @@ build/dev/start.sh logs      # 查看后端日志
 | **Memory** | 直接在 UI 中编辑 `CLAUDE.md` 与 memory 文件 |
 | **Git** | 管理全局 Git 身份和 SSH Key |
 | **IM 集成** | 绑定 **飞书**、**微信**、**QQ** 或 **OpenIM**，双向消息同步 |
-
-<br/>
-
-## 生产部署
-
-`build/prod` 下提供完整 Docker 部署方案：
-
-```bash
-cp build/prod/.env.example build/prod/.env
-cd build/prod
-docker compose up --build -d
-```
-
-<details>
-<summary><b>生产环境变量</b></summary>
-
-| 变量 | 说明 |
-|---|---|
-| `APP_PORT` | 对外暴露端口 |
-| `MYSQL_ROOT_PASSWORD` | MySQL 密码 |
-| `CLAUDE_CLI_PATH` | 容器内 Claude CLI 路径 |
-| `ANTHROPIC_API_KEY` | Anthropic API Key |
-| `PROJECTS_HOST_DIR` | 挂载进容器的宿主机目录 |
-
-</details>
-
-> 生产环境启动后，同样需要通过 Web 界面完成初始化设置。
 
 <br/>
 

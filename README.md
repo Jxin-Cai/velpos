@@ -26,10 +26,11 @@ This makes it much easier for **non-technical users** to build and operate multi
 
 - [Why Agent Packaging](#why-agent-packaging)
 - [Highlights](#highlights)
-- [Quick Start](#quick-start)
+- [Deployment](#deployment)
+  - [Development](#development)
+  - [Production](#production)
 - [First Run Setup](#first-run-setup)
 - [Usage Overview](#usage-overview)
-- [Production Deployment](#production-deployment)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Contributing](#contributing)
@@ -77,65 +78,62 @@ This is especially useful for teams where the operators are **product owners, su
 
 <br/>
 
-## Quick Start
-
-### Prerequisites
-
-| Dependency | Version |
-|---|---|
-| [Node.js](https://nodejs.org/) | >= 18 |
-| [Python](https://www.python.org/) | >= 3.11, < 3.13 |
-| [Docker](https://www.docker.com/) | with Compose |
-| [uv](https://docs.astral.sh/uv/) | latest |
-| [Claude Code CLI](https://github.com/anthropics/claude-code) | `claude` available in PATH |
-
-### 1. Clone
+## Deployment
 
 ```bash
 git clone git@github.com:Jxin-Cai/velpos.git
 cd velpos
 ```
 
-### 2. Configure
+### Development
+
+> Only MySQL runs in Docker. Backend and frontend run on the **host machine**, managing **host filesystem** paths directly.
+
+**Prerequisites:** Node.js >= 18, Python >= 3.11, Docker, [uv](https://docs.astral.sh/uv/), Claude Code CLI (`claude` in PATH)
+
+**1. Configure**
 
 ```bash
-cp build/dev/.env.example build/dev/.env
-cp backend/.env.example backend/.env
+cp build/dev/.env.example build/dev/.env    # Docker MySQL + service ports + Claude settings
+cp backend/.env.example backend/.env        # Backend database connection
 ```
 
 <details>
-<summary><b>Environment variables reference</b></summary>
-
-#### `build/dev/.env`
+<summary><b>build/dev/.env — service ports and Claude settings</b></summary>
 
 | Variable | Default | Description |
 |---|---|---|
 | `MYSQL_ROOT_PASSWORD` | `root123456` | MySQL root password |
 | `MYSQL_DATABASE` | `velpos` | Database name |
-| `MYSQL_HOST_PORT` | `3307` | Exposed MySQL port |
+| `MYSQL_HOST_PORT` | `3307` | MySQL port exposed to host |
 | `BACKEND_PORT` | `8083` | Backend port |
 | `FRONTEND_PORT` | `3000` | Frontend port |
-| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | Path to Claude CLI binary |
+| `CLAUDE_CLI_PATH` | *(your local path)* | Path to the `claude` binary on the host |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
-| `PROJECTS_ROOT_DIR` | `~/claude-projects` | Root directory for managed projects |
+| `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project root on the **host filesystem** |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed browser origins |
-
-#### `backend/.env`
-
-```env
-DATABASE_URL=mysql+aiomysql://root:yourpassword@localhost:3307/velpos
-```
 
 </details>
 
-### 3. Start
+<details>
+<summary><b>backend/.env — database connection</b></summary>
+
+```env
+DATABASE_URL=mysql+aiomysql://root:root123456@localhost:3307/velpos
+```
+
+The host/port/password must match `build/dev/.env`.
+
+</details>
+
+**2. Start**
 
 ```bash
 build/dev/start.sh start
 ```
 
-The script will start MySQL (Docker), backend (`uv run uvicorn`), and frontend (`npm run dev`). Database migrations run automatically on backend startup.
+This will start MySQL (Docker), backend (`uv run uvicorn` on host), and frontend (`npm run dev` on host). Database migrations run automatically on backend startup.
 
 | Service | URL |
 |---|---|
@@ -143,17 +141,59 @@ The script will start MySQL (Docker), backend (`uv run uvicorn`), and frontend (
 | API Docs | http://localhost:8083/docs |
 
 <details>
-<summary><b>Service management commands</b></summary>
+<summary><b>Service management</b></summary>
 
 ```bash
-build/dev/start.sh start     # Start all services
-build/dev/start.sh stop      # Stop all services
-build/dev/start.sh restart   # Restart all services
+build/dev/start.sh start     # Start all
+build/dev/start.sh stop      # Stop all
+build/dev/start.sh restart   # Restart all
 build/dev/start.sh status    # Show status
 build/dev/start.sh logs      # Tail backend logs
 ```
 
 </details>
+
+### Production
+
+> Everything runs in Docker (MySQL + backend + frontend/nginx). The backend manages files inside the **container**. A host directory is bind-mounted for project data persistence.
+
+**1. Configure**
+
+```bash
+cp build/prod/.env.example build/prod/.env
+```
+
+<details>
+<summary><b>build/prod/.env — all-in-one configuration</b></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `MYSQL_ROOT_PASSWORD` | — | MySQL root password |
+| `MYSQL_DATABASE` | `velpos` | Database name |
+| `APP_PORT` | `80` | Public port exposed by nginx |
+| `PROJECTS_HOST_DIR` | `~/.agent_projects` | Host directory mounted into the container as `/data/projects` |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
+| `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
+
+The following are **auto-configured** by docker-compose and do not need to be set:
+
+| Variable | Fixed value | Reason |
+|---|---|---|
+| `DATABASE_URL` | `mysql+aiomysql://root:...@mysql:3306/velpos` | Inter-container networking |
+| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | Installed in the backend image |
+| `PROJECTS_ROOT_DIR` | `/data/projects` | Container-internal mount point |
+
+</details>
+
+**2. Build and start**
+
+```bash
+cd build/prod
+docker compose up --build -d
+```
+
+The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http://localhost` (or the port you configured).
 
 <br/>
 
@@ -201,33 +241,6 @@ build/dev/start.sh logs      # Tail backend logs
 | **Memory** | Edit `CLAUDE.md` and memory files directly in the UI |
 | **Git** | Manage global Git identity and SSH keys |
 | **IM Integration** | Bind sessions to **Lark**, **WeChat**, **QQ**, or **OpenIM** for two-way sync |
-
-<br/>
-
-## Production Deployment
-
-Full Docker deployment under `build/prod`:
-
-```bash
-cp build/prod/.env.example build/prod/.env
-cd build/prod
-docker compose up --build -d
-```
-
-<details>
-<summary><b>Production environment variables</b></summary>
-
-| Variable | Description |
-|---|---|
-| `APP_PORT` | Public port |
-| `MYSQL_ROOT_PASSWORD` | MySQL password |
-| `CLAUDE_CLI_PATH` | Claude CLI path inside the container |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `PROJECTS_HOST_DIR` | Host directory mounted into the container |
-
-</details>
-
-> Production also requires initial configuration via the web UI after the stack is running.
 
 <br/>
 
