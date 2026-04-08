@@ -10,7 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Claude](https://img.shields.io/badge/Claude_Code-Agent_SDK-D97757.svg)](https://github.com/anthropics/claude-code-sdk-python)
 
-[English](./README.md)&ensp;|&ensp;[许可证](./LICENSE)&ensp;|&ensp;[行为准则](./CODE_OF_CONDUCT.md)
+[English](./README.md)&ensp;|&ensp;[演示视频](https://www.bilibili.com/video/BV1iEDhBuEVZ/)&ensp;|&ensp;[许可证](./LICENSE)&ensp;|&ensp;[行为准则](./CODE_OF_CONDUCT.md)
 
 </div>
 
