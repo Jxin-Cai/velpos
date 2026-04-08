@@ -94,36 +94,27 @@ cd velpos
 **1. Configure**
 
 ```bash
-cp build/dev/.env.example build/dev/.env    # Docker MySQL + service ports + Claude settings
-cp backend/.env.example backend/.env        # Backend database connection
+cp build/dev/.env.example build/dev/.env
 ```
 
+All dev settings are in this single file. Edit `CLAUDE_CLI_PATH` to match your local Claude CLI path.
+
 <details>
-<summary><b>build/dev/.env — service ports and Claude settings</b></summary>
+<summary><b>build/dev/.env</b></summary>
 
 | Variable | Default | Description |
 |---|---|---|
 | `MYSQL_ROOT_PASSWORD` | `root123456` | MySQL root password |
 | `MYSQL_DATABASE` | `velpos` | Database name |
 | `MYSQL_HOST_PORT` | `3307` | MySQL port exposed to host |
+| `DATABASE_URL` | `mysql+aiomysql://root:root123456@localhost:3307/velpos` | Backend database connection (must match MySQL settings above) |
 | `BACKEND_PORT` | `8083` | Backend port |
 | `FRONTEND_PORT` | `3000` | Frontend port |
-| `CLAUDE_CLI_PATH` | *(your local path)* | Path to the `claude` binary on the host |
+| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | Path to the `claude` binary on the host |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project root on the **host filesystem** |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed browser origins |
-
-</details>
-
-<details>
-<summary><b>backend/.env — database connection</b></summary>
-
-```env
-DATABASE_URL=mysql+aiomysql://root:root123456@localhost:3307/velpos
-```
-
-The host/port/password must match `build/dev/.env`.
 
 </details>
 

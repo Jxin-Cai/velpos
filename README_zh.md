@@ -94,36 +94,27 @@ cd velpos
 **1. 配置**
 
 ```bash
-cp build/dev/.env.example build/dev/.env    # Docker MySQL + 服务端口 + Claude 设置
-cp backend/.env.example backend/.env        # 后端数据库连接
+cp build/dev/.env.example build/dev/.env
 ```
 
+所有开发环境配置都在这一个文件中。编辑 `CLAUDE_CLI_PATH` 为你本机的 Claude CLI 路径。
+
 <details>
-<summary><b>build/dev/.env — 服务端口与 Claude 设置</b></summary>
+<summary><b>build/dev/.env</b></summary>
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `MYSQL_ROOT_PASSWORD` | `root123456` | MySQL root 密码 |
 | `MYSQL_DATABASE` | `velpos` | 数据库名 |
 | `MYSQL_HOST_PORT` | `3307` | MySQL 映射到宿主机的端口 |
+| `DATABASE_URL` | `mysql+aiomysql://root:root123456@localhost:3307/velpos` | 后端数据库连接（需与上面 MySQL 配置一致） |
 | `BACKEND_PORT` | `8083` | 后端端口 |
 | `FRONTEND_PORT` | `3000` | 前端端口 |
-| `CLAUDE_CLI_PATH` | *（你本机的路径）* | 宿主机上 `claude` 可执行文件路径 |
+| `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | 宿主机上 `claude` 可执行文件路径 |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | **宿主机文件系统**上的项目根目录 |
 | `CORS_ALLOW_ORIGINS` | `*` | 允许的浏览器来源 |
-
-</details>
-
-<details>
-<summary><b>backend/.env — 数据库连接</b></summary>
-
-```env
-DATABASE_URL=mysql+aiomysql://root:root123456@localhost:3307/velpos
-```
-
-其中 host/port/password 需要与 `build/dev/.env` 保持一致。
 
 </details>
 

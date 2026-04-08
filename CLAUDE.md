@@ -12,8 +12,6 @@ Velpos is a web interface for controlling Claude Code via the Agent SDK. Python 
 ```bash
 # 1. Copy and configure environment
 cp build/dev/.env.example build/dev/.env
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
 
 # 2. Start everything (MySQL docker + backend + frontend)
 build/dev/start.sh start

@@ -21,6 +21,8 @@ node_modules/
 # Build env files (templates are tracked, actual .env are not)
 build/dev/.env
 build/prod/.env
+backend/.env
+frontend/.env
 
 # Python
 __pycache__/
