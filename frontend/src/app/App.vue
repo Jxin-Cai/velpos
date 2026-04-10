@@ -22,6 +22,7 @@ const {
   updateSession,
   setMessages,
   setStatus,
+  setQueued,
   setError,
   addMessage,
   reset,
@@ -243,6 +244,10 @@ function connectToSession(sessionId, oldSessionId) {
       case 'info':
         break
 
+      case 'message_queued':
+        setQueued(true)
+        break
+
       case 'user_choice_request':
         addMessage({
           type: 'interactive',
@@ -282,6 +287,19 @@ function connectToSession(sessionId, oldSessionId) {
         resetImState()
         fetchImStatus(sessionId)
         fetchImChannels()
+        break
+
+      case 'cancel_rewind':
+        // Cancel completed: restore session state and prompt
+        updateSession(data.session)
+        if (data.messages) setMessages(data.messages, data.session)
+        setStatus(data.session.status || 'idle')
+        updateSessionInList(sessionId, data.session)
+        markDone(sessionId)
+        // Emit event to restore prompt to input box
+        window.dispatchEvent(new CustomEvent('vp-cancel-rewind', {
+          detail: { prompt: data.prompt || '' },
+        }))
         break
 
       case 'status':

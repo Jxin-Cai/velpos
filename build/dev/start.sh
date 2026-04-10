@@ -28,21 +28,116 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 PID_DIR="$ROOT_DIR/.pids"
 LOG_DIR="$ROOT_DIR/.logs"
 
-# Auto-detect Claude CLI if not set in .env
-if [ -z "${CLAUDE_CLI_PATH:-}" ]; then
-    if command -v claude &>/dev/null; then
+# ── Prerequisite checks ──
+check_prerequisites() {
+    local missing=0
+
+    echo -e "${BOLD}Checking prerequisites...${NC}"
+    echo ""
+
+    # Docker
+    if command -v docker &>/dev/null; then
+        ok "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+' | head -1)"
+    else
+        error "Docker not found"
+        echo "  Install: https://docs.docker.com/get-docker/"
+        missing=1
+    fi
+
+    # docker compose
+    if docker compose version &>/dev/null 2>&1; then
+        ok "Docker Compose $(docker compose version --short 2>/dev/null || echo '(available)')"
+    else
+        error "Docker Compose not found"
+        echo "  Install: https://docs.docker.com/compose/install/"
+        missing=1
+    fi
+
+    # Python >= 3.11
+    if command -v python3 &>/dev/null; then
+        local py_ver
+        py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        local py_major py_minor
+        py_major=$(echo "$py_ver" | cut -d. -f1)
+        py_minor=$(echo "$py_ver" | cut -d. -f2)
+        if [ "$py_major" -ge 3 ] && [ "$py_minor" -ge 11 ]; then
+            ok "Python $py_ver"
+        else
+            error "Python $py_ver found, but >= 3.11 is required"
+            echo "  Install: https://www.python.org/downloads/"
+            missing=1
+        fi
+    else
+        error "Python 3 not found"
+        echo "  Install: https://www.python.org/downloads/"
+        missing=1
+    fi
+
+    # uv
+    if command -v uv &>/dev/null; then
+        ok "uv $(uv --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo '(available)')"
+    else
+        error "uv not found"
+        echo "  Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        echo "  More info: https://docs.astral.sh/uv/"
+        missing=1
+    fi
+
+    # Node.js >= 18
+    if command -v node &>/dev/null; then
+        local node_ver
+        node_ver=$(node -v | tr -d 'v')
+        local node_major
+        node_major=$(echo "$node_ver" | cut -d. -f1)
+        if [ "$node_major" -ge 18 ]; then
+            ok "Node.js $node_ver"
+        else
+            error "Node.js $node_ver found, but >= 18 is required"
+            echo "  Install: https://nodejs.org/"
+            missing=1
+        fi
+    else
+        error "Node.js not found"
+        echo "  Install: https://nodejs.org/"
+        missing=1
+    fi
+
+    # npm
+    if command -v npm &>/dev/null; then
+        ok "npm $(npm --version 2>/dev/null)"
+    else
+        error "npm not found (usually comes with Node.js)"
+        missing=1
+    fi
+
+    # Claude Code CLI
+    if [ -n "${CLAUDE_CLI_PATH:-}" ]; then
+        if [ -x "$CLAUDE_CLI_PATH" ]; then
+            ok "Claude CLI ($CLAUDE_CLI_PATH)"
+        else
+            error "CLAUDE_CLI_PATH=$CLAUDE_CLI_PATH is not executable"
+            missing=1
+        fi
+    elif command -v claude &>/dev/null; then
         CLAUDE_CLI_PATH="$(command -v claude)"
         export CLAUDE_CLI_PATH
+        ok "Claude CLI ($CLAUDE_CLI_PATH)"
     else
-        echo -e "\033[0;31m[ERROR]\033[0m Claude Code CLI not found."
-        echo ""
-        echo "  Install it with:  npm install -g @anthropic-ai/claude-code"
-        echo "  More info:        https://github.com/anthropics/claude-code"
-        echo ""
+        error "Claude Code CLI not found"
+        echo "  Install: npm install -g @anthropic-ai/claude-code"
+        echo "  More info: https://github.com/anthropics/claude-code"
         echo "  Or set CLAUDE_CLI_PATH in build/dev/.env manually."
+        missing=1
+    fi
+
+    echo ""
+    if [ "$missing" -ne 0 ]; then
+        error "Missing prerequisites. Please install them and try again."
         exit 1
     fi
-fi
+    ok "All prerequisites satisfied!"
+    echo ""
+}
 
 BACKEND_PID_FILE="$PID_DIR/backend.pid"
 FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
@@ -68,6 +163,9 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; }
 ensure_dirs() {
     mkdir -p "$PID_DIR" "$LOG_DIR"
 }
+
+# Run prerequisite check after colors/helpers are defined
+check_prerequisites
 
 is_running() {
     local pid_file="$1"
@@ -140,7 +238,7 @@ start_frontend() {
     info "Starting frontend on port $FRONTEND_PORT..."
 
     cd "$FRONTEND_DIR"
-    nohup npm run dev -- --host 0.0.0.0 > "$FRONTEND_LOG" 2>&1 &
+    nohup npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
 
     local pid=$!
     echo "$pid" > "$FRONTEND_PID_FILE"

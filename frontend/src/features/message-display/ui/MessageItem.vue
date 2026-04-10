@@ -10,6 +10,7 @@ import ResultBlock from './ResultBlock.vue'
 import SystemBlock from './SystemBlock.vue'
 import UserChoiceBlock from './UserChoiceBlock.vue'
 import PermissionRequestBlock from './PermissionRequestBlock.vue'
+import TodoProgressBlock from './TodoProgressBlock.vue'
 
 const props = defineProps({
   message: {
@@ -108,6 +109,18 @@ watch(
         }
         if (block.type === 'thinking') {
           return { ...block }
+        }
+        // Convert TodoWrite tool_use into visual todo_progress block
+        if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos) {
+          return {
+            type: 'todo_progress',
+            todos: block.input.todos.map(t => ({
+              subject: t.subject || t.content || '',
+              status: t.status || 'pending',
+              description: t.description || '',
+              activeForm: t.activeForm || '',
+            })),
+          }
         }
         return block
       })
@@ -233,6 +246,10 @@ function handleDelegatedClick(e) {
       <ThinkingBlock
         v-else-if="block.type === 'thinking'"
         :block="block"
+      />
+      <TodoProgressBlock
+        v-else-if="block.type === 'todo_progress'"
+        :todos="block.todos"
       />
       <ToolUseBlock
         v-else-if="block.type === 'tool_use'"

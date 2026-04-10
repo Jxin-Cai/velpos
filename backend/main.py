@@ -143,6 +143,39 @@ async def _resume_im_listeners() -> None:
                 )
 
 
+async def _restore_channel_profile_settings() -> None:
+    """Restore active channel profile env vars to ~/.claude/settings.json.
+
+    In production (Docker), settings.json is lost on every rebuild because it
+    lives inside the container filesystem. Channel profiles are persisted in
+    MySQL, so we re-apply the active profile's env vars on startup to keep
+    Claude Code's settings in sync.
+    """
+    from infr.config.database import async_session_factory
+    from infr.repository.channel_profile_repository_impl import ChannelProfileRepositoryImpl
+    from application.channel_profile.channel_profile_application_service import (
+        ChannelProfileApplicationService,
+    )
+    from ohs.dependencies import get_settings_application_service
+
+    settings_svc = get_settings_application_service()
+
+    async with async_session_factory() as db_session:
+        repo = ChannelProfileRepositoryImpl(db_session)
+        active_profile = await repo.find_active()
+        if active_profile is None:
+            logger.info("No active channel profile found, skipping settings restore.")
+            return
+
+        env_vars = ChannelProfileApplicationService._profile_to_env_vars(active_profile)
+        if env_vars:
+            await settings_svc._settings_file_gateway.update_env_section(env_vars)
+            logger.info(
+                "Restored active channel profile '%s' env vars to settings.json.",
+                active_profile.name,
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from ohs.dependencies import get_im_config, get_im_channel_registry
@@ -174,6 +207,12 @@ async def lifespan(app: FastAPI):
 
     registered = [ct.value for ct in im_channel_registry.registered_types]
     logger.info("IM channels registered: %s", registered)
+
+    # Restore active channel profile settings after rebuild
+    try:
+        await _restore_channel_profile_settings()
+    except Exception as e:
+        logger.error("Failed to restore channel profile settings: %s", e)
 
     if im_config.enabled:
         logger.info("OpenIM integration enabled")

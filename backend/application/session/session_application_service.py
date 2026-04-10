@@ -48,6 +48,10 @@ class SessionApplicationService:
         self._on_user_message = on_user_message
         self._project_repository = project_repository
         self._im_unbind_fn = im_unbind_fn
+        # Latest-wins queue: at most one pending message per session
+        self._queued_messages: dict[str, RunQueryCommand] = {}
+        # Tracks sessions that have been cancelled (to prevent retry in run_claude_query)
+        self._cancelled_sessions: set[str] = {}
 
     @staticmethod
     def _session_to_dict(session: Session) -> dict[str, Any]:
@@ -343,6 +347,13 @@ class SessionApplicationService:
             try:
                 await self._consume_message_stream(session, msg_stream)
             except Exception as stream_err:
+                # If cancelled, don't retry — let cancel_query handle cleanup
+                if command.session_id in self._cancelled_sessions:
+                    logger.info(
+                        "[session=%s] 消息流因取消而中断, 跳过重试",
+                        command.session_id,
+                    )
+                    return
                 # If send_query's stream fails mid-iteration (e.g. dead CLI process),
                 # fall back to a fresh connect
                 if is_connected:
@@ -363,6 +374,11 @@ class SessionApplicationService:
                 else:
                     raise
 
+            # If cancelled during stream consumption, skip normal completion
+            if command.session_id in self._cancelled_sessions:
+                logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
+                return
+
             session.complete_query()
 
             # Fire outbound IM sync in background (only for web UI path)
@@ -380,6 +396,10 @@ class SessionApplicationService:
             )
 
         except Exception as e:
+            # If cancelled, skip error handling — cancel_query handles everything
+            if command.session_id in self._cancelled_sessions:
+                logger.info("[session=%s] 查询异常但已取消, 跳过错误处理", command.session_id)
+                return
             logger.error(
                 "[session=%s] Claude查询失败: %s",
                 command.session_id,
@@ -394,6 +414,9 @@ class SessionApplicationService:
 
         finally:
             self._claude_agent_gateway.mark_idle(command.session_id)
+            # If cancelled, cancel_query handles save and broadcast
+            if command.session_id in self._cancelled_sessions:
+                return
             # Use a fresh DB session to ensure final save succeeds even if
             # the original connection was lost during a long-running query
             try:
@@ -439,6 +462,12 @@ class SessionApplicationService:
                     },
                 },
             )
+
+            # Execute queued follow-up message if present
+            queued = self._queued_messages.pop(command.session_id, None)
+            if queued:
+                logger.info("[session=%s] 执行排队的后续消息", command.session_id)
+                safe_create_task(self.run_claude_query(queued))
 
     async def _consume_message_stream(
         self, session: "Session", msg_stream: "AsyncIterator[dict]"
@@ -582,13 +611,20 @@ class SessionApplicationService:
             logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
 
     async def cancel_query(self, session_id: str) -> None:
-        """Cancel an active Claude query via SDK interrupt.
+        """Cancel an active Claude query via SDK interrupt, then rewind.
 
-        Sends an interrupt signal immediately, with a short timeout.
-        If interrupt times out, falls back to disconnect to force-stop.
-        The WS handler fires this as a background task so the UI is
-        immediately unblocked.
+        1. Marks session as cancelled (prevents retry in run_claude_query).
+        2. Clears queued messages.
+        3. Sends interrupt to SDK with 3s timeout, disconnect fallback.
+        4. Waits briefly for run_claude_query to finish.
+        5. Sends /rewind to Claude Code to undo the last turn.
+        6. Rewinds domain session (removes last user msg + responses).
+        7. Broadcasts rewind event with the original prompt.
         """
+        self._cancelled_sessions.add(session_id)
+        self.clear_queued_message(session_id)
+
+        # Step 1: Interrupt the running query
         try:
             await asyncio.wait_for(
                 self._claude_agent_gateway.interrupt(session_id),
@@ -602,6 +638,78 @@ class SessionApplicationService:
             await self._claude_agent_gateway.disconnect(session_id)
         except RuntimeError:
             logger.info("[session=%s] cancel_query: no active connection", session_id)
+
+        # Step 2: Wait for run_claude_query to finish its finally block
+        for _ in range(20):
+            if not self._claude_agent_gateway.is_active(session_id):
+                break
+            await asyncio.sleep(0.1)
+
+        # Step 3: Send /rewind to Claude Code to undo the last turn
+        if self._claude_agent_gateway.is_connected(session_id):
+            try:
+                async for _ in self._claude_agent_gateway.send_query(session_id, "/rewind"):
+                    pass
+                logger.info("[session=%s] /rewind sent successfully", session_id)
+            except Exception as e:
+                logger.warning("[session=%s] /rewind failed: %s", session_id, e)
+
+        # Step 4: Rewind domain session
+        session = await self._session_repository.find_by_id(session_id)
+        prompt = ""
+        if session is not None:
+            try:
+                prompt = session.cancel_query()
+                await self._session_repository.save(session)
+            except ValueError:
+                # Session not in RUNNING state — already transitioned
+                # Still try to find last user message for prompt restoration
+                for msg in reversed(session.messages):
+                    if msg.message_type.value == "user":
+                        prompt = msg.content.get("text", "")
+                        break
+
+            # Broadcast rewind: full session state + messages + original prompt
+            all_messages = [
+                {"type": msg.message_type.value, "content": msg.content}
+                for msg in session.messages
+            ]
+            await self._connection_manager.broadcast(
+                session_id,
+                {
+                    "event": "cancel_rewind",
+                    "prompt": prompt,
+                    "session": self._session_to_dict(session),
+                    "messages": all_messages,
+                },
+            )
+        else:
+            # Session not found, just broadcast idle
+            await self._connection_manager.broadcast(
+                session_id,
+                {"event": "status_change", "status": "idle"},
+            )
+
+        self._cancelled_sessions.discard(session_id)
+
+    # ── Message queue (latest-wins) ───────────────────────────
+
+    def queue_message(self, session_id: str, command: RunQueryCommand) -> None:
+        """Queue a follow-up message to run after the current query finishes.
+
+        Latest-wins: only the most recent queued message per session is kept.
+        """
+        self._queued_messages[session_id] = command
+        logger.info("[session=%s] 消息已排队 (latest-wins)", session_id)
+
+    def clear_queued_message(self, session_id: str) -> None:
+        """Clear any queued message for a session (e.g. on cancel)."""
+        removed = self._queued_messages.pop(session_id, None)
+        if removed:
+            logger.info("[session=%s] 已清除排队消息", session_id)
+
+    def has_queued_message(self, session_id: str) -> bool:
+        return session_id in self._queued_messages
 
     async def disconnect_session(self, session_id: str) -> None:
         """Disconnect the SDK client for a session."""

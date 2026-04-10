@@ -6,6 +6,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  running: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['send'])
@@ -143,7 +147,7 @@ defineExpose({ setInput, addImage, appendText })
       v-model="input"
       @keydown="handleKeydown"
       @paste="handlePaste"
-      :placeholder="disabled ? 'Waiting for Claude to finish...' : 'Send a message... (Ctrl+Enter to send, paste images with Ctrl+V)'"
+      :placeholder="disabled ? 'Waiting for Claude to finish...' : running ? 'Send follow-up (queued until Claude finishes)...' : 'Send a message... (Ctrl+Enter to send, paste images with Ctrl+V)'"
       :disabled="disabled"
       rows="1"
       class="input-field"

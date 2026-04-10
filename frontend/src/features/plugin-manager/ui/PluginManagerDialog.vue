@@ -1,5 +1,5 @@
 <script setup>
-import { watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { usePluginManager } from '../model/usePluginManager'
 
 const props = defineProps({
@@ -24,6 +24,18 @@ const {
   handleInstall,
   handleUninstall,
 } = usePluginManager()
+
+const searchQuery = ref('')
+
+const filteredPlugins = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return plugins.value
+  return plugins.value.filter(p =>
+    p.name.toLowerCase().includes(q) ||
+    (p.description && p.description.toLowerCase().includes(q)) ||
+    p.marketplace.toLowerCase().includes(q)
+  )
+})
 
 watch(() => props.visible, (val) => {
   if (val && props.projectDir) {
@@ -85,18 +97,27 @@ onBeforeUnmount(() => {
           {{ error }}
         </div>
 
+        <div class="search-bar">
+          <input
+            v-model="searchQuery"
+            type="text"
+            class="search-input"
+            placeholder="Search plugins..."
+          />
+        </div>
+
         <div v-if="loading" class="loading-state">
           <div class="spinner"></div>
           <span>Loading plugins...</span>
         </div>
 
-        <div v-else-if="plugins.length === 0" class="empty-state">
-          No plugins available
+        <div v-else-if="filteredPlugins.length === 0" class="empty-state">
+          {{ searchQuery.trim() ? 'No matching plugins' : 'No plugins available' }}
         </div>
 
         <div v-else class="plugin-list">
           <div
-            v-for="plugin in plugins"
+            v-for="plugin in filteredPlugins"
             :key="plugin.key"
             class="plugin-item"
           >
@@ -221,6 +242,31 @@ onBeforeUnmount(() => {
   color: var(--red);
   font-size: 13px;
   flex-shrink: 0;
+}
+
+.search-bar {
+  padding: 12px 20px 4px;
+  flex-shrink: 0;
+}
+
+.search-input {
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.search-input:focus {
+  border-color: var(--accent);
 }
 
 .loading-state,

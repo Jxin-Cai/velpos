@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
   visible: {
@@ -14,6 +14,17 @@ const projectName = ref('')
 const githubUrl = ref('')
 const creating = ref(false)
 const nameInput = ref(null)
+
+const PROJECT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+const nameError = computed(() => {
+  const name = projectName.value.trim()
+  if (!name) return ''
+  if (!PROJECT_NAME_RE.test(name)) {
+    return 'Only letters, digits, hyphens, underscores, dots allowed. Must start with a letter or digit.'
+  }
+  return ''
+})
+const nameValid = computed(() => projectName.value.trim() && !nameError.value)
 
 watch(() => props.visible, (val) => {
   if (val) {
@@ -43,7 +54,7 @@ function handleGithubUrlInput() {
 }
 
 function handleConfirm() {
-  if (!projectName.value.trim() || creating.value) return
+  if (!nameValid.value || creating.value) return
   creating.value = true
   emit('confirm', {
     name: projectName.value.trim(),
@@ -115,9 +126,11 @@ onBeforeUnmount(() => {
             v-model="projectName"
             type="text"
             class="form-input"
+            :class="{ 'form-input-error': nameError }"
             placeholder="e.g. my-awesome-project"
             @keydown.enter="handleConfirm"
           />
+          <div v-if="nameError" class="form-error">{{ nameError }}</div>
         </div>
 
         <div class="dialog-actions">
@@ -131,7 +144,7 @@ onBeforeUnmount(() => {
           <button
             class="btn-primary"
             @click="handleConfirm"
-            :disabled="!projectName.trim() || creating"
+            :disabled="!nameValid || creating"
           >
             <span v-if="creating" class="spinner"></span>
             {{ creating ? (githubUrl ? 'Cloning...' : 'Creating...') : 'Create' }}
@@ -211,6 +224,21 @@ onBeforeUnmount(() => {
 .form-hint {
   font-size: 11px;
   color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.form-input-error {
+  border-color: var(--red);
+}
+
+.form-input-error:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+}
+
+.form-error {
+  font-size: 11px;
+  color: var(--red);
   margin-top: 4px;
 }
 
