@@ -21,6 +21,7 @@ const initRequired = ref(null)
 const syncResult = ref(null)
 
 const _activeSessionId = ref('')
+let _fetchChannelsPromise = null
 
 export function useImBinding() {
   const isBound = computed(() => bindingState.value?.binding_status === 'bound')
@@ -46,12 +47,19 @@ export function useImBinding() {
   const boundInstanceName = computed(() => boundInstanceForSession.value?.name || '')
 
   async function fetchChannels() {
-    try {
-      const data = await getChannels()
-      availableChannels.value = data || []
-    } catch {
-      availableChannels.value = []
-    }
+    // Deduplicate concurrent calls — reuse in-flight request
+    if (_fetchChannelsPromise) return _fetchChannelsPromise
+    _fetchChannelsPromise = (async () => {
+      try {
+        const data = await getChannels()
+        availableChannels.value = data || []
+      } catch {
+        availableChannels.value = []
+      } finally {
+        _fetchChannelsPromise = null
+      }
+    })()
+    return _fetchChannelsPromise
   }
 
   async function fetchStatus(sessionId) {

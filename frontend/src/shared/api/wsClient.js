@@ -64,7 +64,9 @@ export function createWsConnection(sessionId) {
   function send(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data))
+      return true
     }
+    return false
   }
 
   function onEvent(handler) {

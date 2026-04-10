@@ -189,7 +189,7 @@ function connectToSession(sessionId, oldSessionId) {
   wsConnection.value = connection
 
   connection.onEvent((data) => {
-    const sess = sessions.value.find(s => s.session_id === currentSessionId.value)
+    const sess = sessions.value.find(s => s.session_id === sessionId)
     const proj = sess?.project_id
       ? projects.value.find(p => p.id === sess.project_id)
       : null
@@ -219,7 +219,7 @@ function connectToSession(sessionId, oldSessionId) {
         if (data.data && data.data.type === 'result') {
           markDone(sessionId)
           addNotification({
-            sessionId: currentSessionId.value,
+            sessionId: sessionId,
             sessionName: sess?.name || session.value?.name || '',
             projectName: proj?.name || '',
           })
@@ -253,7 +253,7 @@ function connectToSession(sessionId, oldSessionId) {
           },
         })
         addNotification({
-          sessionId: currentSessionId.value,
+          sessionId: sessionId,
           sessionName: sess?.name || session.value?.name || '',
           projectName: proj?.name || '',
           type: 'auth_required',
@@ -270,7 +270,7 @@ function connectToSession(sessionId, oldSessionId) {
           },
         })
         addNotification({
-          sessionId: currentSessionId.value,
+          sessionId: sessionId,
           sessionName: sess?.name || session.value?.name || '',
           projectName: proj?.name || '',
           type: 'auth_required',

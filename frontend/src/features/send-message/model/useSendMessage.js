@@ -26,6 +26,16 @@ export function useSendMessage(wsConnection) {
 
     setError(null)
 
+    const payload = { action: 'send_prompt', prompt: text }
+    if (images && images.length > 0) {
+      payload.images = images
+    }
+    const sent = wsConnection.send(payload)
+    if (!sent) {
+      setError('Connection lost, message not sent')
+      return
+    }
+
     addMessage({
       type: 'user',
       content: {
@@ -33,12 +43,6 @@ export function useSendMessage(wsConnection) {
         ...(images && images.length > 0 ? { image_count: images.length } : {}),
       },
     })
-
-    const payload = { action: 'send_prompt', prompt: text }
-    if (images && images.length > 0) {
-      payload.images = images
-    }
-    wsConnection.send(payload)
   }
 
   return { sendPrompt }

@@ -44,14 +44,18 @@ watch(() => props.messages.length, () => {
 
 // MutationObserver for streaming content changes (DOM updates without message count change)
 let observer = null
+let scrollRafId = null
 
 onMounted(() => {
   const el = messagesContainer.value
   if (!el) return
 
   observer = new MutationObserver(() => {
-    if (isNearBottom.value) {
-      requestAnimationFrame(() => scrollToBottom())
+    if (isNearBottom.value && !scrollRafId) {
+      scrollRafId = requestAnimationFrame(() => {
+        scrollRafId = null
+        scrollToBottom()
+      })
     }
   })
   observer.observe(el, { childList: true, subtree: true, characterData: true })
@@ -61,6 +65,10 @@ onBeforeUnmount(() => {
   if (observer) {
     observer.disconnect()
     observer = null
+  }
+  if (scrollRafId) {
+    cancelAnimationFrame(scrollRafId)
+    scrollRafId = null
   }
 })
 </script>

@@ -8,7 +8,23 @@ async function request(url, options = {}) {
     const res = await fetch(fullUrl, { ...options, signal: controller.signal })
 
     if (!res.ok) {
-      throw new Error(`HTTP error: ${res.status} ${res.statusText}`)
+      // Try to extract business error message from response body
+      let errorMsg = `HTTP error: ${res.status} ${res.statusText}`
+      try {
+        const body = await res.json()
+        if (body && body.message) {
+          errorMsg = body.message
+        }
+      } catch {
+        // response body is not JSON, use default error message
+      }
+      throw new Error(errorMsg)
+    }
+
+    // Handle responses with no body (e.g. 204 No Content)
+    const contentType = res.headers.get('content-type')
+    if (res.status === 204 || !contentType || !contentType.includes('application/json')) {
+      return null
     }
 
     const json = await res.json()
