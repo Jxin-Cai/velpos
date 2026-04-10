@@ -133,6 +133,12 @@ class ClaudePluginManager(PluginManagerPort):
             cwd=str(Path.home()),
         )
 
+    async def update_marketplace(self, name: str | None = None) -> str:
+        args = ["plugin", "marketplace", "update"]
+        if name:
+            args.append(name)
+        return await self._run_cli(args, cwd=str(Path.home()))
+
     def is_marketplace_added(self, name: str) -> bool:
         marketplaces_json = self._plugins_dir / "known_marketplaces.json"
         if not marketplaces_json.exists():

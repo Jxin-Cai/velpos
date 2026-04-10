@@ -145,6 +145,15 @@ class AgentApplicationService:
                         "Failed to add marketplace %s for agent %s",
                         name, agent_id, exc_info=True,
                     )
+            else:
+                try:
+                    await self._plugin_manager.update_marketplace(name)
+                    logger.info("Updated marketplace %s for agent %s", name, agent_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to update marketplace %s for agent %s",
+                        name, agent_id, exc_info=True,
+                    )
 
         for plugin_name in mkt_config.get("plugins", []):
             try:

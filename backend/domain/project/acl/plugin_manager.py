@@ -55,6 +55,18 @@ class PluginManager(ABC):
         ...
 
     @abstractmethod
+    async def update_marketplace(self, name: str | None = None) -> str:
+        """Update marketplace(s) from their source.
+
+        Args:
+            name: Marketplace name to update. If None, updates all marketplaces.
+
+        Returns:
+            CLI output message.
+        """
+        ...
+
+    @abstractmethod
     def is_marketplace_added(self, name: str) -> bool:
         """Check if a marketplace is already configured.
 
