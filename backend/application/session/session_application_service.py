@@ -638,6 +638,14 @@ class SessionApplicationService:
         """Resolve a pending user response (choice answer or permission decision)."""
         return await self._claude_agent_gateway.resolve_user_response(session_id, response_data)
 
+    async def commit(self) -> None:
+        """Commit the underlying DB session."""
+        await self._session_repository.commit()
+
+    async def close(self) -> None:
+        """Close the underlying DB session."""
+        await self._session_repository.close()
+
     async def import_claude_session(self, command: ImportClaudeSessionCommand) -> Session:
         """Import a Claude Code session into MySQL.
 

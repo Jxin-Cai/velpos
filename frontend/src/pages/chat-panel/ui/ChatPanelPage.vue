@@ -15,6 +15,7 @@ import { ImButton, ImDialog, useImBinding } from '@features/im-binding'
 import { openPath } from '@features/terminal'
 import { useCompactContext } from '@features/compact-context'
 import { useSessionStats } from '@features/send-message/model/useSessionStats'
+import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 
 const { session, messages, status, currentSessionId, queryHistory, setCurrentSessionId, updateSession } = useSession()
 const { projects, updateProjectInList } = useProject()
@@ -61,7 +62,7 @@ const projectDirName = computed(() => {
 })
 
 const { clearing, clearContext } = useClearContext()
-const { commands, loading: cmdLoading, visible: cmdVisible, searchQuery, loadCommands, togglePanel, closePanel } = useCommandPalette()
+const { commands, loading: cmdLoading, visible: cmdVisible, searchQuery, loadCommands, togglePanel, closePanel, invalidateCache: invalidateCmdCache } = useCommandPalette()
 
 const messageInputRef = ref(null)
 
@@ -105,6 +106,7 @@ watch(currentSessionId, (newId) => {
   if (newId) {
     fetchImStatus(newId)
     fetchImChannels()
+    invalidateCmdCache()
   }
 })
 
@@ -291,9 +293,12 @@ const showProjectCopyMenu = ref(false)
 const copiedChip = ref('')  // 'session' or 'project-path' or 'project-name'
 
 function copyToClipboard(text, chipName) {
-  navigator.clipboard.writeText(text)
-  copiedChip.value = chipName
-  setTimeout(() => { copiedChip.value = '' }, 1500)
+  navigator.clipboard.writeText(text).then(() => {
+    copiedChip.value = chipName
+    setTimeout(() => { copiedChip.value = '' }, 1500)
+  }).catch(() => {
+    // Clipboard API not available or permission denied — ignore silently
+  })
 }
 
 function copySessionId() {
@@ -322,12 +327,15 @@ function handleClickOutside() {
   showHistory.value = false
   showProjectCopyMenu.value = false
   showBranchMenu.value = false
+  showTaskPanel.value = false
 }
 
 // Plugin management
 
 // Session stats for bottom status bar
 const { gitBranch, lastQueryDuration, contextUsage, toolStats, activeSubagents } = useSessionStats()
+const { allTasks, taskCounts, hasActiveTasks } = useTaskProgress()
+const showTaskPanel = ref(false)
 
 function formatDurationShort(ms) {
   if (!ms) return '-'
@@ -664,11 +672,24 @@ function formatMaxTokens(n) {
             </template>
             <span v-if="toolStats.length > 5" class="tool-more">+{{ toolStats.length - 5 }}</span>
           </span>
-          <template v-if="activeSubagents.length > 0">
-            <span v-for="agent in activeSubagents" :key="agent.task_id" class="dash-chip dash-agent">
-              <span class="agent-dot"></span>
-              {{ agent.description || agent.task_id }}
-            </span>
+          <template v-if="taskCounts.total > 0">
+            <div class="dropdown-wrapper" @click.stop>
+              <button
+                class="dash-chip dash-agent"
+                @click="showTaskPanel = !showTaskPanel"
+                :title="`Tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
+              >
+                <span v-if="hasActiveTasks" class="agent-dot"></span>
+                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                Tasks {{ taskCounts.running > 0 ? taskCounts.running : taskCounts.total }}
+              </button>
+              <TaskProgressPanel
+                v-if="showTaskPanel"
+                @close="showTaskPanel = false"
+              />
+            </div>
           </template>
         </div>
       </div>

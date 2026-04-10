@@ -133,3 +133,9 @@ class SessionRepositoryImpl(SessionRepository):
             )
             for item in items
         ]
+
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def close(self) -> None:
+        await self._session.close()

@@ -55,3 +55,13 @@ class SessionRepository(ABC):
         Returns None if no session with this sdk_session_id exists.
         """
         ...
+
+    @abstractmethod
+    async def commit(self) -> None:
+        """Commit the current unit of work."""
+        ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close the underlying database session."""
+        ...

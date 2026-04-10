@@ -154,7 +154,7 @@ async def lifespan(app: FastAPI):
     max_retries = 10
     for attempt in range(1, max_retries + 1):
         try:
-            await asyncio.wait_for(_run_alembic_upgrade(), timeout=30)
+            await _run_alembic_upgrade()
             logger.info("Database migrations completed.")
             break
         except Exception as e:
@@ -270,7 +270,7 @@ async def business_exception_handler(
     exc: BusinessException,
 ) -> JSONResponse:
     response = ApiResponse.fail(code=-1, message=exc.message)
-    return JSONResponse(content=response.model_dump())
+    return JSONResponse(status_code=422, content=response.model_dump())
 
 
 @app.exception_handler(Exception)
@@ -280,7 +280,7 @@ async def global_exception_handler(
 ) -> JSONResponse:
     logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
     response = ApiResponse.fail(code=-500, message="Internal server error")
-    return JSONResponse(status_code=200, content=response.model_dump())
+    return JSONResponse(status_code=500, content=response.model_dump())
 
 
 @app.get("/api/health")

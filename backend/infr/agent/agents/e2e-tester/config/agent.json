@@ -1,0 +1,10 @@
+{
+  "id": "e2e-tester",
+  "category": "testing",
+  "name_en": "E2E Tester",
+  "name_zh": "E2E测试专家",
+  "description_en": "Risk-driven end-to-end testing with BDD scenarios, Playwright execution, and automation asset management",
+  "description_zh": "风险驱动的端到端测试，BDD剧本设计、Playwright执行与自动化资产沉淀",
+  "emoji": "🎭",
+  "color": "purple"
+}
