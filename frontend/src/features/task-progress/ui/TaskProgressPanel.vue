@@ -1,10 +1,10 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useTaskProgress } from '../model/useTaskProgress'
 
 const emit = defineEmits(['close'])
 
-const { allTasks, taskCounts } = useTaskProgress()
+const { allTasks, taskCounts, planTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
 
 // Tick every second to update elapsed time for running tasks
 const now = ref(Date.now())
@@ -33,11 +33,70 @@ function truncate(text, max = 80) {
   if (!text || text.length <= max) return text
   return text.slice(0, max) + '...'
 }
+
+// Segmented progress: percentage for completed and in_progress
+const planProgressCompleted = computed(() => {
+  const t = planTaskCounts.value.total
+  return t > 0 ? (planTaskCounts.value.completed / t * 100) : 0
+})
+const planProgressActive = computed(() => {
+  const t = planTaskCounts.value.total
+  return t > 0 ? (planTaskCounts.value.in_progress / t * 100) : 0
+})
 </script>
 
 <template>
   <div class="task-panel" @click.stop>
-    <div class="panel-header">
+    <!-- Plan tasks section -->
+    <template v-if="hasPlanTasks">
+      <div class="panel-header">
+        <span class="panel-title">Plan</span>
+        <span class="plan-summary">
+          <span class="plan-fraction">{{ planTaskCounts.completed }}<span class="plan-sep">/</span>{{ planTaskCounts.total }}</span>
+          <span v-if="planTaskCounts.in_progress > 0" class="count-badge count-running">{{ planTaskCounts.in_progress }} running</span>
+        </span>
+      </div>
+      <!-- Segmented progress bar: green (done) + accent pulse (running) + gray (pending) -->
+      <div class="plan-progress-bar">
+        <div class="plan-progress-done" :style="{ width: planProgressCompleted + '%' }"></div>
+        <div class="plan-progress-active" :style="{ width: planProgressActive + '%' }"></div>
+      </div>
+      <div class="panel-body plan-body">
+        <div
+          v-for="(task, index) in planTasks"
+          :key="task.id"
+          class="plan-item"
+          :class="'plan-item--' + task.status"
+        >
+          <!-- Timeline connector -->
+          <div class="plan-rail">
+            <div class="plan-connector plan-connector--top" :class="{ 'plan-connector--hidden': index === 0 }"></div>
+            <div class="plan-node">
+              <span v-if="task.status === 'in_progress'" class="plan-spinner"></span>
+              <svg v-else-if="task.status === 'completed'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              <span v-else class="plan-dot"></span>
+            </div>
+            <div class="plan-connector plan-connector--bottom" :class="{ 'plan-connector--hidden': index === planTasks.length - 1 }"></div>
+          </div>
+          <!-- Content -->
+          <div class="plan-content">
+            <div class="plan-label" :class="{ 'plan-label--done': task.status === 'completed' }">
+              {{ task.status === 'in_progress' && task.activeForm ? task.activeForm : task.subject }}
+            </div>
+            <div v-if="task.status === 'in_progress' && task.subject && task.activeForm" class="plan-detail">
+              {{ truncate(task.subject, 60) }}
+            </div>
+          </div>
+          <!-- Step number -->
+          <span class="plan-step">{{ index + 1 }}</span>
+        </div>
+      </div>
+    </template>
+
+    <!-- Agent tasks section -->
+    <div class="panel-header" :class="{ 'panel-header--border': hasPlanTasks }">
       <span class="panel-title">Tasks</span>
       <span class="panel-counts">
         <span v-if="taskCounts.running > 0" class="count-badge count-running">{{ taskCounts.running }} running</span>
@@ -85,8 +144,8 @@ function truncate(text, max = 80) {
   position: absolute;
   bottom: calc(100% + 4px);
   left: 0;
-  width: 340px;
-  max-height: 400px;
+  width: 380px;
+  max-height: 460px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -97,6 +156,7 @@ function truncate(text, max = 80) {
   overflow: hidden;
 }
 
+/* ── Header ── */
 .panel-header {
   display: flex;
   align-items: center;
@@ -106,10 +166,32 @@ function truncate(text, max = 80) {
   flex-shrink: 0;
 }
 
+.panel-header--border {
+  border-top: 1px solid var(--border);
+}
+
 .panel-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.plan-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-fraction {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-sep {
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
 .panel-counts {
@@ -139,10 +221,42 @@ function truncate(text, max = 80) {
   background: color-mix(in srgb, var(--red) 15%, transparent);
 }
 
+/* ── Segmented progress bar ── */
+.plan-progress-bar {
+  height: 3px;
+  background: var(--bg-hover);
+  flex-shrink: 0;
+  display: flex;
+}
+
+.plan-progress-done {
+  height: 100%;
+  background: var(--green);
+  transition: width 0.4s var(--ease-smooth);
+}
+
+.plan-progress-active {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s var(--ease-smooth);
+  animation: bar-pulse 2s ease-in-out infinite;
+}
+
+@keyframes bar-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ── Panel body ── */
 .panel-body {
   overflow-y: auto;
   max-height: 360px;
   padding: 6px 0;
+}
+
+.plan-body {
+  max-height: 240px;
+  padding: 4px 0;
 }
 
 .empty-state {
@@ -152,6 +266,141 @@ function truncate(text, max = 80) {
   font-size: 13px;
 }
 
+/* ── Plan item (timeline layout) ── */
+.plan-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 14px 0 10px;
+  min-height: 32px;
+  transition: background var(--transition-fast);
+}
+
+.plan-item:hover {
+  background: var(--bg-hover);
+}
+
+/* Timeline rail: connector + node */
+.plan-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.plan-connector {
+  width: 2px;
+  flex: 1;
+  background: var(--border);
+  min-height: 4px;
+}
+
+.plan-connector--hidden {
+  background: transparent;
+}
+
+.plan-item--completed .plan-connector {
+  background: var(--green);
+}
+
+.plan-item--in_progress .plan-connector--top {
+  background: var(--accent);
+}
+
+.plan-node {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Status: pending dot */
+.plan-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--text-muted);
+  background: transparent;
+}
+
+/* Status: in_progress spinner */
+.plan-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: task-spin 0.8s linear infinite;
+}
+
+/* Status: completed check */
+.plan-item--completed .plan-node {
+  color: var(--green);
+}
+
+.plan-item--in_progress .plan-node {
+  color: var(--accent);
+}
+
+.plan-item--pending .plan-node {
+  color: var(--text-muted);
+}
+
+/* Content */
+.plan-content {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 0;
+}
+
+.plan-label {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.plan-item--in_progress .plan-label {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.plan-label--done {
+  text-decoration: line-through;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.plan-detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+/* Step number */
+.plan-step {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  padding-top: 7px;
+  min-width: 14px;
+  text-align: right;
+}
+
+.plan-item--completed .plan-step {
+  color: var(--green);
+}
+
+.plan-item--in_progress .plan-step {
+  color: var(--accent);
+}
+
+/* ── Agent task items ── */
 .task-item {
   display: flex;
   align-items: flex-start;

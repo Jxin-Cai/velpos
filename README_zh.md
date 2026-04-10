@@ -91,6 +91,29 @@ cd velpos
 
 **前置条件：** Node.js >= 18、Python >= 3.11、Docker、[uv](https://docs.astral.sh/uv/)、Claude Code CLI（`claude` 命令可用）
 
+<details>
+<summary><b>安装前置依赖</b></summary>
+
+```bash
+# Docker — https://docs.docker.com/get-docker/
+
+# Python >= 3.11 — https://www.python.org/downloads/
+python3 --version
+
+# uv（Python 包管理器）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Node.js >= 18 — https://nodejs.org/
+node -v && npm -v
+
+# Claude Code CLI
+npm install -g @anthropic-ai/claude-code
+```
+
+启动脚本会自动检查所有前置依赖，缺失时会显示对应的安装命令。
+
+</details>
+
 **1. 配置**
 
 ```bash

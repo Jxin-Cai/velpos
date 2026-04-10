@@ -8,7 +8,7 @@ const error = ref(null)
 const sessions = ref([])
 const currentSessionId = ref(null)
 const queryHistory = ref([])
-
+const queued = ref(false)
 // Stable message ID counter — survives across setMessages/addMessage calls
 let _nextMsgId = 0
 
@@ -78,6 +78,14 @@ export function useSession() {
 
   function setStatus(s) {
     status.value = s
+    // Clear queued indicator when status changes (queued message started or session idle)
+    if (s === 'running' || s === 'idle') {
+      queued.value = false
+    }
+  }
+
+  function setQueued(val) {
+    queued.value = val
   }
 
   function setError(err) {
@@ -90,6 +98,7 @@ export function useSession() {
     status.value = 'disconnected'
     error.value = null
     queryHistory.value = []
+    queued.value = false
   }
 
   function setSessions(list) {
@@ -120,6 +129,7 @@ export function useSession() {
     messages,
     status,
     error,
+    queued,
     sessions,
     currentSessionId,
     queryHistory,
@@ -127,6 +137,7 @@ export function useSession() {
     addMessage,
     setMessages,
     setStatus,
+    setQueued,
     setError,
     reset,
     setSessions,

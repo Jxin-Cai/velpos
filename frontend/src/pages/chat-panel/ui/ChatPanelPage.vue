@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, inject, onMounted, watch } from 'vue'
+import { ref, computed, inject, onMounted, onUnmounted, watch } from 'vue'
 import { useSession, listModels } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, useSendMessage } from '@features/send-message'
@@ -17,7 +17,7 @@ import { useCompactContext } from '@features/compact-context'
 import { useSessionStats } from '@features/send-message/model/useSessionStats'
 import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 
-const { session, messages, status, currentSessionId, queryHistory, setCurrentSessionId, updateSession } = useSession()
+const { session, messages, status, queued, currentSessionId, queryHistory, setCurrentSessionId, updateSession } = useSession()
 const { projects, updateProjectInList } = useProject()
 
 const wsConnection = inject('wsConnection')
@@ -38,6 +38,7 @@ function toggleDebug() {
 }
 
 // Filter messages: when debug is off, hide tool_use blocks, tool_result messages, and system messages
+// Exception: keep TodoWrite tool_use blocks — they render as visual progress
 const displayMessages = computed(() => {
   if (debugMode.value) return messages.value
   return messages.value
@@ -45,7 +46,8 @@ const displayMessages = computed(() => {
     .map(msg => {
       if (msg.type === 'assistant' && msg.content?.blocks) {
         const filtered = msg.content.blocks.filter(
-          b => b.type !== 'tool_use' && b.type !== 'tool_result'
+          b => b.type !== 'tool_result'
+            && (b.type !== 'tool_use' || (b.name === 'TodoWrite' && b.input?.todos))
         )
         if (filtered.length === 0) return null
         return { ...msg, content: { ...msg.content, blocks: filtered } }
@@ -95,7 +97,20 @@ onMounted(async () => {
   if (currentSessionId.value) {
     fetchImStatus(currentSessionId.value)
   }
+  // Listen for cancel-rewind events to restore prompt to input
+  window.addEventListener('vp-cancel-rewind', handleCancelRewind)
 })
+
+onUnmounted(() => {
+  window.removeEventListener('vp-cancel-rewind', handleCancelRewind)
+})
+
+function handleCancelRewind(e) {
+  const prompt = e.detail?.prompt || ''
+  if (prompt && messageInputRef.value) {
+    messageInputRef.value.setInput(prompt)
+  }
+}
 
 function handleCompact() {
   compactContext(currentSessionId.value)
@@ -334,7 +349,7 @@ function handleClickOutside() {
 
 // Session stats for bottom status bar
 const { gitBranch, lastQueryDuration, contextUsage, toolStats, activeSubagents } = useSessionStats()
-const { allTasks, taskCounts, hasActiveTasks } = useTaskProgress()
+const { allTasks, taskCounts, hasActiveTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
 const showTaskPanel = ref(false)
 
 function formatDurationShort(ms) {
@@ -371,6 +386,10 @@ function formatMaxTokens(n) {
     <MessageList :messages="displayMessages">
       <template #footer>
         <ThinkingIndicator :visible="isRunning" />
+        <div v-if="queued && isRunning" class="queue-indicator">
+          <span class="queue-dot"></span>
+          Your message is queued — will run after current task
+        </div>
         <CancelButton :visible="isRunning" @cancel="handleCancel" />
       </template>
     </MessageList>
@@ -509,7 +528,7 @@ function formatMaxTokens(n) {
         />
       </div>
       <div class="input-row">
-        <MessageInput ref="messageInputRef" :disabled="isRunning" @send="handleSend" />
+        <MessageInput ref="messageInputRef" :running="isRunning" @send="handleSend" />
       </div>
       <!-- Session Dashboard -->
       <div class="session-dashboard" v-if="currentSessionId">
@@ -672,18 +691,19 @@ function formatMaxTokens(n) {
             </template>
             <span v-if="toolStats.length > 5" class="tool-more">+{{ toolStats.length - 5 }}</span>
           </span>
-          <template v-if="taskCounts.total > 0">
+          <template v-if="taskCounts.total > 0 || hasPlanTasks">
             <div class="dropdown-wrapper" @click.stop>
               <button
                 class="dash-chip dash-agent"
                 @click="showTaskPanel = !showTaskPanel"
-                :title="`Tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
+                :title="`Plan: ${planTaskCounts.completed}/${planTaskCounts.total} | Tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
               >
-                <span v-if="hasActiveTasks" class="agent-dot"></span>
+                <span v-if="hasActiveTasks || planTaskCounts.in_progress > 0" class="agent-dot"></span>
                 <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
-                Tasks {{ taskCounts.running > 0 ? taskCounts.running : taskCounts.total }}
+                <template v-if="hasPlanTasks">Plan {{ planTaskCounts.completed }}/{{ planTaskCounts.total }}</template>
+                <template v-else>Tasks {{ taskCounts.running > 0 ? taskCounts.running : taskCounts.total }}</template>
               </button>
               <TaskProgressPanel
                 v-if="showTaskPanel"
@@ -732,6 +752,28 @@ function formatMaxTokens(n) {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.queue-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.queue-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: queue-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes queue-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 .input-toolbar {

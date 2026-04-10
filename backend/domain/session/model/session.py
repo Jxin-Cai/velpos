@@ -178,6 +178,35 @@ class Session:
         self._continue_conversation = True
         self._updated_time = datetime.now()
 
+    def cancel_query(self) -> str:
+        """Cancel a running query and rewind to before the last user message.
+
+        Transitions status from RUNNING to IDLE.
+        Removes the last user message and any subsequent assistant/tool/system messages.
+        Returns the prompt text from the removed user message (for restoring to input).
+        Raises ValueError if not currently RUNNING.
+        """
+        if self._status != SessionStatus.RUNNING:
+            raise ValueError("Session is not running")
+        self._status = SessionStatus.IDLE
+        self._continue_conversation = True
+        self._updated_time = datetime.now()
+
+        # Find and remove the last user message and everything after it
+        prompt = ""
+        last_user_idx = -1
+        for i in range(len(self._messages) - 1, -1, -1):
+            from domain.session.model.message_type import MessageType
+            if self._messages[i].message_type == MessageType.USER:
+                last_user_idx = i
+                prompt = self._messages[i].content.get("text", "")
+                break
+
+        if last_user_idx >= 0:
+            self._messages = self._messages[:last_user_idx]
+
+        return prompt
+
     def fail_query(self, error_message: str) -> None:
         """Transition status from RUNNING to ERROR.
 
