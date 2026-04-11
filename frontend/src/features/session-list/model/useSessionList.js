@@ -29,7 +29,7 @@ export function useSessionList() {
     addSession,
     removeSession,
     updateSessionInList,
-    reset,
+    removeState,
   } = useSession()
 
   const {
@@ -132,7 +132,7 @@ export function useSessionList() {
         switchSession(first.session_id)
       } else {
         setCurrentSessionId(null)
-        reset()
+        removeState(sessionId)
         localStorage.removeItem(LAST_SESSION_ID_KEY)
       }
     }
@@ -175,7 +175,7 @@ export function useSessionList() {
         switchSession(remaining.session_id)
       } else {
         setCurrentSessionId(null)
-        reset()
+        removeState(currentSessionId.value)
         localStorage.removeItem(LAST_SESSION_ID_KEY)
       }
     }
@@ -212,7 +212,9 @@ export function useSessionList() {
         switchSession(remaining.session_id)
       } else {
         setCurrentSessionId(null)
-        reset()
+        for (const s of projectSessions) {
+          removeState(s.session_id)
+        }
         localStorage.removeItem(LAST_SESSION_ID_KEY)
       }
     }

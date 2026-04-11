@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, provide, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, provide, onMounted, onUnmounted } from 'vue'
 import { useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
@@ -17,16 +17,15 @@ const {
   session,
   sessions,
   currentSessionId,
-  status,
-  error,
-  updateSession,
-  setMessages,
-  setStatus,
-  setQueued,
-  setError,
-  addMessage,
-  reset,
   updateSessionInList,
+  // Targeted APIs (write to specific session by ID)
+  updateSessionFor,
+  addMessageTo,
+  setMessagesFor,
+  setStatusFor,
+  setQueuedFor,
+  setErrorFor,
+  removeState,
 } = useSession()
 
 const { projects } = useProject()
@@ -53,7 +52,6 @@ const { markWorking, markDone } = useWorkingSessions()
 
 const ready = ref(false)
 const initError = ref(null)
-const wsConnection = ref(null)
 
 const settingsDialogVisible = ref(false)
 const gitManagerVisible = ref(false)
@@ -84,7 +82,6 @@ function handleNotificationNavigate(sessionId) {
 }
 
 function handleLocateSession() {
-  // Open sidebar if collapsed on desktop or hidden on mobile
   if (isSidebarCollapsed.value) {
     isSidebarCollapsed.value = false
     localStorage.setItem('vp_sidebar_collapsed', false)
@@ -95,101 +92,18 @@ function handleLocateSession() {
   sidebarRef.value?.scrollToSession(currentSessionId.value)
 }
 
+// ── Unified connection pool ──
+// All session connections live here; no more foreground/background split.
+const _connections = reactive(new Map())
+
+// Computed: auto-follows current session
+const wsConnection = computed(() => _connections.get(currentSessionId.value) ?? null)
+
 provide('wsConnection', wsConnection)
 
-// Background WS connections for sessions that are still running when user switches away
-const backgroundConnections = new Map() // sessionId -> connection (plain object, no reactivity needed)
-
-function setupBackgroundHandler(connection, bgSessionId) {
+function setupUnifiedHandler(connection, sessionId) {
   connection.onEvent((data) => {
-    const sess = sessions.value.find(s => s.session_id === bgSessionId)
-    const proj = sess?.project_id
-      ? projects.value.find(p => p.id === sess.project_id)
-      : null
-
-    switch (data.event) {
-      case 'status_change':
-        updateSessionInList(bgSessionId, { status: data.status })
-        if (data.status === 'running') {
-          markWorking(bgSessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
-        } else {
-          markDone(bgSessionId)
-          closeBackgroundConnection(bgSessionId)
-        }
-        break
-
-      case 'message':
-        if (data.data?.type === 'result') {
-          markDone(bgSessionId)
-          addNotification({
-            sessionId: bgSessionId,
-            sessionName: sess?.name || '',
-            projectName: proj?.name || '',
-          })
-          closeBackgroundConnection(bgSessionId)
-        }
-        break
-
-      case 'status':
-        updateSessionInList(bgSessionId, data.session)
-        if (data.session.status !== 'running') {
-          markDone(bgSessionId)
-          closeBackgroundConnection(bgSessionId)
-        }
-        break
-
-      case 'user_choice_request':
-        addNotification({
-          sessionId: bgSessionId,
-          sessionName: sess?.name || '',
-          projectName: proj?.name || '',
-          type: 'auth_required',
-        })
-        break
-
-      case 'permission_request':
-        addNotification({
-          sessionId: bgSessionId,
-          sessionName: sess?.name || '',
-          projectName: proj?.name || '',
-          type: 'auth_required',
-        })
-        break
-    }
-  })
-}
-
-function closeBackgroundConnection(sessionId) {
-  const conn = backgroundConnections.get(sessionId)
-  if (conn) {
-    conn.close()
-    backgroundConnections.delete(sessionId)
-  }
-}
-
-function connectToSession(sessionId, oldSessionId) {
-  // Handle old connection: keep alive in background if running, otherwise close
-  if (wsConnection.value) {
-    if (status.value === 'running' && oldSessionId && oldSessionId !== sessionId) {
-      setupBackgroundHandler(wsConnection.value, oldSessionId)
-      backgroundConnections.set(oldSessionId, wsConnection.value)
-    } else {
-      wsConnection.value.close()
-    }
-    wsConnection.value = null
-  }
-
-  if (!sessionId) return
-
-  reset()
-
-  // Close any existing background connection for this session (fresh connect gets full state)
-  closeBackgroundConnection(sessionId)
-
-  const connection = createWsConnection(sessionId)
-  wsConnection.value = connection
-
-  connection.onEvent((data) => {
+    const isCurrent = (currentSessionId.value === sessionId)
     const sess = sessions.value.find(s => s.session_id === sessionId)
     const proj = sess?.project_id
       ? projects.value.find(p => p.id === sess.project_id)
@@ -202,11 +116,10 @@ function connectToSession(sessionId, oldSessionId) {
           messageCount: data.messages?.length || 0,
           resultCount: data.messages?.filter(m => m.type === 'result').length || 0,
         })
-        updateSession(data.session)
-        if (data.messages) setMessages(data.messages, data.session)
-        setStatus(data.session.status || 'idle')
+        updateSessionFor(sessionId, data.session)
+        if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
+        setStatusFor(sessionId, data.session.status || 'idle')
         updateSessionInList(sessionId, data.session)
-        // Sync working status from backend truth
         if (data.session.status === 'running') {
           markWorking(sessionId, { sessionName: sess?.name || data.session.name || '', projectName: proj?.name || '' })
         } else {
@@ -215,38 +128,36 @@ function connectToSession(sessionId, oldSessionId) {
         break
 
       case 'message':
-        addMessage(data.data)
-        // Trigger notification on query result
+        addMessageTo(sessionId, data.data)
         if (data.data && data.data.type === 'result') {
           markDone(sessionId)
           addNotification({
-            sessionId: sessionId,
-            sessionName: sess?.name || session.value?.name || '',
+            sessionId,
+            sessionName: sess?.name || '',
             projectName: proj?.name || '',
           })
+          maybeCloseIdle(sessionId)
         }
         break
 
       case 'status_change':
-        setStatus(data.status)
+        setStatusFor(sessionId, data.status)
         updateSessionInList(sessionId, { status: data.status })
         if (data.status === 'running') {
-          markWorking(sessionId, { sessionName: sess?.name || session.value?.name || '', projectName: proj?.name || '' })
+          markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
         } else {
           markDone(sessionId)
+          maybeCloseIdle(sessionId)
         }
         break
 
       case 'error':
-        setError(data.message)
+        setErrorFor(sessionId, data.message)
         break
 
       case 'ws_disconnected':
-        // WS connection dropped — if we thought we were running, mark as
-        // reconnecting so the UI doesn't show a stale spinner forever.
-        // The actual authoritative status comes from the next 'connected' event.
-        if (status.value === 'running') {
-          setStatus('reconnecting')
+        if (sess?.status === 'running') {
+          setStatusFor(sessionId, 'reconnecting')
         }
         break
 
@@ -254,11 +165,11 @@ function connectToSession(sessionId, oldSessionId) {
         break
 
       case 'message_queued':
-        setQueued(true)
+        setQueuedFor(sessionId, true)
         break
 
       case 'user_choice_request':
-        addMessage({
+        addMessageTo(sessionId, {
           type: 'interactive',
           content: {
             interaction_type: 'user_choice',
@@ -267,15 +178,15 @@ function connectToSession(sessionId, oldSessionId) {
           },
         })
         addNotification({
-          sessionId: sessionId,
-          sessionName: sess?.name || session.value?.name || '',
+          sessionId,
+          sessionName: sess?.name || '',
           projectName: proj?.name || '',
           type: 'auth_required',
         })
         break
 
       case 'permission_request':
-        addMessage({
+        addMessageTo(sessionId, {
           type: 'interactive',
           content: {
             interaction_type: 'permission',
@@ -284,49 +195,105 @@ function connectToSession(sessionId, oldSessionId) {
           },
         })
         addNotification({
-          sessionId: sessionId,
-          sessionName: sess?.name || session.value?.name || '',
+          sessionId,
+          sessionName: sess?.name || '',
           projectName: proj?.name || '',
           type: 'auth_required',
         })
         break
 
       case 'im_unbound':
-        // Another session rebound this channel — refresh IM state
-        resetImState()
-        fetchImStatus(sessionId)
-        fetchImChannels()
+        if (isCurrent) {
+          resetImState()
+          fetchImStatus(sessionId)
+          fetchImChannels()
+        }
         break
 
       case 'cancel_rewind':
-        // Cancel completed: restore session state and prompt
-        updateSession(data.session)
-        if (data.messages) setMessages(data.messages, data.session)
-        setStatus(data.session.status || 'idle')
+        updateSessionFor(sessionId, data.session)
+        if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
+        setStatusFor(sessionId, data.session.status || 'idle')
         updateSessionInList(sessionId, data.session)
         markDone(sessionId)
-        // Emit event to restore prompt to input box
-        window.dispatchEvent(new CustomEvent('vp-cancel-rewind', {
-          detail: { prompt: data.prompt || '' },
-        }))
+        if (isCurrent) {
+          window.dispatchEvent(new CustomEvent('vp-cancel-rewind', {
+            detail: { prompt: data.prompt || '' },
+          }))
+        }
         break
 
-      case 'status':
-        // Preserve git_branch if the update doesn't provide one
-        if (session.value?.git_branch && !data.session.git_branch) {
-          data.session.git_branch = session.value.git_branch
+      case 'status': {
+        // Don't overwrite git_branch with empty string
+        const sessionUpdate = { ...data.session }
+        if (!sessionUpdate.git_branch) {
+          delete sessionUpdate.git_branch
         }
-        updateSession(data.session)
-        setStatus(data.session.status || 'idle')
+        updateSessionFor(sessionId, sessionUpdate)
+        setStatusFor(sessionId, data.session.status || 'idle')
         updateSessionInList(sessionId, data.session)
         break
+      }
     }
   })
 }
 
+function ensureConnection(sessionId) {
+  if (_connections.has(sessionId)) return
+  const connection = createWsConnection(sessionId)
+  _connections.set(sessionId, connection)
+  setupUnifiedHandler(connection, sessionId)
+}
+
+function forceCloseConnection(sessionId) {
+  const conn = _connections.get(sessionId)
+  if (conn) {
+    conn.close()
+    _connections.delete(sessionId)
+  }
+}
+
+function maybeCloseIdle(sessionId) {
+  if (sessionId === currentSessionId.value) return
+  const sess = sessions.value.find(s => s.session_id === sessionId)
+  if (!sess || sess.status !== 'running') {
+    forceCloseConnection(sessionId)
+  }
+}
+
+// ── Session deletion wrappers (close connections before delegating) ──
+
+async function onDeleteSession(sessionId) {
+  forceCloseConnection(sessionId)
+  removeState(sessionId)
+  await handleDelete(sessionId)
+}
+
+async function onBatchDeleteSessions(sessionIds) {
+  for (const id of sessionIds) {
+    forceCloseConnection(id)
+    removeState(id)
+  }
+  await handleBatchDelete(sessionIds)
+}
+
+async function onDeleteProject(projectId) {
+  const projectSessions = sessions.value.filter(s => s.project_id === projectId)
+  for (const s of projectSessions) {
+    forceCloseConnection(s.session_id)
+    removeState(s.session_id)
+  }
+  await handleDeleteProject(projectId)
+}
+
+// ── Session switching: no more reset(), just ensure connection ──
+
 watch(currentSessionId, (newId, oldId) => {
   if (newId) {
-    connectToSession(newId, oldId)
+    ensureConnection(newId)
+  }
+  if (oldId && oldId !== newId) {
+    maybeCloseIdle(oldId)
   }
 })
 
@@ -341,15 +308,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (wsConnection.value) {
-    wsConnection.value.close()
-    wsConnection.value = null
-  }
-  // Close all background connections
-  for (const conn of backgroundConnections.values()) {
+  for (const conn of _connections.values()) {
     conn.close()
   }
-  backgroundConnections.clear()
+  _connections.clear()
 })
 </script>
 
@@ -449,11 +411,11 @@ onUnmounted(() => {
           :loading="loading"
           @create="handleCreate"
           @select="handleSessionSelect"
-          @delete="handleDelete"
-          @batch-delete="handleBatchDelete"
+          @delete="onDeleteSession"
+          @batch-delete="onBatchDeleteSessions"
           @rename="handleRename"
           @create-in-project="handleCreateInProject"
-          @delete-project="handleDeleteProject"
+          @delete-project="onDeleteProject"
           @reorder-projects="handleReorderProjects"
         />
         <button

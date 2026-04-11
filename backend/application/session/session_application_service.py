@@ -53,6 +53,17 @@ class SessionApplicationService:
         # Tracks sessions that have been cancelled (to prevent retry in run_claude_query)
         self._cancelled_sessions: set[str] = set()
 
+    async def _save_session(self, session: Session, *, commit: bool = False) -> None:
+        """Persist a session and optionally commit immediately.
+
+        WebSocket handlers and background tasks reuse a long-lived DB session.
+        In those paths we must commit after writes so row locks are released
+        promptly instead of being held until the WebSocket disconnects.
+        """
+        await self._session_repository.save(session)
+        if commit:
+            await self._session_repository.commit()
+
     @staticmethod
     def _session_to_dict(session: Session) -> dict[str, Any]:
         """Convert session to dict for WS broadcast (avoids ohs layer dependency)."""
@@ -103,7 +114,7 @@ class SessionApplicationService:
         if command.name:
             session.rename(command.name.strip())
 
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
 
         # Pre-set bypass permissions for new sessions so the first query
         # doesn't fall back to the env-level default (which may be acceptEdits)
@@ -159,6 +170,7 @@ class SessionApplicationService:
         removed = await self._session_repository.remove(session_id)
         if not removed:
             raise BusinessException("Session not found")
+        await self._session_repository.commit()
         return True
 
     async def batch_delete_sessions(self, session_ids: list[str]) -> int:
@@ -178,7 +190,7 @@ class SessionApplicationService:
         if session is None:
             raise BusinessException("Session not found")
         session.rename(name)
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
         return session
 
     async def clear_context(self, command: ClearContextCommand) -> None:
@@ -234,7 +246,7 @@ class SessionApplicationService:
             self._claude_agent_gateway.cleanup_session(command.session_id)
             session.clear_context()
 
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
         # Broadcast full session + empty messages so frontend resets context display
         await self._connection_manager.broadcast(
             session.session_id,
@@ -285,7 +297,7 @@ class SessionApplicationService:
 
         # Run DB save + WS broadcast in parallel with SDK connection check
         async def _save_and_broadcast():
-            await self._session_repository.save(session)
+            await self._save_session(session, commit=True)
             await self._connection_manager.broadcast(
                 session.session_id,
                 {
@@ -422,7 +434,7 @@ class SessionApplicationService:
             # Use a fresh DB session to ensure final save succeeds even if
             # the original connection was lost during a long-running query
             try:
-                await self._session_repository.save(session)
+                await self._save_session(session, commit=True)
             except Exception:
                 logger.warning(
                     "[session=%s] final save failed, retrying with fresh DB session",
@@ -591,8 +603,7 @@ class SessionApplicationService:
             is_result = msg_type_str == "result"
             if is_result or (now - last_save_time >= save_interval):
                 try:
-                    await self._session_repository.save(session)
-                    await self._session_repository.commit()
+                    await self._save_session(session, commit=True)
                     last_save_time = now
                 except Exception:
                     logger.warning(
@@ -644,7 +655,7 @@ class SessionApplicationService:
             if self._claude_agent_gateway.is_active(session_id):
                 return
         session.complete_query()
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
 
     async def prewarm_connection(self, session_id: str) -> None:
         """Pre-establish SDK connection for a session so first query is faster.
@@ -724,7 +735,7 @@ class SessionApplicationService:
         if session is not None:
             try:
                 prompt = session.cancel_query()
-                await self._session_repository.save(session)
+                await self._save_session(session, commit=True)
             except ValueError:
                 # Session not in RUNNING state — already transitioned
                 # Still try to find last user message for prompt restoration
@@ -792,7 +803,7 @@ class SessionApplicationService:
             await self._claude_agent_gateway.set_model(session_id, model)
         # Update domain model and persist
         session.change_model(model)
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
 
     async def set_permission_mode(self, session_id: str, mode: str) -> None:
         """Change the permission mode for an active session.
@@ -896,7 +907,7 @@ class SessionApplicationService:
         ))
 
         # 4. Save to MySQL
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
 
         logger.info(
             "[import] CC session %s -> VP session %s, %d messages",
@@ -940,7 +951,7 @@ class SessionApplicationService:
 
         session.start_compact()
         self._claude_agent_gateway.mark_active(session_id)
-        await self._session_repository.save(session)
+        await self._save_session(session, commit=True)
 
         await self._connection_manager.broadcast(
             session_id,
@@ -1006,7 +1017,7 @@ class SessionApplicationService:
 
         finally:
             self._claude_agent_gateway.mark_idle(session_id)
-            await self._session_repository.save(session)
+            await self._save_session(session, commit=True)
             all_messages = [{"type": msg.message_type.value, "content": msg.content} for msg in session.messages]
             await self._connection_manager.broadcast(
                 session_id,
