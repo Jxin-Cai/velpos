@@ -327,8 +327,10 @@ class WeixinAdapter(ImChannelAdapter):
         context to DB on each inbound message.  We piggyback context_token
         onto the same config dict.
         """
-        binding._config["last_context_token"] = context_token
-        binding._config["last_sender_id"] = from_user_id
+        binding.update_config({
+            "last_context_token": context_token,
+            "last_sender_id": from_user_id,
+        })
 
     # ── Send message ──
 

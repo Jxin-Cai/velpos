@@ -392,10 +392,49 @@ class ProjectApplicationService:
         )
         return project
 
+    async def _check_prerequisites(self, spec, project_dir: str) -> None:
+        """Run prerequisite commands from the plugin spec and raise on failure."""
+        for cmd in spec.prereq_commands:
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    cmd,
+                    cwd=project_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    hint = f" Install: {spec.prereq_install}" if spec.prereq_install else ""
+                    raise BusinessException(
+                        f"Prerequisite check failed: `{cmd}` exited with code {proc.returncode}.{hint}",
+                        "PREREQ_FAILED",
+                    )
+            except FileNotFoundError:
+                hint = f" Install: {spec.prereq_install}" if spec.prereq_install else ""
+                raise BusinessException(
+                    f"Prerequisite not found: `{cmd}`.{hint}",
+                    "PREREQ_FAILED",
+                )
+
+    @staticmethod
+    def _read_init_md(path: str) -> str:
+        """Read an init MD file relative to the backend directory."""
+        if not path:
+            return ""
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        full_path = os.path.join(backend_dir, path)
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            logger.warning("Init MD not found: %s", full_path)
+            return ""
+
     async def _send_plugin_init_prompt(
         self, init_session_id: str, init_md_content: str,
         project_id: str, plugin_type: PluginType,
     ) -> None:
+        svc = None
         try:
             svc = await self._session_service_factory()
             await svc.set_permission_mode(init_session_id, "bypassPermissions")
@@ -408,7 +447,6 @@ class ProjectApplicationService:
                 # regardless of success or failure
                 await svc.set_permission_mode(init_session_id, "default")
             await svc.commit()
-            await svc.close()
 
             # Do NOT auto-complete here — the plugin init prompt should call
             # POST /api/projects/{id}/complete-plugin-init explicitly when done.
@@ -427,6 +465,9 @@ class ProjectApplicationService:
                 logger.warning(
                     "Auto-fail plugin init failed: project=%s", project_id, exc_info=True
                 )
+        finally:
+            if svc is not None:
+                await svc.close()
 
     async def _auto_complete_plugin_init(
         self, project_id: str, plugin_type: PluginType,

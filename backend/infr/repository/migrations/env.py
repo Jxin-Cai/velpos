@@ -27,6 +27,7 @@ import infr.repository.session_model  # noqa: F401
 import infr.repository.im_binding_model  # noqa: F401
 import infr.repository.channel_profile_model  # noqa: F401
 import infr.repository.project_model  # noqa: F401
+import infr.repository.channel_init_model  # noqa: F401
 # ------------------------------------------------
 
 config = context.config

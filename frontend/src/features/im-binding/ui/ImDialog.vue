@@ -229,7 +229,7 @@ function handleOverlayClick(e) {
 }
 
 function handleKeydown(e) {
-  if (e.key === 'Escape') handleClose()
+  if (e.key === 'Escape' && props.visible) handleClose()
 }
 
 onMounted(() => document.addEventListener('keydown', handleKeydown))

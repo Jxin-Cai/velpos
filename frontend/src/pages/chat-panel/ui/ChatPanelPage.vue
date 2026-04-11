@@ -355,8 +355,8 @@ const showTaskPanel = ref(false)
 function formatDurationShort(ms) {
   if (!ms) return '-'
   if (ms < 1000) return `${ms}ms`
-  const s = (ms / 1000).toFixed(1)
-  if (s < 60) return `${s}s`
+  const s = ms / 1000
+  if (s < 60) return `${s.toFixed(1)}s`
   const m = Math.floor(ms / 60000)
   const remainS = Math.round((ms % 60000) / 1000)
   return `${m}m${remainS}s`

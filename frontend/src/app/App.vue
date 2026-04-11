@@ -241,6 +241,15 @@ function connectToSession(sessionId, oldSessionId) {
         setError(data.message)
         break
 
+      case 'ws_disconnected':
+        // WS connection dropped — if we thought we were running, mark as
+        // reconnecting so the UI doesn't show a stale spinner forever.
+        // The actual authoritative status comes from the next 'connected' event.
+        if (status.value === 'running') {
+          setStatus('reconnecting')
+        }
+        break
+
       case 'info':
         break
 

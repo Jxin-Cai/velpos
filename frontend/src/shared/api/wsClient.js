@@ -45,6 +45,10 @@ export function createWsConnection(sessionId) {
 
     ws.onclose = (event) => {
       if (destroyed) return;
+      // Notify handler that the connection dropped — lets UI clear stale status
+      if (eventHandler) {
+        eventHandler({ event: 'ws_disconnected', code: event.code })
+      }
       if (event.code !== WS_CLOSE_NORMAL && event.code !== WS_CLOSE_NOT_FOUND) {
         const delay = getReconnectDelay()
         reconnectAttempt++
