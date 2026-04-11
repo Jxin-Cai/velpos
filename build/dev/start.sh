@@ -37,7 +37,7 @@ check_prerequisites() {
 
     # Docker
     if command -v docker &>/dev/null; then
-        ok "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+' | head -1)"
+        ok "Docker $(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     else
         error "Docker not found"
         echo "  Install: https://docs.docker.com/get-docker/"
@@ -75,7 +75,7 @@ check_prerequisites() {
 
     # uv
     if command -v uv &>/dev/null; then
-        ok "uv $(uv --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo '(available)')"
+        ok "uv $(uv --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo '(available)')"
     else
         error "uv not found"
         echo "  Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -163,9 +163,6 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; }
 ensure_dirs() {
     mkdir -p "$PID_DIR" "$LOG_DIR"
 }
-
-# Run prerequisite check after colors/helpers are defined
-check_prerequisites
 
 is_running() {
     local pid_file="$1"
@@ -287,6 +284,7 @@ stop_process() {
 }
 
 do_start() {
+    check_prerequisites
     ensure_dirs
     echo -e "${BOLD}${CYAN}"
     echo " __     __    _                  "

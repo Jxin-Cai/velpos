@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount } from 'vue'
 import { useVoiceInput } from '../model/useVoiceInput'
 
 const props = defineProps({
@@ -8,13 +8,17 @@ const props = defineProps({
 
 const emit = defineEmits(['text'])
 
-const { isRecording, supported, toggle } = useVoiceInput()
+const { isRecording, supported, stopRecording, toggle } = useVoiceInput()
 
 const isDisabled = computed(() => (!supported.value || props.disabled) && !isRecording.value)
 
 function handleToggle() {
   toggle((text) => emit('text', text))
 }
+
+onBeforeUnmount(() => {
+  stopRecording()
+})
 </script>
 
 <template>

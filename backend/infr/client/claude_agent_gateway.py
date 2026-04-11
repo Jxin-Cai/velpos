@@ -245,6 +245,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         if cwd:
             self._session_cwds[session_id] = cwd
 
+        # Force permission mode after connect — resume can restore a stale mode
+        try:
+            await client.set_permission_mode(perm_mode)
+        except Exception:
+            logger.debug("set_permission_mode after connect failed (non-critical): session=%s", session_id)
+
         # Send query and receive response until ResultMessage
         await client.query(prompt=prompt)
 
@@ -405,6 +411,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 self._pending_request_context[session_id] = {
                     "tool_name": tool_name,
                     "questions": tool_input.get("questions", []) if tool_name == "AskUserQuestion" else [],
+                    "tool_input": str(tool_input)[:500] if tool_name != "AskUserQuestion" else "",
                 }
 
             # Broadcast to WS clients
@@ -418,6 +425,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 self._pending_user_responses.pop(session_id, None)
                 self._pending_request_context.pop(session_id, None)
                 return PermissionResultDeny(message="User response timeout")
+            except asyncio.CancelledError:
+                logger.info("can_use_tool cancelled: session=%s, tool=%s", session_id, tool_name)
+                return PermissionResultDeny(message="Cancelled by user")
             finally:
                 async with self._lock:
                     self._pending_user_responses.pop(session_id, None)
@@ -462,6 +472,20 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     return self._pending_request_context.get(session_id)
         return None
 
+    async def cancel_pending_response(self, session_id: str) -> bool:
+        """Cancel a pending user response future so the query can terminate.
+
+        Returns True if a pending response was cancelled, False if none was pending.
+        """
+        async with self._lock:
+            fut = self._pending_user_responses.pop(session_id, None)
+            self._pending_request_context.pop(session_id, None)
+            if fut and not fut.done():
+                fut.cancel()
+                logger.info("cancel_pending_response: session=%s", session_id)
+                return True
+        return False
+
     async def set_model(self, session_id: str, model: str) -> None:
         client = self._clients.get(session_id)
         if client is None:
@@ -479,6 +503,22 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     def is_connected(self, session_id: str) -> bool:
         """Check if a session has an active SDK client."""
         return session_id in self._clients
+
+    def is_process_alive(self, session_id: str) -> bool:
+        """Check if the underlying CLI subprocess is still running.
+
+        Returns False if no client exists or the subprocess has exited.
+        """
+        client = self._clients.get(session_id)
+        if client is None:
+            return False
+        transport = getattr(client, "_transport", None)
+        if transport is None:
+            return False
+        process = getattr(transport, "_process", None)
+        if process is None:
+            return False
+        return process.returncode is None
 
     async def open_connection(
         self,
@@ -513,9 +553,19 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         if cwd:
             self._session_cwds[session_id] = cwd
 
+        # Force permission mode after connect — resume can restore a stale mode
+        try:
+            await client.set_permission_mode(perm_mode)
+        except Exception:
+            logger.debug("set_permission_mode after open_connection failed (non-critical): session=%s", session_id)
+
     def get_connected_model(self, session_id: str) -> str | None:
         """Return the model used for the current connection, or None if not connected."""
         return self._connected_models.get(session_id)
+
+    def get_cached_sdk_session_id(self, session_id: str) -> str | None:
+        """Return the cached SDK session ID for a session, or None if not tracked."""
+        return self._sdk_session_ids.get(session_id)
 
     def get_permission_mode(self, session_id: str) -> str:
         """Return the effective permission mode for a session."""

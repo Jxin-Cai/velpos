@@ -6,6 +6,7 @@ const loading = ref(false)
 const editing = ref(false)
 const editContent = ref('')
 const saving = ref(false)
+const error = ref('')
 
 export function useMemoryManager() {
   async function loadClaudeMd(projectDir) {
@@ -37,6 +38,8 @@ export function useMemoryManager() {
       await writeClaudeMd(projectDir, editContent.value)
       content.value = editContent.value
       editing.value = false
+    } catch {
+      error.value = 'Failed to save'
     } finally {
       saving.value = false
     }
@@ -55,6 +58,7 @@ export function useMemoryManager() {
     editing,
     editContent,
     saving,
+    error,
     loadClaudeMd,
     startEdit,
     cancelEdit,

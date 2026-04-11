@@ -43,7 +43,7 @@ const filePathExtension = {
   },
   renderer(token) {
     const escaped = escapeHtml(token.path)
-    return `<a class="file-path-link" data-file-path="${escaped}" href="javascript:void(0)" title="Click to open">${escaped}</a>`
+    return `<a class="file-path-link" data-file-path="${escaped}" href="#" title="Click to open">${escaped}</a>`
   },
 }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, PendingRollbackError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -38,6 +38,9 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+        except PendingRollbackError:
+            logger.warning("DB session in invalid transaction state, rolling back")
+            await session.rollback()
         except OperationalError as e:
             logger.error("DB commit failed (connection lost): %s", e)
             await session.rollback()

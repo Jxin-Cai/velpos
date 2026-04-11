@@ -2,7 +2,7 @@ import { computed } from 'vue'
 import { useSession } from '@entities/session'
 
 export function useTaskProgress() {
-  const { messages } = useSession()
+  const { messages, status } = useSession()
 
   const allTasks = computed(() => {
     const tasks = {}
@@ -48,6 +48,17 @@ export function useTaskProgress() {
     }
 
     const all = Object.values(tasks)
+    // If session is no longer running, force-complete any still-running tasks
+    // (they won't receive a terminal notification if the stream broke)
+    const sessionRunning = status.value === 'running'
+    if (!sessionRunning) {
+      for (const t of all) {
+        if (t.status === 'running') {
+          t.status = 'completed'
+          t.endTime = t.endTime || Date.now()
+        }
+      }
+    }
     // Running first (oldest first), then non-running (newest first)
     const running = all.filter(t => t.status === 'running').sort((a, b) => a.startTime - b.startTime)
     const done = all.filter(t => t.status !== 'running').sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
@@ -84,13 +95,21 @@ export function useTaskProgress() {
 
     if (!latestTodos) return []
 
-    return latestTodos.map((todo, i) => ({
-      id: `plan-${i}`,
-      subject: todo.subject || todo.content || '',
-      status: todo.status || 'pending',
-      description: todo.description || '',
-      activeForm: todo.activeForm || '',
-    }))
+    const sessionRunning = status.value === 'running'
+    return latestTodos.map((todo, i) => {
+      let todoStatus = todo.status || 'pending'
+      // If session is no longer running, force-complete in_progress items
+      if (!sessionRunning && todoStatus === 'in_progress') {
+        todoStatus = 'completed'
+      }
+      return {
+        id: `plan-${i}`,
+        subject: todo.subject || todo.content || '',
+        status: todoStatus,
+        description: todo.description || '',
+        activeForm: todo.activeForm || '',
+      }
+    })
   })
 
   const planTaskCounts = computed(() => {

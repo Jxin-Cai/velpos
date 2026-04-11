@@ -51,7 +51,7 @@ class SessionApplicationService:
         # Latest-wins queue: at most one pending message per session
         self._queued_messages: dict[str, RunQueryCommand] = {}
         # Tracks sessions that have been cancelled (to prevent retry in run_claude_query)
-        self._cancelled_sessions: set[str] = {}
+        self._cancelled_sessions: set[str] = set()
 
     @staticmethod
     def _session_to_dict(session: Session) -> dict[str, Any]:
@@ -207,9 +207,11 @@ class SessionApplicationService:
                         new_sdk_sid = sdk_sid
 
                 session.clear_context()
-                # Restore sdk_session_id — connection stays alive after /clear
-                if new_sdk_sid:
-                    session.update_sdk_session_id(new_sdk_sid)
+                # Restore sdk_session_id — connection stays alive after /clear.
+                # Prefer the sid from /clear response; fall back to gateway cache.
+                restored_sid = new_sdk_sid or self._claude_agent_gateway.get_cached_sdk_session_id(command.session_id)
+                if restored_sid:
+                    session.update_sdk_session_id(restored_sid)
                 # Write back last_input_tokens from the /clear response so
                 # the frontend context bar reflects the post-clear state.
                 if clear_input_tokens > 0:
@@ -469,11 +471,47 @@ class SessionApplicationService:
                 logger.info("[session=%s] 执行排队的后续消息", command.session_id)
                 safe_create_task(self.run_claude_query(queued))
 
+    # Maximum seconds to wait for the next message from the Claude stream.
+    # If no message arrives within this window AND the CLI process has died,
+    # we treat the stream as broken.  The generous timeout avoids false
+    # positives during long tool executions (e.g. large file writes).
+    _STREAM_MSG_TIMEOUT = 300  # 5 minutes
+
     async def _consume_message_stream(
         self, session: "Session", msg_stream: "AsyncIterator[dict]"
     ) -> None:
-        """Iterate over the message stream, persist messages and broadcast to WS."""
-        async for msg_dict in msg_stream:
+        """Iterate over the message stream, persist messages and broadcast to WS.
+
+        Includes a per-message timeout combined with a CLI process health
+        check so the stream never hangs indefinitely when the subprocess
+        crashes.
+        """
+        loop = asyncio.get_event_loop()
+        last_save_time = loop.time()
+        save_interval = 2.0  # save at most every 2s for cross-session visibility
+
+        aiter = msg_stream.__aiter__()
+        while True:
+            try:
+                msg_dict = await asyncio.wait_for(
+                    aiter.__anext__(), timeout=self._STREAM_MSG_TIMEOUT,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                # Timeout waiting for next message — check if CLI is still alive
+                if not self._claude_agent_gateway.is_process_alive(session.session_id):
+                    logger.error(
+                        "[session=%s] CLI 进程已退出且消息流超时, 终止消费",
+                        session.session_id,
+                    )
+                    raise RuntimeError("Claude CLI process exited unexpectedly")
+                # Process is alive but slow (e.g. long tool execution) — keep waiting
+                logger.info(
+                    "[session=%s] 消息流等待超时但进程仍存活, 继续等待",
+                    session.session_id,
+                )
+                continue
             msg_type_str = msg_dict["message_type"]
             message = MessageConversionService.convert_stream_message(msg_dict)
             if message is None:
@@ -547,6 +585,21 @@ class SessionApplicationService:
                         new_sid,
                     )
 
+            # Periodic save: ensure reconnecting clients see recent messages.
+            # Uses the same DB session with explicit commit for visibility.
+            now = loop.time()
+            is_result = msg_type_str == "result"
+            if is_result or (now - last_save_time >= save_interval):
+                try:
+                    await self._session_repository.save(session)
+                    await self._session_repository.commit()
+                    last_save_time = now
+                except Exception:
+                    logger.warning(
+                        "[session=%s] periodic save failed",
+                        session.session_id, exc_info=True,
+                    )
+
     async def _fire_outbound(self, session_id: str, text: str) -> None:
         """Best-effort outbound IM sync — errors are logged, never raised."""
         try:
@@ -573,18 +626,25 @@ class SessionApplicationService:
         """Correct stale 'running' status when the agent is no longer connected.
 
         Loads the session, and if it is marked as running but the agent is
-        disconnected and not actively querying (e.g. after a server restart),
-        transitions it to idle. Skips correction if a query is in progress
+        disconnected (or the CLI process is dead) and not actively querying
+        (e.g. after a server restart or CLI crash), transitions it to idle.
+        Skips correction if a query is in progress
         (e.g., triggered from IM while SDK is reconnecting).
         """
         session = await self._session_repository.find_by_id(session_id)
         if session is None:
             return
-        if session.is_running and not self._claude_agent_gateway.is_connected(session_id):
+        if not session.is_running:
+            return
+        # Agent is connected AND its process is alive — don't touch
+        if (
+            self._claude_agent_gateway.is_connected(session_id)
+            and self._claude_agent_gateway.is_process_alive(session_id)
+        ):
             if self._claude_agent_gateway.is_active(session_id):
                 return
-            session.complete_query()
-            await self._session_repository.save(session)
+        session.complete_query()
+        await self._session_repository.save(session)
 
     async def prewarm_connection(self, session_id: str) -> None:
         """Pre-establish SDK connection for a session so first query is faster.
@@ -623,6 +683,10 @@ class SessionApplicationService:
         """
         self._cancelled_sessions.add(session_id)
         self.clear_queued_message(session_id)
+
+        # Step 0: Cancel any pending user response (permission/choice) so the
+        # query's can_use_tool callback stops blocking and the stream can finish.
+        await self._claude_agent_gateway.cancel_pending_response(session_id)
 
         # Step 1: Interrupt the running query
         try:
