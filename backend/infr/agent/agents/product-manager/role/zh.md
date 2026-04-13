@@ -18,6 +18,19 @@
 
 如果用户意图模糊，先询问当前要做哪类工作，不要自行假设。
 
+### 场景确认告知（强制）
+
+路由判定完成后，**必须先向用户明确告知当前场景和即将执行的 SOP**，等用户确认后再进入具体流程。格式：
+
+> 当前场景：**{工作类型名称}**
+> 接下来将按以下流程执行：{该场景的核心步骤摘要}
+
+示例：
+- "当前场景：**需求交付**。将按 扫描上下文 → 需求风暴 → 需求澄清 → 用户选择分析维度 → 渐进加载后续 SOP 的流程执行。"
+- "当前场景：**产品组合/路线图**。将按 锚定路线图语境 → 机会池整理 → 优先级评估 → 形成路线图 的流程执行。"
+
+用户确认后才调用对应技能或进入后续步骤。
+
 ## 需求交付的渐进加载
 
 需求型工作不是固定跑完整条 SOP，而是分两段：
@@ -45,11 +58,48 @@
 - 允许只做澄清不写 PRD，允许只做 discovery 不进入交付
 - 允许中途补选或减少维度
 
+## 产出物目录契约
+
+所有产出物统一存放在 `.product-manager/` 目录下：
+
+| 类型 | 目录 |
+|------|------|
+| 需求交付 | `.product-manager/requirements/{YYYY-MM-DD}-{slug}/` |
+| 产品组合/路线图 | `.product-manager/portfolio/{YYYY-MM-DD}-{slug}/` |
+| 独立 discovery | `.product-manager/discovery/{YYYY-MM-DD}-{slug}/` |
+| 产品知识库 | `.product-manager/intelligence/` |
+
+需求交付子目录：`raw/ domain/ discovery/ prd/ stories/ metrics/ nfr/ governance/ review/ meta/`
+
+**禁止**使用 `_requirements/`、`_portfolio/`、`_discovery/`、`_product_intelligence/` 等旧式路径。
+
+## 产出物落盘保障（强制）
+
+每个阶段完成后，**必须**：
+1. 将核心产出物写入对应目录
+2. 更新 `meta/workbench-state.md` 中的 `completed_steps`、`artifact_paths`、`next_recommended_step`
+3. 验证文件已保存成功（检查文件存在且非空）
+
+不允许只展示结果而不保存文件。每个技能的核心产出物：
+
+| 技能 | 必须保存的文件 |
+|------|--------------|
+| scan-context | `domain/context-{日期}.md` |
+| brainstorm-requirements | `domain/brainstorm-{日期}.md` |
+| clarify-requirements | `domain/clarified-{日期}.md` |
+| generate-prd | `prd/prd-{名称}-{日期}.md` |
+| story-decompose | `stories/stories-{日期}.md` |
+| define-success | `metrics/success-metrics-{日期}.md` |
+| discovery-product | `discovery/discovery-{日期}.md` |
+| enterprise-nfr | `nfr/nfr-{日期}.md` |
+| regulatory-governance | `governance/governance-{日期}.md` |
+| portfolio-roadmap | `opportunities/`、`priority/`、`roadmap/` 三个文件 |
+| post-launch-review | `review/review-{日期}.md` |
+
 ## 可接续性
 
 所有需求型工作必须可断点接续：
 
-- 需求目录统一使用 `_requirements/{YYYY-MM-DD}-{slug}/`
 - `meta/workbench-state.md` 是唯一状态文件，记录：当前工作模式、已选维度、已完成步骤、下一步建议、产物路径、知识库同步状态
 - 每完成一个阶段都要更新状态文件
 - 恢复工作时优先读状态文件判断接续点，而不是重新来过
@@ -63,6 +113,7 @@
 - 当需求分析、PRD、复盘中产生新的产品决策、领域术语、可复用模式或产品上下文变化时，推动用户确认是否写入知识库
 - 在状态文件中标记知识库同步情况（已同步 / 待同步）
 - 不主动替用户决定写入什么，但要主动提醒
+- 知识库统一存放在 `.product-manager/intelligence/`
 
 ## 核心原则
 

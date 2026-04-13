@@ -18,6 +18,19 @@ Do not treat every request as "write a PRD." Identify which type of PM work is n
 
 If user intent is ambiguous, ask which type of work they need. Do not assume.
 
+### Scenario Confirmation (Mandatory)
+
+After routing is determined, **you must explicitly tell the user what scenario they are entering and what SOP will be executed**, then wait for confirmation before proceeding. Format:
+
+> Current scenario: **{work type name}**
+> The following workflow will be executed: {core steps summary for this scenario}
+
+Examples:
+- "Current scenario: **Requirement delivery**. Will follow: scan context → brainstorm → clarify → select dimensions → progressive loading."
+- "Current scenario: **Portfolio/Roadmap**. Will follow: anchor context → opportunity pool → prioritization → roadmap."
+
+Only proceed to the corresponding skill after user confirms.
+
 ## Progressive Loading for Requirement Delivery
 
 Requirement work is not a fixed end-to-end pipeline. It has two stages:
@@ -45,11 +58,48 @@ Key constraints:
 - Allow clarification without PRD; allow discovery without entering delivery
 - Allow adding or removing dimensions mid-flow
 
+## Artifact Directory Contract
+
+All artifacts are stored under the `.product-manager/` directory:
+
+| Type | Directory |
+|------|-----------|
+| Requirement delivery | `.product-manager/requirements/{YYYY-MM-DD}-{slug}/` |
+| Portfolio / roadmap | `.product-manager/portfolio/{YYYY-MM-DD}-{slug}/` |
+| Standalone discovery | `.product-manager/discovery/{YYYY-MM-DD}-{slug}/` |
+| Product knowledge base | `.product-manager/intelligence/` |
+
+Requirement delivery subdirectories: `raw/ domain/ discovery/ prd/ stories/ metrics/ nfr/ governance/ review/ meta/`
+
+**Never** use legacy paths like `_requirements/`, `_portfolio/`, `_discovery/`, or `_product_intelligence/`.
+
+## Artifact Persistence Guarantee (Mandatory)
+
+After each stage completes, you **must**:
+1. Write the core artifact to its designated directory
+2. Update `meta/workbench-state.md` with `completed_steps`, `artifact_paths`, `next_recommended_step`
+3. Verify the file was saved successfully (check it exists and is non-empty)
+
+Never show results without persisting them. Each skill's required artifacts:
+
+| Skill | Must-save file |
+|-------|---------------|
+| scan-context | `domain/context-{date}.md` |
+| brainstorm-requirements | `domain/brainstorm-{date}.md` |
+| clarify-requirements | `domain/clarified-{date}.md` |
+| generate-prd | `prd/prd-{name}-{date}.md` |
+| story-decompose | `stories/stories-{date}.md` |
+| define-success | `metrics/success-metrics-{date}.md` |
+| discovery-product | `discovery/discovery-{date}.md` |
+| enterprise-nfr | `nfr/nfr-{date}.md` |
+| regulatory-governance | `governance/governance-{date}.md` |
+| portfolio-roadmap | `opportunities/`, `priority/`, `roadmap/` — three files |
+| post-launch-review | `review/review-{date}.md` |
+
 ## Resumability
 
 All requirement work must be resumable:
 
-- Requirement directories use `_requirements/{YYYY-MM-DD}-{slug}/`
 - `meta/workbench-state.md` is the single state file, tracking: workflow mode, selected dimensions, completed steps, next recommended step, artifact paths, knowledge-base sync status
 - Update the state file after every completed stage
 - When resuming, read the state file to determine the continuation point instead of restarting
@@ -63,6 +113,7 @@ The knowledge base is part of the operating loop, not an extra:
 - When requirement analysis, PRD writing, or review work produces new product decisions, domain terms, reusable patterns, or product context changes, push for user confirmation on whether to capture them
 - Reflect sync status (synced / pending) in the workflow state file
 - Do not decide what to capture on behalf of the user, but proactively remind
+- Knowledge base is stored at `.product-manager/intelligence/`
 
 ## Core Principles
 
