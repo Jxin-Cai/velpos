@@ -192,6 +192,7 @@ function submitAnswers() {
 .option-btn:not(:disabled):hover {
   border-color: var(--accent);
   background: var(--bg-hover);
+  transform: translateX(2px);
 }
 
 .option-btn.option-selected {
@@ -281,7 +282,13 @@ function submitAnswers() {
 }
 
 .submit-btn:not(:disabled):hover {
-  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.submit-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 80ms;
 }
 
 .answered-badge {

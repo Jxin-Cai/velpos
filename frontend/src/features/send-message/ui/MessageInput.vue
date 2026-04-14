@@ -181,7 +181,13 @@ defineExpose({ setInput, addImage, appendText })
   margin: 0 16px;
   transition:
     border-color var(--transition-fast),
-    background var(--transition-base);
+    background var(--transition-base),
+    box-shadow var(--transition-fast);
+}
+
+.input-area:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .image-previews {
@@ -285,7 +291,7 @@ defineExpose({ setInput, addImage, appendText })
 }
 
 .send-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 </style>

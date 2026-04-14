@@ -489,6 +489,7 @@ function formatMaxTokens(n) {
             <span class="toolbar-btn-label">History</span>
             <span v-if="queryHistory.length" class="toolbar-badge">{{ queryHistory.length }}</span>
           </button>
+          <Transition name="dropdown-fade">
           <div v-if="showHistory" class="history-panel">
             <div class="history-header">
               <span class="history-title">Query History</span>
@@ -517,6 +518,7 @@ function formatMaxTokens(n) {
               </div>
             </div>
           </div>
+          </Transition>
         </div>
         <ImButton
           v-if="hasChannels"
@@ -573,6 +575,7 @@ function formatMaxTokens(n) {
               </svg>
               {{ copiedChip === 'project' ? 'Copied!' : projectDirName }}
             </button>
+            <Transition name="dropdown-fade">
             <div v-if="showProjectCopyMenu" class="dropdown-menu">
               <button class="dropdown-item" @click="openProjectDir">
                 Open directory
@@ -584,6 +587,7 @@ function formatMaxTokens(n) {
                 Copy project name
               </button>
             </div>
+            </Transition>
           </div>
           <button
             class="dash-chip dash-session-id"
@@ -610,6 +614,7 @@ function formatMaxTokens(n) {
               </svg>
               {{ getModelLabel(currentModel) }}
             </button>
+            <Transition name="dropdown-fade">
             <div v-if="showModelMenu" class="dropdown-menu model-menu">
               <button
                 v-for="m in availableModels"
@@ -624,6 +629,7 @@ function formatMaxTokens(n) {
               </button>
               <div v-if="!availableModels.length" class="dropdown-empty">No models available</div>
             </div>
+            </Transition>
           </div>
           <div class="dropdown-wrapper" @click.stop>
             <button
@@ -640,8 +646,9 @@ function formatMaxTokens(n) {
               </svg>
               {{ branchCurrent || gitBranch || 'branch' }}
             </button>
+            <Transition name="dropdown-fade">
             <div v-if="showBranchMenu" class="dropdown-menu branch-menu">
-              <div v-if="branchLoading" class="dropdown-empty">Loading…</div>
+              <div v-if="branchLoading" class="dropdown-empty">Loading...</div>
               <div v-else-if="!branchList.length" class="dropdown-empty">No branches</div>
               <template v-else>
                 <button
@@ -655,6 +662,7 @@ function formatMaxTokens(n) {
                 </button>
               </template>
             </div>
+            </Transition>
           </div>
           <div class="dropdown-wrapper" @click.stop>
             <button
@@ -668,6 +676,7 @@ function formatMaxTokens(n) {
               </svg>
               {{ getPermLabel(currentPermMode) }}
             </button>
+            <Transition name="dropdown-fade">
             <div v-if="showPermMenu" class="dropdown-menu">
               <button
                 v-for="pm in permModes"
@@ -679,6 +688,7 @@ function formatMaxTokens(n) {
                 {{ pm.label }}
               </button>
             </div>
+            </Transition>
           </div>
           <span class="dash-chip dash-tools" v-if="totalToolCalls > 0" :title="toolStats.map(t => t.name + ': ' + t.count).join(', ')">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -812,6 +822,11 @@ function formatMaxTokens(n) {
 .toolbar-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.toolbar-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 80ms;
 }
 
 .toolbar-btn--active {
@@ -1142,6 +1157,11 @@ button.dash-chip {
 
 button.dash-chip:hover:not([disabled]) {
   filter: brightness(1.2);
+}
+
+button.dash-chip:active:not([disabled]) {
+  transform: scale(0.96);
+  transition-duration: 80ms;
 }
 
 button.dash-chip[disabled] {

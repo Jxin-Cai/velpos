@@ -507,6 +507,11 @@ defineExpose({ scrollToSession })
   transform: translateY(-1px);
 }
 
+.new-session-btn:active {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 80ms;
+}
+
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
@@ -826,6 +831,13 @@ defineExpose({ scrollToSession })
 
 .batch-delete-btn:hover {
   filter: brightness(1.2);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.batch-delete-btn:active {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 80ms;
 }
 
 /* Slide up transition */

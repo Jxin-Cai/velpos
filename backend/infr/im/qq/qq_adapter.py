@@ -56,8 +56,7 @@ class QqAdapter(ImChannelAdapter):
         if not app_id or not app_secret:
             return False
         try:
-            self._api.set_credentials(app_id, app_secret)
-            await self._api.ensure_token()
+            await self._api.ensure_token(app_id, app_secret)
             return True
         except Exception:
             return False

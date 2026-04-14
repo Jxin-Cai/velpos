@@ -100,6 +100,12 @@ onBeforeUnmount(() => {
 .clear-ctx-btn--confirming {
   color: var(--red);
   background: var(--red-dim);
+  animation: confirm-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes confirm-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--red-dim); }
+  50% { box-shadow: 0 0 0 3px var(--red-dim); }
 }
 
 .clear-ctx-btn--confirming:hover:not(:disabled) {
@@ -110,5 +116,10 @@ onBeforeUnmount(() => {
 .clear-ctx-btn--disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.clear-ctx-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 80ms;
 }
 </style>

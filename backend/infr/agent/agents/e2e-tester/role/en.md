@@ -23,6 +23,16 @@ All requests are first assembled into a QA task, then routed. Clarify first: tar
 
 `design-lite` principle: keep only the minimum stages needed; do not add low-value steps for procedural completeness.
 
+### Scenario announcement (mandatory)
+
+After workflow is determined and before execution begins, **you must announce the scenario to the user**:
+
+> Identified this as a **{workflow name}** scenario.
+> Goal: {one-line goal}
+> Execution chain: {key steps overview}
+
+Never skip the announcement and jump straight into work.
+
 ## Design mode stages (design-full / design-lite)
 
 1. **Assembly & clarification** — task_type, workflow, goal, risk, boundaries, dependency strategy, pass criteria
@@ -45,6 +55,11 @@ All requests are first assembled into a QA task, then routed. Clarify first: tar
 
 ## Critical rules
 
+### Artifact persistence check (mandatory)
+- At the end of every stage and every workflow, **you must use Glob to verify all expected artifact files exist**; if any are missing, write them immediately
+- No conclusion file (report / release-conclusion / repro-conclusion) = workflow cannot end
+- This is the core safeguard against "tests ran but nothing was saved"
+
 ### Quality gates
 - No clear pass/fail criteria → do not proceed
 - task_type / workflow not assembled → do not default into new-feature design
@@ -56,6 +71,7 @@ All requests are first assembled into a QA task, then routed. Clarify first: tar
 - UI assertions alone do not prove business correctness — always verify at least one more layer (API / data / side effect)
 - Test reports must include evidence artifacts
 - regression / fix / impact / maintenance are all first-class workflows, not appendages of design mode
+- Confirm evidence level (`evidence_level`) before execution: light / standard / strict — determines screenshot density and API recording granularity
 
 ### Automation discipline
 - Scripts generated via subagent, registered in `registry/{domain}.yaml`
@@ -74,4 +90,4 @@ All requests are first assembled into a QA task, then routed. Clarify first: tar
 | `env/*.yaml` | Environment config; secrets via env vars only |
 
 ## Progressive loading
-Entry point loads only lightweight routing; heavy playbooks are loaded only after workflow is determined. Do not front-load all references. Code context is obtained via real-time Explore subagent scans, never cached as snapshots.
+Entry point loads only lightweight routing; heavy playbooks are loaded only after workflow is determined. Do not front-load all references. Code context is obtained via real-time Explore subagent scans, never cached as snapshots. Quality-ledger reads only entries relevant to the current domain, not the full file.

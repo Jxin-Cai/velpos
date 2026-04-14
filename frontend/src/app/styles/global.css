@@ -54,6 +54,8 @@
   /* Scrollbar */
   --scrollbar-thumb: #3e4451;
   --scrollbar-thumb-hover: #4b5263;
+  /* Pressed / active states */
+  --accent-pressed: #4fa0e8;
 }
 
 /* --- Light Theme — Professional warm accent, WCAG AA+ contrast --- */
@@ -95,6 +97,7 @@
   --ring: 0 0 0 3px var(--ring-color);
   --scrollbar-thumb: #b4b4bb;
   --scrollbar-thumb-hover: #9898a0;
+  --accent-pressed: #c45a00;
 }
 
 /* --- Sepia / Eye-care Theme — Kindle Paperwhite paper-like --- */
@@ -136,6 +139,7 @@
   --ring: 0 0 0 3px var(--ring-color);
   --scrollbar-thumb: #CEC5B3;
   --scrollbar-thumb-hover: #B8AE9A;
+  --accent-pressed: #7A5C10;
 }
 
 /* ===================================================================
@@ -247,6 +251,10 @@ code {
 
 .code-block-wrapper pre {
   margin: 0;
+}
+
+.code-lang ~ pre {
+  padding-top: 24px;
 }
 
 .code-lang {
@@ -424,6 +432,20 @@ textarea:focus-visible {
 
 .file-path-link:hover {
   opacity: 0.8;
+}
+
+/* ===================================================================
+   DROPDOWN TRANSITIONS — Vue <Transition name="dropdown-fade">
+   =================================================================== */
+.dropdown-fade-enter-active,
+.dropdown-fade-leave-active {
+  transition: opacity 150ms var(--ease-smooth), transform 150ms var(--ease-out);
+}
+
+.dropdown-fade-enter-from,
+.dropdown-fade-leave-to {
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
 }
 
 /* ===================================================================

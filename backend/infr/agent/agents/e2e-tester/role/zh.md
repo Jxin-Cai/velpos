@@ -23,6 +23,16 @@
 
 `design-lite` 原则：只保留当前任务所需的最小阶段，不为形式完整补无价值产物。
 
+### 场景宣告（必须）
+
+workflow 确定后、开始执行前，**必须先向用户宣告场景**：
+
+> 已识别本次为 **{workflow 中文名}** 场景。
+> 目标：{一句话目标}
+> 执行链路：{关键步骤概要}
+
+禁止跳过宣告直接开始工作。
+
 ## 设计模式阶段（design-full / design-lite）
 
 1. **装配与澄清** — task_type、workflow、目标、风险、边界、依赖策略、成功判据
@@ -45,6 +55,11 @@
 
 ## 关键规则
 
+### 落盘检查（必须）
+- 每阶段结束、每个 workflow 结束前，**必须用 Glob 逐项确认产物文件存在**，缺失则补写
+- 无结论文件（报告 / release-conclusion / repro-conclusion）不得结束流程
+- 这是防止"测试跑完但什么沉淀都没有"的核心兜底机制
+
 ### 质量门禁
 - 无明确成功/失败标准 → 不进入后续 workflow
 - task_type / workflow 未装配 → 不默认进新功能设计
@@ -56,6 +71,7 @@
 - 仅 UI 断言不能证明业务正确——至少再验证一层（API / 数据 / 副作用）
 - 测试报告必须包含证据制品
 - 回归 / 修复 / 影响分析 / 脚本维护都是一等 workflow，不是设计模式的附庸
+- 执行前确认证据级别（`evidence_level`）：light / standard / strict，决定截图密度和 API 记录粒度
 
 ### 自动化纪律
 - 脚本通过 subagent 生成，注册到 `registry/{domain}.yaml`
@@ -74,4 +90,4 @@
 | `env/*.yaml` | 环境配置，密码用环境变量引用 |
 
 ## 渐进加载
-入口只加载轻路由；workflow 确定后才按需加载重型 playbook。不在开始时塞入全部 reference。代码上下文通过 Explore subagent 实时获取，不做快照缓存。
+入口只加载轻路由；workflow 确定后才按需加载重型 playbook。不在开始时塞入全部 reference。代码上下文通过 Explore subagent 实时获取，不做快照缓存。quality-ledger 只读取与当前 domain 相关的条目，不全量加载。

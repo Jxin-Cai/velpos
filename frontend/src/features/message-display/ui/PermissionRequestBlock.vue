@@ -128,11 +128,17 @@ function handleDeny() {
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
-  transition: opacity var(--transition-fast);
+  transition: all var(--transition-fast);
 }
 
 .perm-btn:hover {
-  opacity: 0.85;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.perm-btn:active {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 80ms;
 }
 
 .perm-allow {

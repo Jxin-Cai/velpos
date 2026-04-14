@@ -225,6 +225,12 @@ onBeforeUnmount(() => {
   background: var(--bg-hover);
 }
 
+.session-item:active {
+  background: var(--bg-hover);
+  transform: scale(0.995);
+  transition-duration: 80ms;
+}
+
 .session-item.active {
   border-left-color: var(--accent);
   background: var(--accent-dim);
