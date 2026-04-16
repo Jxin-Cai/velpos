@@ -62,7 +62,6 @@ const isMobileSidebarOpen = ref(false)
 const isSidebarCollapsed = ref(
   localStorage.getItem('vp_sidebar_collapsed') === 'true'
 )
-const isSidebarHovered = ref(false)
 
 function toggleSidebar() {
   isMobileSidebarOpen.value = !isMobileSidebarOpen.value
@@ -71,10 +70,6 @@ function toggleSidebar() {
 function toggleSidebarCollapse() {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
   localStorage.setItem('vp_sidebar_collapsed', isSidebarCollapsed.value)
-}
-
-function handleSidebarHover(hovering) {
-  isSidebarHovered.value = hovering
 }
 
 function handleSessionSelect(id) {
@@ -422,28 +417,17 @@ onUnmounted(() => {
           @create-in-project="handleCreateInProject"
           @delete-project="onDeleteProject"
           @reorder-projects="handleReorderProjects"
-          @mouseenter="handleSidebarHover(true)"
-          @mouseleave="handleSidebarHover(false)"
         />
-        <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }" @mouseenter="handleSidebarHover(true)" @mouseleave="handleSidebarHover(false)">
+        <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }">
+          <div class="sidebar-hover-zone"></div>
           <button
-            v-show="!isSidebarCollapsed && (isSidebarHovered)"
             class="sidebar-collapse-btn"
+            :class="{ collapsed: isSidebarCollapsed }"
             @click="toggleSidebarCollapse"
-            :title="'Collapse sidebar'"
+            :title="isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 18 9 12 15 6"/>
-            </svg>
-          </button>
-          <button
-            v-show="isSidebarCollapsed && isSidebarHovered"
-            class="sidebar-collapse-btn collapsed"
-            @click="toggleSidebarCollapse"
-            :title="'Expand sidebar'"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="9 18 15 12 9 6"/>
+              <polyline :points="isSidebarCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'"/>
             </svg>
           </button>
         </div>
@@ -614,13 +598,27 @@ onUnmounted(() => {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 290px;
-  z-index: 29;
-  transition: width var(--transition-base);
+  width: 310px;
+  z-index: 15;
+  pointer-events: none;
 }
 
 .sidebar-collapse-area.collapsed {
-  width: 30px;
+  width: 260px;
+}
+
+.sidebar-hover-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 260px;
+  width: 50px;
+  pointer-events: auto;
+}
+
+.sidebar-collapse-area.collapsed .sidebar-hover-zone {
+  width: 100%;
+  left: 0;
 }
 
 .sidebar-collapse-btn {
@@ -640,8 +638,24 @@ onUnmounted(() => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), left var(--transition-base);
+  transition: opacity 0.2s, color var(--transition-fast), background var(--transition-fast), left var(--transition-base);
   padding: 0;
+  pointer-events: auto;
+  opacity: 0;
+}
+
+.sidebar-hover-zone:hover + .sidebar-collapse-btn,
+.sidebar-collapse-btn:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.sidebar-collapse-btn.collapsed {
+  left: 0;
+  border-left: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .sidebar-collapse-btn:hover {
