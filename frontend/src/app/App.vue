@@ -62,6 +62,7 @@ const isMobileSidebarOpen = ref(false)
 const isSidebarCollapsed = ref(
   localStorage.getItem('vp_sidebar_collapsed') === 'true'
 )
+const isSidebarHovered = ref(false)
 
 function toggleSidebar() {
   isMobileSidebarOpen.value = !isMobileSidebarOpen.value
@@ -70,6 +71,10 @@ function toggleSidebar() {
 function toggleSidebarCollapse() {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
   localStorage.setItem('vp_sidebar_collapsed', isSidebarCollapsed.value)
+}
+
+function handleSidebarHover(hovering) {
+  isSidebarHovered.value = hovering
 }
 
 function handleSessionSelect(id) {
@@ -417,17 +422,22 @@ onUnmounted(() => {
           @create-in-project="handleCreateInProject"
           @delete-project="onDeleteProject"
           @reorder-projects="handleReorderProjects"
+          @mouseenter="handleSidebarHover(true)"
+          @mouseleave="handleSidebarHover(false)"
         />
-        <button
-          class="sidebar-collapse-btn"
-          :class="{ collapsed: isSidebarCollapsed }"
-          @click="toggleSidebarCollapse"
-          :title="isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline :points="isSidebarCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'"/>
-          </svg>
-        </button>
+        <div class="sidebar-collapse-area" @mouseenter="handleSidebarHover(true)" @mouseleave="handleSidebarHover(false)">
+          <button
+            v-show="isSidebarHovered || isSidebarCollapsed"
+            class="sidebar-collapse-btn"
+            :class="{ collapsed: isSidebarCollapsed }"
+            @click="toggleSidebarCollapse"
+            :title="isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline :points="isSidebarCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'"/>
+            </svg>
+          </button>
+        </div>
         <main class="app-main">
           <div v-if="initError" class="init-error">
             <div class="error-icon">
@@ -590,10 +600,25 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
+.sidebar-collapse-area {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 260px;
+  width: 12px;
+  z-index: 29;
+  transform: translateX(-50%);
+  transition: left var(--transition-base);
+}
+
+.sidebar-collapse-area.collapsed {
+  left: 0;
+}
+
 .sidebar-collapse-btn {
   position: absolute;
   top: 50%;
-  left: 260px;
+  left: 100%;
   transform: translateY(-50%);
   z-index: 30;
   width: 20px;
@@ -607,17 +632,24 @@ onUnmounted(() => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-muted);
   cursor: pointer;
-  transition: left var(--transition-base), color var(--transition-fast), background var(--transition-fast);
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
   padding: 0;
+  opacity: 0;
 }
 
 .sidebar-collapse-btn:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
+  opacity: 1 !important;
+}
+
+.sidebar-collapse-area:hover .sidebar-collapse-btn {
+  opacity: 1;
 }
 
 .sidebar-collapse-btn.collapsed {
   left: 0;
+  opacity: 1;
 }
 
 @media (max-width: 768px) {
@@ -650,6 +682,7 @@ onUnmounted(() => {
     display: block;
   }
 
+  .sidebar-collapse-area,
   .sidebar-collapse-btn {
     display: none;
   }
