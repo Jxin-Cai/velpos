@@ -711,10 +711,10 @@ defineExpose({ scrollToSession })
 
 /* Separator between pinned and unpinned projects */
 .pinned-separator {
-  height: 1px;
-  background: var(--border);
+  height: 2px;
+  background: var(--accent-dim);
   margin: 8px 12px;
-  opacity: 0.6;
+  opacity: 1;
 }
 
 /* Project delete confirm */
