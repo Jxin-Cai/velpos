@@ -427,14 +427,23 @@ onUnmounted(() => {
         />
         <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }" @mouseenter="handleSidebarHover(true)" @mouseleave="handleSidebarHover(false)">
           <button
-            v-show="isSidebarHovered || isSidebarCollapsed"
+            v-show="!isSidebarCollapsed && (isSidebarHovered)"
             class="sidebar-collapse-btn"
-            :class="{ collapsed: isSidebarCollapsed }"
             @click="toggleSidebarCollapse"
-            :title="isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+            :title="'Collapse sidebar'"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline :points="isSidebarCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'"/>
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          </button>
+          <button
+            v-show="isSidebarCollapsed && isSidebarHovered"
+            class="sidebar-collapse-btn collapsed"
+            @click="toggleSidebarCollapse"
+            :title="'Expand sidebar'"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
             </svg>
           </button>
         </div>
@@ -631,24 +640,22 @@ onUnmounted(() => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), transform var(--transition-base);
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
   padding: 0;
-  opacity: 0;
 }
 
 .sidebar-collapse-btn:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
-  opacity: 1 !important;
-}
-
-.sidebar-collapse-area:hover .sidebar-collapse-btn {
-  opacity: 1;
 }
 
 .sidebar-collapse-btn.collapsed {
+  right: auto;
+  left: 0;
   transform: translate(0, -50%);
-  opacity: 1;
+  border-left: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
 @media (max-width: 768px) {
