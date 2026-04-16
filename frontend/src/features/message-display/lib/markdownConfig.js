@@ -88,12 +88,27 @@ marked.setOptions({
 
 // Configure DOMPurify to allow safe attributes for links
 DOMPurify.addHook('uponSanitizeAttribute', function (node, data) {
-  // Allow target="_blank" and rel="noopener noreferrer" for links
-  if (data.attrName === 'target' && node.tagName === 'A') {
+  // Force target="_blank" for all links
+  if (node.tagName === 'A' && data.attrName === 'target') {
     node.setAttribute('target', '_blank')
   }
-  if (data.attrName === 'rel' && node.tagName === 'A') {
+  // Force rel="noopener noreferrer" for security
+  if (node.tagName === 'A' && data.attrName === 'rel') {
     node.setAttribute('rel', 'noopener noreferrer')
+  }
+})
+
+// Ensure all links have target="_blank" and rel="noopener noreferrer" after sanitization
+DOMPurify.addHook('afterSanitizeAttributes', function (node) {
+  if (node.tagName === 'A') {
+    // Set target="_blank" if not present
+    if (!node.getAttribute('target')) {
+      node.setAttribute('target', '_blank')
+    }
+    // Set rel="noopener noreferrer" for security
+    if (!node.getAttribute('rel')) {
+      node.setAttribute('rel', 'noopener noreferrer')
+    }
   }
 })
 
