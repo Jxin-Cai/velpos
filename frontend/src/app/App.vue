@@ -653,9 +653,9 @@ onUnmounted(() => {
   right: auto;
   left: 0;
   transform: translate(0, -50%);
-  border-left: 1px solid var(--border);
-  border-right: none;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-left: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 @media (max-width: 768px) {
