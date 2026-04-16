@@ -72,19 +72,34 @@ function handleSend() {
 
 function handleKeydown(e) {
   if (e.key === 'Enter') {
-    const hasCtrl = e.ctrlKey || e.metaKey
+    const hasCtrl = e.ctrlKey
+    const hasCmd = e.metaKey
+    const hasModifier = hasCtrl || hasCmd
 
     // 根据用户偏好决定行为
-    if (shouldEnterSend() && !hasCtrl) {
-      // Enter发送，Ctrl+Enter换行
+    if (shouldEnterSend() && !hasModifier) {
+      // 模式1：Enter发送，Ctrl/Cmd+Enter换行
+      // 只有单独按Enter时才发送
       e.preventDefault()
       handleSend()
-    } else if (shouldCtrlEnterSend() && hasCtrl) {
-      // Ctrl+Enter发送，Enter换行
+    } else if (shouldCtrlEnterSend() && hasModifier) {
+      // 模式2：Ctrl/Cmd+Enter发送，Enter换行
+      // 只有按Ctrl/Cmd+Enter时才发送
       e.preventDefault()
       handleSend()
+    } else if (hasModifier) {
+      // Ctrl/Cmd+Enter 但当前模式不要求发送 -> 手动插入换行
+      e.preventDefault()
+      const start = inputEl.value.selectionStart
+      const end = inputEl.value.selectionEnd
+      const value = input.value
+      input.value = value.slice(0, start) + '\n' + value.slice(end)
+      nextTick(() => {
+        inputEl.value.selectionStart = inputEl.value.selectionEnd = start + 1
+        autoResize()
+      })
     }
-    // 其他情况：默认的换行行为
+    // 其他情况：让浏览器默认处理（单独Enter在非enter-send模式下）
   }
 }
 
