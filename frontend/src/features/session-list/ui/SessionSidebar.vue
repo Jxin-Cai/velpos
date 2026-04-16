@@ -5,6 +5,7 @@ import SessionListItem from './SessionListItem.vue'
 import CreateSessionDialog from './CreateSessionDialog.vue'
 
 const COLLAPSED_KEY = 'pf_collapsed_groups'
+const PINNED_KEY = 'pf_pinned_projects'
 
 const props = defineProps({
   sessions: {
@@ -35,6 +36,40 @@ const emit = defineEmits([
 const { projects } = useProject()
 
 const showCreateDialog = ref(false)
+
+// Pinned projects management
+const pinnedProjectIds = ref(new Set())
+
+// Load pinned projects from localStorage on mount
+try {
+  const stored = localStorage.getItem(PINNED_KEY)
+  if (stored) {
+    pinnedProjectIds.value = new Set(JSON.parse(stored))
+  }
+} catch (e) {
+  console.warn('Failed to load pinned projects:', e)
+}
+
+function isProjectPinned(projectId) {
+  return pinnedProjectIds.value.has(projectId)
+}
+
+function toggleProjectPin(projectId) {
+  const newSet = new Set(pinnedProjectIds.value)
+  if (newSet.has(projectId)) {
+    newSet.delete(projectId)
+  } else {
+    newSet.add(projectId)
+  }
+  pinnedProjectIds.value = newSet
+
+  // Save to localStorage
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify([...newSet]))
+  } catch (e) {
+    console.warn('Failed to save pinned projects:', e)
+  }
+}
 
 // Dynamic max-height for group content (avoids fixed 2000px truncation)
 const groupContentRefs = reactive({})
@@ -165,16 +200,30 @@ const projectGroups = computed(() => {
   }
 
   // Build ordered project groups (projects are already sorted by sort_order from backend)
-  const groups = []
+  // Separate pinned and unpinned projects
+  const pinnedGroups = []
+  const unpinnedGroups = []
+
   for (const project of projects.value) {
     const projectSessions = sessionsByProject[project.id] || []
     if (projectSessions.length === 0) continue
-    groups.push({
+
+    const group = {
       id: project.id,
       name: project.name,
       sessions: projectSessions,
-    })
+      pinned: isProjectPinned(project.id),
+    }
+
+    if (group.pinned) {
+      pinnedGroups.push(group)
+    } else {
+      unpinnedGroups.push(group)
+    }
   }
+
+  // Pinned projects first, then unpinned projects
+  const groups = [...pinnedGroups, ...unpinnedGroups]
 
   // Unassigned sessions (no project_id, including claude-code imports)
   const unassigned = sessionsByProject['__unassigned__']
@@ -375,6 +424,19 @@ defineExpose({ scrollToSession })
               </svg>
               <span class="project-name">{{ group.name }}</span>
               <span class="project-count">{{ group.sessions.length }}</span>
+              <button
+                v-if="group.id !== '__unassigned__'"
+                class="project-action-btn project-pin-btn"
+                :class="{ pinned: isProjectPinned(group.id) }"
+                @click.stop="toggleProjectPin(group.id)"
+                :aria-label="isProjectPinned(group.id) ? 'Unpin project' : 'Pin project'"
+                :title="isProjectPinned(group.id) ? 'Unpin' : 'Pin'"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="17" x2="12" y2="22"/>
+                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+                </svg>
+              </button>
               <button
                 v-if="group.id !== '__unassigned__'"
                 class="project-action-btn project-add-btn"
@@ -620,6 +682,25 @@ defineExpose({ scrollToSession })
 .project-delete-btn:hover {
   color: var(--red);
   background: var(--red-dim);
+}
+
+.project-pin-btn {
+  color: var(--text-muted);
+}
+
+.project-pin-btn:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.project-pin-btn.pinned {
+  color: var(--accent);
+  display: flex;
+}
+
+.project-pin-btn.pinned:hover {
+  color: var(--text-primary);
+  background: var(--accent-dim);
 }
 
 /* Project delete confirm */
