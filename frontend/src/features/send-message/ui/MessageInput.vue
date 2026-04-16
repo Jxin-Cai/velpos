@@ -259,6 +259,13 @@ defineExpose({ setInput, addImage, appendText })
   cursor: not-allowed;
 }
 
+.input-field::placeholder {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
 .send-btn {
   display: flex;
   align-items: center;
