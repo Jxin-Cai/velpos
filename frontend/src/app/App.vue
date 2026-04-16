@@ -614,20 +614,20 @@ onUnmounted(() => {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 260px;
+  width: 290px;
   z-index: 29;
   transition: width var(--transition-base);
 }
 
 .sidebar-collapse-area.collapsed {
-  width: 12px;
+  width: 30px;
 }
 
 .sidebar-collapse-btn {
   position: absolute;
   top: 50%;
-  right: 0;
-  transform: translate(100%, -50%);
+  left: 260px;
+  transform: translateY(-50%);
   z-index: 30;
   width: 20px;
   height: 40px;
@@ -640,7 +640,7 @@ onUnmounted(() => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), left var(--transition-base);
   padding: 0;
 }
 
@@ -650,9 +650,7 @@ onUnmounted(() => {
 }
 
 .sidebar-collapse-btn.collapsed {
-  right: auto;
   left: 0;
-  transform: translate(0, -50%);
   border-left: none;
   border-right: 1px solid var(--border);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
