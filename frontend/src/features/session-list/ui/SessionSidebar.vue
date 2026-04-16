@@ -225,6 +225,11 @@ const projectGroups = computed(() => {
   // Pinned projects first, then unpinned projects
   const groups = [...pinnedGroups, ...unpinnedGroups]
 
+  // Mark the last pinned project to show separator after it
+  if (pinnedGroups.length > 0 && unpinnedGroups.length > 0) {
+    groups[pinnedGroups.length - 1].isLastPinned = true
+  }
+
   // Unassigned sessions (no project_id, including claude-code imports)
   const unassigned = sessionsByProject['__unassigned__']
   if (unassigned && unassigned.length > 0) {
@@ -482,6 +487,8 @@ defineExpose({ scrollToSession })
               @rename="emit('rename', $event)"
               @toggle-select="toggleSelect"
             />
+            <!-- Separator after last pinned project -->
+            <div v-if="group.isLastPinned" class="pinned-separator"></div>
           </div>
         </div>
       </template>
@@ -695,12 +702,19 @@ defineExpose({ scrollToSession })
 
 .project-pin-btn.pinned {
   color: var(--accent);
-  display: flex;
 }
 
 .project-pin-btn.pinned:hover {
   color: var(--text-primary);
   background: var(--accent-dim);
+}
+
+/* Separator between pinned and unpinned projects */
+.pinned-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 12px;
+  opacity: 0.6;
 }
 
 /* Project delete confirm */
