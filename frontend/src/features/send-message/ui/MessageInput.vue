@@ -1,5 +1,6 @@
 <script setup>
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, computed } from 'vue'
+import { useUserPreferences } from '@shared/lib/useUserPreferences'
 
 const props = defineProps({
   disabled: {
@@ -14,7 +15,26 @@ const props = defineProps({
 
 const emit = defineEmits(['send'])
 
+const { shouldEnterSend, shouldCtrlEnterSend } = useUserPreferences()
+
 const input = ref('')
+
+// 动态生成placeholder文本
+const placeholderText = computed(() => {
+  if (props.disabled) return 'Waiting for Claude to finish...'
+  if (props.running) return 'Send follow-up (queued until Claude finishes)...'
+
+  const sendShortcut = shouldEnterSend() ? 'Enter' : 'Ctrl+Enter'
+  const newLineShortcut = shouldEnterSend() ? 'Ctrl+Enter' : 'Enter'
+
+  return `Send a message... (${sendShortcut} to send, ${newLineShortcut} for new line, paste images with Ctrl+V)`
+})
+
+// 动态生成发送按钮的提示文本
+const sendButtonTitle = computed(() => {
+  const sendShortcut = shouldEnterSend() ? 'Enter' : 'Ctrl+Enter'
+  return `Send message (${sendShortcut})`
+})
 const inputEl = ref(null)
 const pendingImages = ref([]) // [{ data: base64, media_type: 'image/png', preview: dataUrl }]
 
@@ -51,9 +71,20 @@ function handleSend() {
 }
 
 function handleKeydown(e) {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault()
-    handleSend()
+  if (e.key === 'Enter') {
+    const hasCtrl = e.ctrlKey || e.metaKey
+
+    // 根据用户偏好决定行为
+    if (shouldEnterSend() && !hasCtrl) {
+      // Enter发送，Ctrl+Enter换行
+      e.preventDefault()
+      handleSend()
+    } else if (shouldCtrlEnterSend() && hasCtrl) {
+      // Ctrl+Enter发送，Enter换行
+      e.preventDefault()
+      handleSend()
+    }
+    // 其他情况：默认的换行行为
   }
 }
 
@@ -157,7 +188,7 @@ defineExpose({ setInput, addImage, appendText })
       v-model="input"
       @keydown="handleKeydown"
       @paste="handlePaste"
-      :placeholder="disabled ? 'Waiting for Claude to finish...' : running ? 'Send follow-up (queued until Claude finishes)...' : 'Send a message... (Ctrl+Enter to send, paste images with Ctrl+V)'"
+      :placeholder="placeholderText"
       :disabled="disabled"
       rows="1"
       class="input-field"
@@ -169,6 +200,7 @@ defineExpose({ setInput, addImage, appendText })
     <button
       class="send-btn"
       :disabled="(!input.trim() && pendingImages.length === 0) || disabled"
+      :title="sendButtonTitle"
       @click="handleSend"
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

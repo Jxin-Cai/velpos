@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useSettingsManager } from '../model/useSettingsManager'
+import { useUserPreferences } from '@shared/lib/useUserPreferences'
 
 const AUTH_ENV_OPTIONS = [
   { value: 'ANTHROPIC_API_KEY', label: 'ANTHROPIC_API_KEY' },
@@ -41,6 +42,12 @@ const {
   handleActivate,
   handleFetchModels,
 } = useSettingsManager()
+
+const {
+  enterBehavior,
+  enterBehaviors,
+  setEnterBehavior,
+} = useUserPreferences()
 
 const editingProfileId = ref(null)
 const showAddForm = ref(false)
@@ -546,6 +553,23 @@ onBeforeUnmount(() => {
           <div class="section">
             <h3 class="section-title">JSON Preview</h3>
             <pre class="json-preview">{{ jsonPreviewText }}</pre>
+          </div>
+
+          <!-- Section 4: User Preferences -->
+          <div class="section">
+            <h3 class="section-title">User Preferences</h3>
+            <div class="settings-card">
+              <div class="field-row">
+                <div class="field-info">
+                  <label class="field-label">Enter Key Behavior</label>
+                  <span class="field-desc">Choose how Enter and Ctrl+Enter keys behave in the chat input</span>
+                </div>
+                <select class="form-select form-select--compact" :value="enterBehavior" @change="setEnterBehavior($event.target.value)">
+                  <option value="enter-send">Enter to send, Ctrl+Enter for new line</option>
+                  <option value="ctrl-enter-send">Ctrl+Enter to send, Enter for new line</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
 
