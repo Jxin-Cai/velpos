@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import { useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import {
@@ -282,6 +282,13 @@ export function useSessionList() {
       if (vpSession.project_id) {
         setCurrentProjectId(vpSession.project_id)
       }
+
+      // Trigger event to scroll to the new session position
+      nextTick(() => {
+        window.dispatchEvent(new CustomEvent('vp-session-imported', {
+          detail: { sessionId: vpSession.session_id }
+        }))
+      })
     } finally {
       importing.value = false
     }

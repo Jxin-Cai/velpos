@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, provide, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, provide, onMounted, onUnmounted, nextTick } from 'vue'
 import { useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
@@ -305,14 +305,35 @@ onMounted(async () => {
   } catch (e) {
     initError.value = e.message || 'Failed to load sessions'
   }
+
+  // Listen for Claude Code session import events to scroll to new position
+  window.addEventListener('vp-session-imported', handleSessionImported)
 })
 
 onUnmounted(() => {
+  // Clean up event listener
+  window.removeEventListener('vp-session-imported', handleSessionImported)
+
   for (const conn of _connections.values()) {
     conn.close()
   }
   _connections.clear()
 })
+
+function handleSessionImported(event) {
+  const { sessionId } = event.detail
+  if (isSidebarCollapsed.value) {
+    isSidebarCollapsed.value = false
+    localStorage.setItem('vp_sidebar_collapsed', false)
+  }
+  if (window.innerWidth <= 768) {
+    isMobileSidebarOpen.value = true
+  }
+  // Wait for DOM to update then scroll to the new session position
+  nextTick(() => {
+    sidebarRef.value?.scrollToSession(sessionId)
+  })
+}
 </script>
 
 <template>
