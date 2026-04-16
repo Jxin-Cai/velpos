@@ -126,11 +126,21 @@ function appendText(text) {
   })
 }
 
+function handleAreaClick(e) {
+  // If clicking on the input area (but not on the send button or image remove buttons), focus the input
+  const isSendBtn = e.target.closest('.send-btn')
+  const isRemoveBtn = e.target.closest('.image-remove')
+
+  if (!isSendBtn && !isRemoveBtn && !props.disabled) {
+    inputEl.value?.focus()
+  }
+}
+
 defineExpose({ setInput, addImage, appendText })
 </script>
 
 <template>
-  <div class="input-area" @drop="handleDrop" @dragover="handleDragover">
+  <div class="input-area" @drop="handleDrop" @dragover="handleDragover" @click="handleAreaClick">
     <!-- Image previews -->
     <div v-if="pendingImages.length > 0" class="image-previews">
       <div v-for="(img, i) in pendingImages" :key="i" class="image-thumb">
@@ -183,6 +193,7 @@ defineExpose({ setInput, addImage, appendText })
     border-color var(--transition-fast),
     background var(--transition-base),
     box-shadow var(--transition-fast);
+  cursor: text;
 }
 
 .input-area:focus-within {
@@ -204,6 +215,7 @@ defineExpose({ setInput, addImage, appendText })
   border-radius: var(--radius-sm);
   overflow: hidden;
   border: 1px solid var(--border);
+  cursor: default;
 }
 
 .image-thumb img {
@@ -284,6 +296,7 @@ defineExpose({ setInput, addImage, appendText })
   flex-shrink: 0;
   box-shadow: var(--shadow-sm);
   align-self: flex-end;
+  cursor: pointer;
 }
 
 .send-btn:hover:not(:disabled) {
