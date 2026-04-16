@@ -607,12 +607,11 @@ onUnmounted(() => {
   left: 0;
   width: 260px;
   z-index: 29;
-  transition: width var(--transition-base), left var(--transition-base);
+  transition: width var(--transition-base);
 }
 
 .sidebar-collapse-area.collapsed {
-  width: 0;
-  left: 0;
+  width: 12px;
 }
 
 .sidebar-collapse-btn {
