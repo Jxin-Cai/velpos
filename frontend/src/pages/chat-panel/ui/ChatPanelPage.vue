@@ -790,7 +790,7 @@ function formatMaxTokens(n) {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 16px 0;
+  padding: 12px 16px 0;
 }
 
 .toolbar-btn {
@@ -929,6 +929,10 @@ function formatMaxTokens(n) {
   background: var(--bg-secondary);
   flex-shrink: 0;
   transition: background var(--transition-base), border-color var(--transition-base);
+}
+
+.input-row {
+  padding-top: 8px;
 }
 
 /* History panel */
