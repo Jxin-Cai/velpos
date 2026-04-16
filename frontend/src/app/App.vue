@@ -425,7 +425,7 @@ onUnmounted(() => {
           @mouseenter="handleSidebarHover(true)"
           @mouseleave="handleSidebarHover(false)"
         />
-        <div class="sidebar-collapse-area" @mouseenter="handleSidebarHover(true)" @mouseleave="handleSidebarHover(false)">
+        <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }" @mouseenter="handleSidebarHover(true)" @mouseleave="handleSidebarHover(false)">
           <button
             v-show="isSidebarHovered || isSidebarCollapsed"
             class="sidebar-collapse-btn"
@@ -604,22 +604,22 @@ onUnmounted(() => {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 260px;
-  width: 12px;
+  left: 0;
+  width: 260px;
   z-index: 29;
-  transform: translateX(-50%);
-  transition: left var(--transition-base);
+  transition: width var(--transition-base), left var(--transition-base);
 }
 
 .sidebar-collapse-area.collapsed {
+  width: 0;
   left: 0;
 }
 
 .sidebar-collapse-btn {
   position: absolute;
   top: 50%;
-  left: 100%;
-  transform: translateY(-50%);
+  right: 0;
+  transform: translate(100%, -50%);
   z-index: 30;
   width: 20px;
   height: 40px;
@@ -632,7 +632,7 @@ onUnmounted(() => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), transform var(--transition-base);
   padding: 0;
   opacity: 0;
 }
@@ -648,7 +648,7 @@ onUnmounted(() => {
 }
 
 .sidebar-collapse-btn.collapsed {
-  left: 0;
+  transform: translate(0, -50%);
   opacity: 1;
 }
 
