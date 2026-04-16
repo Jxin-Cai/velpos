@@ -157,6 +157,11 @@ class AgentApplicationService:
 
         for plugin_name in mkt_config.get("plugins", []):
             try:
+                # Uninstall first to ensure latest version is installed after marketplace update
+                try:
+                    await self._plugin_manager.uninstall_plugin(plugin_name, project_dir)
+                except Exception:
+                    pass  # May not be installed yet, that's fine
                 await self._plugin_manager.install_plugin(plugin_name, project_dir)
                 logger.info("Installed marketplace plugin %s for agent %s", plugin_name, agent_id)
             except Exception:
