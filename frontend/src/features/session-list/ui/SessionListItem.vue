@@ -28,7 +28,9 @@ const showDeleteConfirm = ref(false)
 const editing = ref(false)
 const editName = ref('')
 const editInput = ref(null)
+const copySuccess = ref(false)
 let confirmTimer = null
+let copyTimer = null
 
 function requestDelete() {
   showDeleteConfirm.value = true
@@ -131,8 +133,22 @@ function cancelEditing() {
   editing.value = false
 }
 
+async function copySessionId() {
+  try {
+    await navigator.clipboard.writeText(props.session.session_id)
+    copySuccess.value = true
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copySuccess.value = false
+    }, 1500)
+  } catch (err) {
+    console.error('Failed to copy session ID:', err)
+  }
+}
+
 onBeforeUnmount(() => {
   clearTimeout(confirmTimer)
+  clearTimeout(copyTimer)
 })
 </script>
 
@@ -175,7 +191,24 @@ onBeforeUnmount(() => {
           />
         </template>
         <template v-else>
-          <span class="session-name" :title="session.session_id" @dblclick.stop="!isClaudeCode && startEditing()">{{ displayName }}</span>
+          <span class="session-name" @dblclick.stop="!isClaudeCode && startEditing()">
+            {{ displayName }}
+            <button
+              class="copy-btn"
+              @click.stop="copySessionId"
+              :class="{ 'copy-success': copySuccess }"
+              aria-label="Copy session ID"
+              title="Copy session ID"
+            >
+              <svg v-if="!copySuccess" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </button>
+          </span>
         </template>
         <button
           class="delete-btn"
@@ -301,6 +334,9 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .rename-input {
@@ -314,6 +350,39 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-sm);
   padding: 1px 6px;
   outline: none;
+}
+
+.copy-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+  padding: 0;
+}
+
+.session-name:hover .copy-btn {
+  display: flex;
+}
+
+.copy-btn:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.copy-btn.copy-success {
+  color: var(--green);
+}
+
+.copy-btn.copy-success:hover {
+  background: var(--green-dim);
 }
 
 .delete-btn {
