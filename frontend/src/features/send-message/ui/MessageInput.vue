@@ -18,6 +18,8 @@ const emit = defineEmits(['send'])
 const { shouldEnterSend, shouldCtrlEnterSend } = useUserPreferences()
 
 const input = ref('')
+const isComposing = ref(false)
+const compositionEndedRecently = ref(false)
 
 // 动态生成placeholder文本
 const placeholderText = computed(() => {
@@ -70,8 +72,27 @@ function handleSend() {
   })
 }
 
+function handleCompositionStart() {
+  isComposing.value = true
+}
+
+function handleCompositionEnd() {
+  isComposing.value = false
+  // 标记最近刚结束输入法，避免keydown事件立即触发
+  compositionEndedRecently.value = true
+  // 50ms后清除标记，给keydown事件足够的时间窗口
+  setTimeout(() => {
+    compositionEndedRecently.value = false
+  }, 50)
+}
+
 function handleKeydown(e) {
   if (e.key === 'Enter') {
+    // During IME composition or just after composition, defer all Enter handling to browser default
+    if (isComposing.value || compositionEndedRecently.value) {
+      return
+    }
+
     const hasCtrl = e.ctrlKey
     const hasCmd = e.metaKey
     const hasModifier = hasCtrl || hasCmd
@@ -202,6 +223,8 @@ defineExpose({ setInput, addImage, appendText })
       ref="inputEl"
       v-model="input"
       @keydown="handleKeydown"
+      @compositionstart="handleCompositionStart"
+      @compositionend="handleCompositionEnd"
       @paste="handlePaste"
       :placeholder="placeholderText"
       :disabled="disabled"
