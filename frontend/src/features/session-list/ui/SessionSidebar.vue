@@ -487,9 +487,9 @@ defineExpose({ scrollToSession })
               @rename="emit('rename', $event)"
               @toggle-select="toggleSelect"
             />
-            <!-- Separator after last pinned project -->
-            <div v-if="group.isLastPinned" class="pinned-separator"></div>
           </div>
+          <!-- Separator after last pinned project (outside group-content so it stays visible when collapsed) -->
+          <div v-if="group.isLastPinned" class="pinned-separator"></div>
         </div>
       </template>
 
