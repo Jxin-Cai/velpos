@@ -82,6 +82,16 @@ const {
 const editingProfileId = ref(null)
 const showAddForm = ref(false)
 const showJsonPreview = ref(false)
+const jsonPreviewEl = ref(null)
+const openSelect = ref(null) // which select is open
+
+function toggleSelect(name) {
+  openSelect.value = openSelect.value === name ? null : name
+}
+
+function closeAllSelects() {
+  openSelect.value = null
+}
 const addForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
 const editForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
 const settingsData = ref(null)
@@ -266,10 +276,12 @@ function handleKeydown(e) {
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
+  document.addEventListener('click', closeAllSelects)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('click', closeAllSelects)
 })
 </script>
 
@@ -505,12 +517,19 @@ onBeforeUnmount(() => {
                   <label class="field-label">Permission Mode</label>
                   <span class="field-desc">Controls tool approval policy: default prompts each time, bypass auto-allows all</span>
                 </div>
-                <select class="form-select form-select--compact" v-model="defaultMode">
-                  <option value="default">Default</option>
-                  <option value="acceptEdits">Accept Edits</option>
-                  <option value="plan">Plan</option>
-                  <option value="bypassPermissions">Bypass</option>
-                </select>
+                <div class="custom-select" @click.stop>
+                  <button class="custom-select-trigger" :class="{ active: openSelect === 'mode' }" @click="toggleSelect('mode')">
+                    <span class="custom-select-text">{{ { default: 'Default', acceptEdits: 'Accept Edits', plan: 'Plan', bypassPermissions: 'Bypass' }[defaultMode] || 'Default' }}</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                  <Transition name="dropdown-fade">
+                    <div v-if="openSelect === 'mode'" class="custom-select-menu">
+                      <button v-for="opt in [{ value: 'default', label: 'Default' }, { value: 'acceptEdits', label: 'Accept Edits' }, { value: 'plan', label: 'Plan' }, { value: 'bypassPermissions', label: 'Bypass' }]" :key="opt.value" class="custom-select-option" :class="{ selected: defaultMode === opt.value }" @click="defaultMode = opt.value; closeAllSelects()">
+                        {{ opt.label }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
               </div>
               <div class="field-row">
                 <div class="field-info">
@@ -527,12 +546,19 @@ onBeforeUnmount(() => {
                   <label class="field-label">Effort Level</label>
                   <span class="field-desc">Reasoning effort: low is fast/cheap, high is thorough</span>
                 </div>
-                <select class="form-select form-select--compact" v-model="effortLevel">
-                  <option value="">-- Default --</option>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
+                <div class="custom-select" @click.stop>
+                  <button class="custom-select-trigger" :class="{ active: openSelect === 'effort' }" @click="toggleSelect('effort')">
+                    <span class="custom-select-text">{{ { '': 'Default', low: 'Low', medium: 'Medium', high: 'High' }[effortLevel] || 'Default' }}</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                  <Transition name="dropdown-fade">
+                    <div v-if="openSelect === 'effort'" class="custom-select-menu">
+                      <button v-for="opt in [{ value: '', label: 'Default' }, { value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]" :key="opt.value" class="custom-select-option" :class="{ selected: effortLevel === opt.value }" @click="effortLevel = opt.value; closeAllSelects()">
+                        {{ opt.label }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
               </div>
               <div class="field-row">
                 <div class="field-info">
@@ -600,10 +626,22 @@ onBeforeUnmount(() => {
                   <label class="field-label">Enter Key Behavior</label>
                   <span class="field-desc">Choose how Enter and Ctrl+Enter keys behave in the chat input</span>
                 </div>
-                <select class="form-select form-select--compact" :value="enterBehavior" @change="setEnterBehavior($event.target.value)">
-                  <option value="enter-send">Enter to send, Ctrl+Enter for new line</option>
-                  <option value="ctrl-enter-send">Ctrl+Enter to send, Enter for new line</option>
-                </select>
+                <div class="custom-select" @click.stop>
+                  <button class="custom-select-trigger" :class="{ active: openSelect === 'enter' }" @click="toggleSelect('enter')">
+                    <span class="custom-select-text">{{ enterBehavior === 'ctrl-enter-send' ? 'Ctrl+Enter to send' : 'Enter to send' }}</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                  <Transition name="dropdown-fade">
+                    <div v-if="openSelect === 'enter'" class="custom-select-menu">
+                      <button class="custom-select-option" :class="{ selected: enterBehavior === 'enter-send' }" @click="setEnterBehavior('enter-send'); closeAllSelects()">
+                        Enter to send, Ctrl+Enter for new line
+                      </button>
+                      <button class="custom-select-option" :class="{ selected: enterBehavior === 'ctrl-enter-send' }" @click="setEnterBehavior('ctrl-enter-send'); closeAllSelects()">
+                        Ctrl+Enter to send, Enter for new line
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
               </div>
             </div>
           </div>
@@ -1156,6 +1194,92 @@ onBeforeUnmount(() => {
 
 .settings-card .field-row + .field-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+/* Custom Select */
+.custom-select {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.custom-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.custom-select-trigger:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.custom-select-trigger.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.custom-select-trigger svg {
+  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.custom-select-trigger.active svg {
+  transform: rotate(180deg);
+}
+
+.custom-select-text {
+  font-weight: 500;
+}
+
+.custom-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  min-width: 200px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+}
+
+.custom-select-option {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.custom-select-option:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.custom-select-option.selected {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-dim);
 }
 
 .settings-card .field-row--stacked {
