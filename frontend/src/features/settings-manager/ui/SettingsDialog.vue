@@ -496,7 +496,7 @@ onBeforeUnmount(() => {
                 </svg>
               </button>
             </div>
-            <Transition name="dropdown-fade">
+            <Transition name="preview-slide">
               <pre v-if="showJsonPreview" class="json-preview">{{ jsonPreviewText }}</pre>
             </Transition>
             <div class="settings-card" v-if="settingsData">
@@ -772,6 +772,23 @@ onBeforeUnmount(() => {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-dim);
+}
+
+.preview-slide-enter-active {
+  transition: max-height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms cubic-bezier(0.4, 0, 0.2, 1), margin 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.preview-slide-leave-active {
+  transition: max-height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms cubic-bezier(0.4, 0, 0.2, 1), margin 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.preview-slide-enter-from,
+.preview-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .channel-list {
@@ -1250,7 +1267,6 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   white-space: pre-wrap;
   color: var(--text-secondary);
-  margin: 0;
 }
 
 .dialog-footer {
