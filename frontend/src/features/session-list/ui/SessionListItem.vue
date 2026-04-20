@@ -193,6 +193,8 @@ onBeforeUnmount(() => {
         <template v-else>
           <span class="session-name" @dblclick.stop="!isClaudeCode && startEditing()">
             {{ displayName }}
+          </span>
+          <span class="action-buttons">
             <button
               class="copy-btn"
               @click.stop="copySessionId"
@@ -208,18 +210,18 @@ onBeforeUnmount(() => {
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
             </button>
+            <button
+              class="delete-btn"
+              @click.stop="requestDelete"
+              aria-label="Delete session"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
           </span>
         </template>
-        <button
-          class="delete-btn"
-          @click.stop="requestDelete"
-          aria-label="Delete session"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
       </div>
       <div class="session-meta">
         <span v-if="session.im_binding" class="im-badge" :title="'IM: ' + session.im_binding.channel_type">
@@ -334,9 +336,6 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .rename-input {
@@ -352,8 +351,25 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s;
+  margin-left: 4px;
+}
+
+.session-item:hover .action-buttons {
+  opacity: 1;
+  width: 44px;
+}
+
 .copy-btn {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 20px;
@@ -363,13 +379,8 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  flex-shrink: 0;
   transition: all 0.15s;
   padding: 0;
-}
-
-.session-name:hover .copy-btn {
-  display: flex;
 }
 
 .copy-btn:hover {
@@ -386,22 +397,18 @@ onBeforeUnmount(() => {
 }
 
 .delete-btn {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  flex-shrink: 0;
   transition: all 0.15s;
-}
-
-.session-item:hover .delete-btn {
-  display: flex;
+  padding: 0;
 }
 
 .delete-btn:hover {
