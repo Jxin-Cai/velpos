@@ -54,6 +54,7 @@ function normalizeHotkeyString(key) {
     .replace(/meta\+/gi, 'Cmd+')
     .replace(/shift\+/gi, 'Shift+')
     .replace(/alt\+/gi, 'Alt+')
+    .replace(/option\+/gi, 'Alt+') // Mac上的Option键映射为Alt
 }
 
 /**

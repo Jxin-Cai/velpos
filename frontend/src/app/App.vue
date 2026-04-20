@@ -102,6 +102,7 @@ const wsConnection = computed(() => _connections.get(currentSessionId.value) ?? 
 
 provide('wsConnection', wsConnection)
 provide('wsConnections', _connections) // 提供整个连接池给全局快捷键拦截器
+provide('switchSession', switchSession) // 提供session切换函数
 
 function setupUnifiedHandler(connection, sessionId) {
   connection.onEvent((data) => {
