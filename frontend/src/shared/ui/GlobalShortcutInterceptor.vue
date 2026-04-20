@@ -191,17 +191,21 @@ function switchToAndScroll(sessionId) {
 // ESC: 取消运行中的查询
 useGlobalHotkeys({
   keys: 'Escape',
-  handler: () => {
-    if (status.value === 'running' && currentSessionId.value && connections.value) {
-      const conn = connections.value.get(currentSessionId.value)
-      if (conn?.getReadyState() === WebSocket.OPEN) {
-        conn.send({ action: 'cancel' })
-        return false
+  handler: (event) => {
+    const isRunning = status.value === 'running'
+
+    if (isRunning && currentSessionId.value && connections) {
+      // 取消正在运行的查询
+      const connection = connections.get(currentSessionId.value)
+      if (connection && connection.getReadyState() === WebSocket.OPEN) {
+        connection.send({ action: 'cancel' })
+        return false // 阻止默认行为和事件传播
       }
     }
+    // 如果没有运行，返回true让事件继续传播（浏览器默认行为）
     return true
   },
-  priority: 10
+  priority: 10 // 给一个适中的优先级，让组件可以覆盖
 })
 
 // Cmd/Ctrl + 上箭头: 上一个 session
