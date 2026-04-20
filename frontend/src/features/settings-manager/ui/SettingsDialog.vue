@@ -1242,6 +1242,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 16px;
+  margin: 0 0 16px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
