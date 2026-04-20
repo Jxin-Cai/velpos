@@ -250,6 +250,9 @@ function onFetchModelsForEdit() {
   handleFetchModels(editingProfileId.value, editForm.value.host, editForm.value.api_key)
 }
 
+const copyJsonSuccess = ref(false)
+let copyJsonTimer = null
+
 const saveSuccess = ref(false)
 
 async function handleSave() {
@@ -272,7 +275,19 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
+  clearTimeout(copyJsonTimer)
 })
+
+async function copyJsonPreview() {
+  try {
+    await navigator.clipboard.writeText(jsonPreviewText.value)
+    copyJsonSuccess.value = true
+    clearTimeout(copyJsonTimer)
+    copyJsonTimer = setTimeout(() => { copyJsonSuccess.value = false }, 1500)
+  } catch (err) {
+    console.error('Failed to copy JSON:', err)
+  }
+}
 </script>
 
 <template>
@@ -495,7 +510,18 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <Transition name="preview-slide">
-              <pre v-if="showJsonPreview" class="json-preview">{{ jsonPreviewText }}</pre>
+              <div v-if="showJsonPreview" class="json-preview-wrapper">
+                <button class="json-copy-btn" :class="{ copied: copyJsonSuccess }" @click="copyJsonPreview" title="Copy JSON">
+                  <svg v-if="!copyJsonSuccess" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </button>
+                <pre class="json-preview">{{ jsonPreviewText }}</pre>
+              </div>
             </Transition>
             <div class="settings-card" v-if="settingsData">
               <div class="field-row">
@@ -1239,19 +1265,61 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
+.json-preview-wrapper {
+  position: relative;
+  margin: 0 0 16px;
+}
+
 .json-preview {
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 16px;
-  margin: 0 0 16px;
+  margin: 0;
   font-family: var(--font-mono);
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
   font-size: 12px;
   line-height: 1.5;
   max-height: 200px;
   overflow-y: auto;
   white-space: pre-wrap;
   color: var(--text-secondary);
+}
+
+.json-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+  z-index: 1;
+}
+
+.json-preview-wrapper:hover .json-copy-btn {
+  opacity: 1;
+}
+
+.json-copy-btn:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.json-copy-btn.copied {
+  color: var(--green);
+  border-color: var(--green);
 }
 
 .dialog-footer {
