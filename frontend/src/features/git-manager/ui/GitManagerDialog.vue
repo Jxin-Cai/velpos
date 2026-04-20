@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { getGitConfig, setGitConfig, listSshKeys, generateSshKey } from '../api/gitApi'
+import { useDialogManager } from '@shared/lib/useDialogManager'
 
 const props = defineProps({
   visible: {
@@ -10,6 +11,21 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
+
+// 创建包装对象来管理可见性
+const visibleWrapper = {
+  get value() {
+    return props.visible
+  },
+  set value(newValue) {
+    if (!newValue) {
+      emit('close')
+    }
+  }
+}
+
+const { useDialog } = useDialogManager()
+useDialog('git-manager', visibleWrapper)
 
 const loading = ref(false)
 const saving = ref(false)

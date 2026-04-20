@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, inject, onMounted, onUnmounted, watch } from 'vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
+import { useDialogManager } from '@shared/lib/useDialogManager'
 import { useSession, listModels } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, useSendMessage } from '@features/send-message'
@@ -83,7 +84,16 @@ const memoryDialogVisible = ref(false)
 const imDialogVisible = ref(false)
 const { isBoundForSession, hasChannels, boundChannelType, boundInstanceName, fetchChannels: fetchImChannels, fetchStatus: fetchImStatus } = useImBinding()
 
-// Compact context
+// 使用全局弹窗管理器
+const { useDialog } = useDialogManager()
+
+// 注册所有弹窗到全局管理器
+useDialog('plugin-manager', pluginDialogVisible)
+useDialog('agent-manager', agentDialogVisible)
+useDialog('memory-manager', memoryDialogVisible)
+useDialog('im-binding', imDialogVisible)
+useDialog('command-palette', cmdVisible)
+
 const { compacting, compactContext } = useCompactContext()
 
 onMounted(async () => {
@@ -138,6 +148,7 @@ function handleImPrompt(prompt) {
 
 // History popover
 const showHistory = ref(false)
+useDialog('history', showHistory)
 
 function formatDuration(ms) {
   if (!ms) return '-'

@@ -2,12 +2,14 @@
 import { useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
+import { useDialogManager } from '@shared/lib/useDialogManager'
 import { inject, nextTick } from 'vue'
 
 const { status, currentSessionId, sessions, setCurrentSessionId } = useSession()
 const { projects } = useProject()
 const connections = inject('wsConnections', null)
 const switchSession = inject('switchSession', null)
+const { closeTopmostDialog, hasOpenDialogs } = useDialogManager()
 
 // ==================== Session 导航逻辑 ====================
 
@@ -188,12 +190,18 @@ function switchToAndScroll(sessionId) {
 
 // ==================== 全局快捷键注册 ====================
 
-// ESC: 取消运行中的查询
+// ESC: 关闭弹窗 > 取消运行中的查询 > 阻止浏览器默认行为
 useGlobalHotkeys({
   keys: 'Escape',
   handler: (event) => {
-    const isRunning = status.value === 'running'
+    // 如果有弹窗打开，让弹窗自己的 ESC 处理逻辑去处理
+    // 我们什么都不做，直接返回 true 让事件继续传播
+    if (hasOpenDialogs()) {
+      return true // 让弹窗的原生事件处理
+    }
 
+    // 没有弹窗时，处理取消查询
+    const isRunning = status.value === 'running'
     if (isRunning && currentSessionId.value && connections) {
       // 取消正在运行的查询
       const connection = connections.get(currentSessionId.value)
@@ -202,10 +210,11 @@ useGlobalHotkeys({
         return false // 阻止默认行为和事件传播
       }
     }
-    // 如果没有运行，返回true让事件继续传播（浏览器默认行为）
-    return true
+
+    // 阻止 ESC 键传播到浏览器
+    return false
   },
-  priority: 10 // 给一个适中的优先级，让组件可以覆盖
+  priority: 5 // 最低优先级，让弹窗可以优先处理
 })
 
 // Cmd/Ctrl + 上箭头: 上一个 session

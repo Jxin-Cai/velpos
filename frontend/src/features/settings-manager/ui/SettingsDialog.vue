@@ -2,6 +2,32 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useSettingsManager } from '../model/useSettingsManager'
 import { useUserPreferences } from '@shared/lib/useUserPreferences'
+import { useDialogManager } from '@shared/lib/useDialogManager'
+import {useGlobalHotkeys} from "@shared/lib/useGlobalHotkeys.js";
+
+const props = defineProps({
+  visible: {
+    type: Boolean,
+    required: true,
+  },
+})
+
+const emit = defineEmits(['close'])
+
+// 创建一个包装对象来管理可见性，避免直接修改 prop
+const visibleWrapper = {
+  get value() {
+    return props.visible
+  },
+  set value(newValue) {
+    if (!newValue) {
+      emit('close')
+    }
+  }
+}
+
+const { useDialog } = useDialogManager()
+useDialog('settings', visibleWrapper)
 
 const AUTH_ENV_OPTIONS = [
   { value: 'ANTHROPIC_API_KEY', label: 'ANTHROPIC_API_KEY' },
@@ -16,14 +42,18 @@ const MODEL_ENV_KEYS = [
   { key: 'ANTHROPIC_DEFAULT_SONNET_MODEL', label: 'Sonnet Model' },
 ]
 
-const props = defineProps({
-  visible: {
-    type: Boolean,
-    required: true,
+// ESC to close dialog
+useGlobalHotkeys({
+  keys: 'Escape',
+  handler: () => {
+    if (props.visible) {
+      emit('close')
+      return false
+    }
+    return true
   },
+  priority: 100
 })
-
-const emit = defineEmits(['close'])
 
 const {
   settings,

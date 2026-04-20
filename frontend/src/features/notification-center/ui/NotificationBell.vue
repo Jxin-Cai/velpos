@@ -1,12 +1,17 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useNotifications } from '../model/useNotifications'
+import { useDialogManager } from '@shared/lib/useDialogManager'
 import NotificationPanel from './NotificationPanel.vue'
 
 const emit = defineEmits(['navigate'])
 
 const { unreadCount } = useNotifications()
 const showPanel = ref(false)
+
+// 使用全局弹窗管理器
+const { useDialog } = useDialogManager()
+useDialog('notifications', showPanel)
 
 function togglePanel() {
   showPanel.value = !showPanel.value

@@ -1,12 +1,17 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useWorkingSessions } from '../model/useWorkingSessions'
+import { useDialogManager } from '@shared/lib/useDialogManager'
 import WorkingSessionsPanel from './WorkingSessionsPanel.vue'
 
 const emit = defineEmits(['navigate'])
 
 const { workingCount } = useWorkingSessions()
 const showPanel = ref(false)
+
+// 使用全局弹窗管理器
+const { useDialog } = useDialogManager()
+useDialog('working-sessions', showPanel)
 
 function togglePanel() {
   showPanel.value = !showPanel.value

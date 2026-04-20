@@ -80,6 +80,7 @@ function handleGlobalKeydown(event) {
       hasHandler = true
       event.preventDefault()
       event.stopPropagation()
+      event.stopImmediatePropagation() // 阻止其他同级别监听器（包括原生DOM事件）
       break
     }
     // If callback returns true, the handler explicitly wants to ignore this event
