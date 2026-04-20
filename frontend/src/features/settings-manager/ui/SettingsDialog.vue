@@ -321,9 +321,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="form-group">
                   <label class="form-label">Auth Env Variable</label>
-                  <select class="form-select" v-model="addForm.auth_env_name">
-                    <option v-for="opt in AUTH_ENV_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </select>
+                  <CustomSelect v-model="addForm.auth_env_name" :options="AUTH_ENV_OPTIONS" />
                 </div>
               </div>
 
@@ -424,9 +422,7 @@ onBeforeUnmount(() => {
                       </div>
                       <div class="form-group">
                         <label class="form-label">Auth Env Variable</label>
-                        <select class="form-select" v-model="editForm.auth_env_name">
-                          <option v-for="opt in AUTH_ENV_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                        </select>
+                        <CustomSelect v-model="editForm.auth_env_name" :options="AUTH_ENV_OPTIONS" />
                       </div>
                     </div>
 
