@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, inject, onMounted, onUnmounted, watch } from 'vue'
+import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useSession, listModels } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, useSendMessage } from '@features/send-message'
@@ -212,6 +213,24 @@ function handlePermSelect(mode) {
     wsConnection.value.send({ action: 'set_permission_mode', mode })
   }
 }
+
+// Cycle through permission modes with Shift+Tab
+function cyclePermissionMode() {
+  const currentIndex = permModes.findIndex(m => m.value === currentPermMode.value)
+  const nextIndex = (currentIndex + 1) % permModes.length
+  const nextMode = permModes[nextIndex].value
+  handlePermSelect(nextMode)
+}
+
+// Global shortcut for cycling permission modes
+useGlobalHotkeys({
+  keys: 'Shift+Tab',
+  handler: (event) => {
+    cyclePermissionMode()
+    return false // Prevent default behavior
+  },
+  priority: 50
+})
 
 // Git branch switching
 const showBranchMenu = ref(false)

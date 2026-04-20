@@ -71,15 +71,26 @@ function handleGlobalKeydown(event) {
   // Sort by priority (higher priority first)
   const sortedHandlers = [...handlers].sort((a, b) => b.priority - a.priority)
 
-  // Execute highest priority handler
-  // If a handler returns false, stop propagation
+  // Execute handlers and check if any wants to handle the event
+  let hasHandler = false
   for (const handler of sortedHandlers) {
-    const shouldContinue = handler.callback(event)
-    if (shouldContinue === false) {
+    const result = handler.callback(event)
+    // If callback returns anything other than true, it means the handler processed the event
+    if (result !== true) {
+      hasHandler = true
       event.preventDefault()
       event.stopPropagation()
       break
     }
+    // If callback returns true, the handler explicitly wants to ignore this event
+    // Continue to next handler or let the event pass through
+  }
+
+  // If no handler processed the event, let it continue naturally
+  // without any intervention from the global hotkey system
+  if (!hasHandler) {
+    // Don't prevent default or stop propagation - let the event continue
+    return
   }
 }
 
