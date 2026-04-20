@@ -51,7 +51,7 @@ const emit = defineEmits(['cancel'])
 .cancel-btn:active {
   transform: translateY(0) scale(0.97);
   filter: brightness(0.95);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 @keyframes cancel-pulse {

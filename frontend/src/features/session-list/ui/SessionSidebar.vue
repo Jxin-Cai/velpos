@@ -155,20 +155,36 @@ const collapsedGroups = ref(new Set(
 function toggleGroup(id) {
   const next = new Set(collapsedGroups.value)
   if (next.has(id)) {
+    // Expand: remove from collapsed set, animate from 0 to scrollHeight, then remove limit
     next.delete(id)
-    // Expand: set max-height to scrollHeight
+    collapsedGroups.value = next
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
     nextTick(() => {
       const el = groupContentRefs[id]
-      if (el) el.style.maxHeight = el.scrollHeight + 'px'
+      if (el) {
+        el.style.maxHeight = el.scrollHeight + 'px'
+        const onEnd = () => {
+          el.style.maxHeight = 'none'
+          el.removeEventListener('transitionend', onEnd)
+        }
+        el.addEventListener('transitionend', onEnd)
+      }
     })
   } else {
+    // Collapse: set max-height to current height first, then collapse next frame
     next.add(id)
-    // Collapse: set max-height to 0 via CSS class
     const el = groupContentRefs[id]
-    if (el) el.style.maxHeight = null
+    if (el) {
+      el.style.maxHeight = el.scrollHeight + 'px'
+      requestAnimationFrame(() => {
+        collapsedGroups.value = next
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+      })
+    } else {
+      collapsedGroups.value = next
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+    }
   }
-  collapsedGroups.value = next
-  localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
 }
 
 function isGroupCollapsed(id) {
@@ -372,7 +388,9 @@ defineExpose({ scrollToSession })
       </button>
     </div>
 
-    <div class="sidebar-list">
+    <div class="sidebar-list-wrapper">
+      <div class="sidebar-list-fade sidebar-list-fade--top"></div>
+      <div class="sidebar-list">
       <!-- Loading skeleton -->
       <template v-if="loading">
         <div v-for="n in 3" :key="'skeleton-' + n" class="skeleton-item">
@@ -404,8 +422,25 @@ defineExpose({ scrollToSession })
           @dragend="onDragEnd"
         >
           <div class="project-header" :title="group.name" @click="toggleGroup(group.id)">
-            <template v-if="deletingProject === group.id">
-              <span class="project-delete-confirm" @click.stop>
+              <svg
+                class="collapse-arrow"
+                :class="{ collapsed: isGroupCollapsed(group.id) }"
+                width="10" height="10" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              >
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+              <svg v-if="group.pinned" class="project-icon project-icon--pinned" width="12" height="12" viewBox="0 0 24 24" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span class="project-name">{{ group.name }}</span>
+              <span class="project-count">{{ group.sessions.length }}</span>
+              <Transition name="confirm-swap" mode="out-in">
+              <span v-if="deletingProject === group.id" key="confirm" class="project-delete-confirm" @click.stop>
                 <button class="confirm-delete-all" @click.stop="confirmDeleteProject(group.id)" title="Delete project and all sessions">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="3 6 5 6 21 6"/>
@@ -427,60 +462,46 @@ defineExpose({ scrollToSession })
                   </svg>
                 </button>
               </span>
-            </template>
-            <template v-else>
-              <svg
-                class="collapse-arrow"
-                :class="{ collapsed: isGroupCollapsed(group.id) }"
-                width="10" height="10" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor"
-                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-              >
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-              <span class="project-name">{{ group.name }}</span>
-              <span class="project-count">{{ group.sessions.length }}</span>
-              <button
-                v-if="group.id !== '__unassigned__'"
-                class="project-action-btn project-pin-btn"
-                :class="{ pinned: isProjectPinned(group.id) }"
-                @click.stop="toggleProjectPin(group.id)"
-                :aria-label="isProjectPinned(group.id) ? 'Unpin project' : 'Pin project'"
-                :title="isProjectPinned(group.id) ? 'Unpin' : 'Pin'"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="12" y1="17" x2="12" y2="22"/>
-                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
-                </svg>
-              </button>
-              <button
-                v-if="group.id !== '__unassigned__'"
-                class="project-action-btn project-add-btn"
-                @click.stop="emit('create-in-project', group.id)"
-                aria-label="Create session in this project"
-                title="New session"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"/>
-                  <line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-              </button>
-              <button
-                v-if="group.id !== '__unassigned__'"
-                class="project-action-btn project-delete-btn"
-                @click.stop="requestDeleteProject(group.id)"
-                aria-label="Delete project"
-                title="Delete project"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                </svg>
-              </button>
-            </template>
+              <span v-else key="normal" class="project-actions">
+                <button
+                  v-if="group.id !== '__unassigned__'"
+                  class="project-action-btn project-pin-btn"
+                  :class="{ pinned: isProjectPinned(group.id) }"
+                  @click.stop="toggleProjectPin(group.id)"
+                  :aria-label="isProjectPinned(group.id) ? 'Unpin project' : 'Pin project'"
+                  :title="isProjectPinned(group.id) ? 'Unpin' : 'Pin'"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="17" x2="12" y2="22"/>
+                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+                  </svg>
+                </button>
+                <button
+                  v-if="group.id !== '__unassigned__'"
+                  class="project-action-btn project-add-btn"
+                  @click.stop="emit('create-in-project', group.id)"
+                  aria-label="Create session in this project"
+                  title="New session"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                </button>
+                <button
+                  v-if="group.id !== '__unassigned__'"
+                  class="project-action-btn project-delete-btn"
+                  @click.stop="requestDeleteProject(group.id)"
+                  aria-label="Delete project"
+                  title="Delete project"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+              </span>
+              </Transition>
           </div>
           <div
               class="group-content"
@@ -517,6 +538,8 @@ defineExpose({ scrollToSession })
         <p class="empty-text">No projects yet</p>
         <p class="empty-hint">Create a new project to get started</p>
       </div>
+    </div>
+      <div class="sidebar-list-fade sidebar-list-fade--bottom"></div>
     </div>
 
     <CreateSessionDialog
@@ -592,19 +615,54 @@ defineExpose({ scrollToSession })
 
 .new-session-btn:active {
   transform: translateY(0) scale(0.97);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
+  min-height: 0;
+}
+
+.sidebar-list-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-list-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 32px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sidebar-list-fade--top {
+  top: 0;
+  background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+}
+
+.sidebar-list-fade--bottom {
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg-secondary), transparent);
 }
 
 /* Project group */
 .project-group {
   margin-bottom: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
   transition: opacity 0.2s;
+}
+
+.project-group:first-child {
+  border-top: none;
+  padding-top: 0;
 }
 
 .project-group.dragging {
@@ -618,15 +676,11 @@ defineExpose({ scrollToSession })
 .group-content {
   overflow: hidden;
   opacity: 1;
-  transition: max-height 0.25s ease, opacity 0.2s ease;
-}
-
-.group-content:not(.collapsed) {
-  max-height: none;
+  transition: max-height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .group-content.collapsed {
-  max-height: 0;
+  max-height: 0 !important;
   opacity: 0;
 }
 
@@ -667,8 +721,8 @@ defineExpose({ scrollToSession })
 
 .project-count {
   font-size: 10px;
-  background: var(--accent-dim);
-  color: var(--accent);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
   padding: 1px 6px;
   border-radius: 8px;
   flex-shrink: 0;
@@ -725,18 +779,22 @@ defineExpose({ scrollToSession })
 
 /* Separator between pinned and unpinned projects */
 .pinned-separator {
-  height: 2px;
-  background: var(--accent-dim);
-  margin: 8px 12px;
-  opacity: 1;
+  height: 0;
+  margin: 6px 0;
+  border: none;
 }
 
 /* Project delete confirm */
 .project-delete-confirm {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  width: 100%;
+}
+
+.project-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
 }
 
 .project-delete-confirm .confirm-delete-all,
@@ -946,7 +1004,7 @@ defineExpose({ scrollToSession })
 
 .batch-delete-btn:active {
   transform: translateY(0) scale(0.97);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 /* Slide up transition */
@@ -965,5 +1023,15 @@ defineExpose({ scrollToSession })
   .session-sidebar {
     display: none;
   }
+}
+
+/* Confirm swap transition */
+.confirm-swap-enter-active,
+.confirm-swap-leave-active {
+  transition: opacity 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.confirm-swap-enter-from,
+.confirm-swap-leave-to {
+  opacity: 0;
 }
 </style>

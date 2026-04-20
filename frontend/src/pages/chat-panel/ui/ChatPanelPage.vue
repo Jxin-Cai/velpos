@@ -537,6 +537,8 @@ function formatMaxTokens(n) {
       />
       <!-- Toolbar above input -->
       <div class="input-toolbar">
+        <!-- Group 1: Debug -->
+        <div class="toolbar-group">
         <button
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': debugMode }"
@@ -554,7 +556,9 @@ function formatMaxTokens(n) {
           </svg>
           <span class="toolbar-btn-label">Debug</span>
         </button>
-        <!-- Agent button -->
+        </div>
+        <!-- Group 2: Configuration -->
+        <div class="toolbar-group">
         <button
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': currentAgentInfo }"
@@ -570,7 +574,6 @@ function formatMaxTokens(n) {
           </svg>
           <span class="toolbar-btn-label">{{ currentAgentInfo ? currentAgentInfo.id : 'Agent' }}</span>
         </button>
-        <!-- Plugin management button -->
         <button
           class="toolbar-btn"
           :disabled="!currentSessionId"
@@ -595,6 +598,9 @@ function formatMaxTokens(n) {
           :disabled="!currentSessionId || !projectDir"
           @click="memoryDialogVisible = true"
         />
+        </div>
+        <!-- Group 3: Actions -->
+        <div class="toolbar-group">
         <VoiceInputButton :disabled="isRunning" @text="(t) => messageInputRef?.appendText(t)" />
         <VideoInputButton :disabled="isRunning" @capture="(f) => messageInputRef?.addImage(f.data, f.media_type)" />
         <CommandPaletteButton
@@ -660,6 +666,7 @@ function formatMaxTokens(n) {
           :instance-name="boundInstanceName"
           @click="imDialogVisible = true"
         />
+        </div>
       </div>
       <div class="input-row">
         <MessageInput ref="messageInputRef" :running="isRunning" @send="handleSend" />
@@ -922,8 +929,20 @@ function formatMaxTokens(n) {
 .input-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   padding: 12px 16px 0;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-group + .toolbar-group {
+  padding-left: 6px;
+  margin-left: 6px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .toolbar-btn {
@@ -959,7 +978,7 @@ function formatMaxTokens(n) {
 
 .toolbar-btn:active:not(:disabled) {
   transform: scale(0.96);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 .toolbar-btn--active {
@@ -1283,7 +1302,7 @@ function formatMaxTokens(n) {
   font-family: var(--font-mono);
   color: var(--text-muted);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   border: none;
   cursor: default;
@@ -1302,7 +1321,7 @@ button.dash-chip:hover:not([disabled]) {
 
 button.dash-chip:active:not([disabled]) {
   transform: scale(0.96);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 button.dash-chip[disabled] {

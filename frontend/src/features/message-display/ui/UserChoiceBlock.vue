@@ -288,7 +288,7 @@ function submitAnswers() {
 
 .submit-btn:active:not(:disabled) {
   transform: translateY(0) scale(0.97);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 .answered-badge {

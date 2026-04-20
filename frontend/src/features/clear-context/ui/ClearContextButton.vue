@@ -120,6 +120,6 @@ onBeforeUnmount(() => {
 
 .clear-ctx-btn:active:not(:disabled) {
   transform: scale(0.96);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 </style>

@@ -138,7 +138,7 @@ function handleDeny() {
 
 .perm-btn:active {
   transform: translateY(0) scale(0.97);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 .perm-allow {

@@ -162,7 +162,8 @@ onBeforeUnmount(() => {
     :aria-label="'Session ' + getShortId(session.session_id)"
     @keydown.enter="selectable ? emit('toggle-select', session.session_id) : emit('select', session.session_id)"
   >
-    <template v-if="!showDeleteConfirm">
+    <Transition name="confirm-swap" mode="out-in">
+    <div v-if="!showDeleteConfirm" key="normal">
       <div class="session-main">
         <label v-if="selectable" class="select-checkbox" @click.stop>
           <input
@@ -232,15 +233,16 @@ onBeforeUnmount(() => {
         </span>
         <span v-if="formattedTime" class="session-time">{{ formattedTime }}</span>
       </div>
-    </template>
+    </div>
 
-    <template v-else>
+    <div v-else key="confirm">
       <div class="delete-confirm" @click.stop>
         <span class="confirm-text">Delete?</span>
         <button class="confirm-yes" @click.stop="confirmDelete">Yes</button>
         <button class="confirm-no" @click.stop="cancelDelete">No</button>
       </div>
-    </template>
+    </div>
+    </Transition>
   </div>
 </template>
 
@@ -249,6 +251,8 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   cursor: pointer;
   border-left: 3px solid transparent;
+  min-height: 48px;
+  box-sizing: border-box;
   transition:
     background var(--transition-fast),
     border-color var(--transition-fast),
@@ -263,12 +267,16 @@ onBeforeUnmount(() => {
 .session-item:active {
   background: var(--bg-hover);
   transform: scale(0.995);
-  transition-duration: 80ms;
+  transition-duration: 100ms;
 }
 
 .session-item.active {
   border-left-color: var(--accent);
   background: var(--accent-dim);
+}
+
+.session-item.active .session-name {
+  color: var(--text-primary);
 }
 
 .session-item.is-claude-code:hover {
@@ -329,13 +337,14 @@ onBeforeUnmount(() => {
 .session-name {
   font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  transition: color var(--transition-fast);
 }
 
 .rename-input {
@@ -488,7 +497,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 0;
+  min-height: 26px;
 }
 
 .confirm-text {
@@ -578,5 +587,15 @@ onBeforeUnmount(() => {
 .select-checkbox:active .checkbox-mark {
   transform: scale(0.85);
   transition-duration: 0.1s;
+}
+
+/* Confirm swap transition */
+.confirm-swap-enter-active,
+.confirm-swap-leave-active {
+  transition: opacity 120ms var(--ease-smooth);
+}
+.confirm-swap-enter-from,
+.confirm-swap-leave-to {
+  opacity: 0;
 }
 </style>
