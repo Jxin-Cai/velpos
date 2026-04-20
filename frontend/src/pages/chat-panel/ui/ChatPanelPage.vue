@@ -243,6 +243,37 @@ useGlobalHotkeys({
   priority: 50
 })
 
+// ESC to close panels/popovers
+useGlobalHotkeys({
+  keys: 'Escape',
+  handler: (event) => {
+    // 关闭所有打开的面板和菜单
+    if (showHistory.value) {
+      showHistory.value = false
+      return false
+    }
+    if (showModelMenu.value) {
+      showModelMenu.value = false
+      return false
+    }
+    if (showPermMenu.value) {
+      showPermMenu.value = false
+      return false
+    }
+    if (showBranchMenu.value) {
+      showBranchMenu.value = false
+      return false
+    }
+    if (showProjectCopyMenu.value) {
+      showProjectCopyMenu.value = false
+      return false
+    }
+    // 让事件继续传播，可能需要关闭其他弹窗或取消查询
+    return true
+  },
+  priority: 10 // 高于全局拦截器的优先级
+})
+
 // Git branch switching
 const showBranchMenu = ref(false)
 const branchList = ref([])
