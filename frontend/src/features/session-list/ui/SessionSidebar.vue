@@ -730,7 +730,7 @@ defineExpose({ scrollToSession })
 }
 
 .project-action-btn {
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 18px;
@@ -741,12 +741,16 @@ defineExpose({ scrollToSession })
   color: var(--text-muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.15s;
+  transition: opacity var(--transition-fast), width var(--transition-fast);
   padding: 0;
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
 }
 
 .project-header:hover .project-action-btn {
-  display: flex;
+  opacity: 1;
+  width: 18px;
 }
 
 .project-add-btn:hover {
