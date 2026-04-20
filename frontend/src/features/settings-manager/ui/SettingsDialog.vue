@@ -81,6 +81,7 @@ const {
 
 const editingProfileId = ref(null)
 const showAddForm = ref(false)
+const showJsonPreview = ref(false)
 const addForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
 const editForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
 const settingsData = ref(null)
@@ -486,7 +487,18 @@ onBeforeUnmount(() => {
 
           <!-- Section 2: Settings Configuration -->
           <div class="section">
-            <h3 class="section-title">Settings Configuration</h3>
+            <div class="section-header">
+              <h3 class="section-title">Settings Configuration</h3>
+              <button class="btn-preview" :class="{ active: showJsonPreview }" @click="showJsonPreview = !showJsonPreview" title="Toggle JSON Preview">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+            <Transition name="dropdown-fade">
+              <pre v-if="showJsonPreview" class="json-preview">{{ jsonPreviewText }}</pre>
+            </Transition>
             <div class="settings-card" v-if="settingsData">
               <div class="field-row">
                 <div class="field-info">
@@ -579,13 +591,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- Section 3: JSON Preview -->
-          <div class="section">
-            <h3 class="section-title">JSON Preview</h3>
-            <pre class="json-preview">{{ jsonPreviewText }}</pre>
-          </div>
-
-          <!-- Section 4: User Preferences -->
+          <!-- Section 3: User Preferences -->
           <div class="section">
             <h3 class="section-title">User Preferences</h3>
             <div class="settings-card">
@@ -740,6 +746,32 @@ onBeforeUnmount(() => {
 
 .section-header .section-title {
   margin: 0;
+}
+
+.btn-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-preview:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.btn-preview.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .channel-list {
