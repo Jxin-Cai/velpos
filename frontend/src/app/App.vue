@@ -12,6 +12,7 @@ import { SettingsButton, SettingsDialog } from '@features/settings-manager'
 import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
+import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
 
 const {
   session,
@@ -100,6 +101,7 @@ const _connections = reactive(new Map())
 const wsConnection = computed(() => _connections.get(currentSessionId.value) ?? null)
 
 provide('wsConnection', wsConnection)
+provide('wsConnections', _connections) // 提供整个连接池给全局快捷键拦截器
 
 function setupUnifiedHandler(connection, sessionId) {
   connection.onEvent((data) => {
@@ -338,6 +340,8 @@ function handleSessionImported(event) {
 
 <template>
   <div class="app-layout">
+    <!-- Global shortcut interceptor -->
+    <GlobalShortcutInterceptor />
     <!-- Skeleton: shown while loadSessions() is pending (ready=false, no error) -->
     <template v-if="!ready && !initError">
       <header class="app-header">
