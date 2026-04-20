@@ -63,6 +63,12 @@ function handleKeydown(e) {
   const len = filteredCommands.value.length
   if (!len) return
 
+  // 如果有修饰键（全局快捷键），不处理，让事件传播到全局处理器
+  const hasModifiers = e.ctrlKey || e.metaKey
+  if (hasModifiers) {
+    return // 不阻止事件，让全局快捷键处理器接管
+  }
+
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     activeIndex.value = (activeIndex.value + 1) % len

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useProject } from '@entities/project'
 import SessionListItem from './SessionListItem.vue'
 import CreateSessionDialog from './CreateSessionDialog.vue'
@@ -326,6 +326,20 @@ function scrollToSession(sessionId) {
 onBeforeUnmount(() => {
   if (deleteProjectTimer) clearTimeout(deleteProjectTimer)
 })
+
+// 监听全局session切换事件，自动滚动到目标session
+onMounted(() => {
+  window.addEventListener('vp-scroll-to-session', handleScrollToSessionEvent)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('vp-scroll-to-session', handleScrollToSessionEvent)
+})
+
+function handleScrollToSessionEvent(event) {
+  const { sessionId } = event.detail
+  scrollToSession(sessionId)
+}
 
 defineExpose({ scrollToSession })
 </script>
