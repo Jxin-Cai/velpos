@@ -236,6 +236,16 @@ useGlobalHotkeys({
   },
   priority: 100
 })
+
+// Cmd/Ctrl + K: 语音输入切换
+useGlobalHotkeys({
+  keys: ['Ctrl+K', 'Cmd+K'],
+  handler: () => {
+    window.dispatchEvent(new CustomEvent('vp-voice-toggle-global'))
+    return false
+  },
+  priority: 100
+})
 </script>
 
 <template>

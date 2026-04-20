@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useVoiceInput } from '../model/useVoiceInput'
 
 const props = defineProps({
@@ -16,7 +16,20 @@ function handleToggle() {
   toggle((text) => emit('text', text))
 }
 
+// 监听全局快捷键触发的 voice 切换
+function handleGlobalToggle() {
+  if (!isDisabled.value) {
+    handleToggle()
+  }
+}
+
+onMounted(() => {
+  // 监听全局事件（从 GlobalShortcutInterceptor 触发）
+  window.addEventListener('vp-voice-toggle-global', handleGlobalToggle)
+})
+
 onBeforeUnmount(() => {
+  window.removeEventListener('vp-voice-toggle-global', handleGlobalToggle)
   stopRecording()
 })
 </script>

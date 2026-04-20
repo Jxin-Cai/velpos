@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useVideoInput } from '../model/useVideoInput'
 
 const props = defineProps({
@@ -37,7 +37,19 @@ function handleCapture() {
   }
 }
 
+// 监听全局快捷键触发的 camera 切换
+async function handleGlobalToggle() {
+  if (!isDisabled.value) {
+    await handleToggle()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('vp-camera-toggle-global', handleGlobalToggle)
+})
+
 onBeforeUnmount(() => {
+  window.removeEventListener('vp-camera-toggle-global', handleGlobalToggle)
   stopCapture()
 })
 </script>

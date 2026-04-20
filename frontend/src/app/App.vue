@@ -13,6 +13,7 @@ import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
 import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
+import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 
 const {
   session,
@@ -337,6 +338,28 @@ function handleSessionImported(event) {
     sidebarRef.value?.scrollToSession(sessionId)
   })
 }
+
+// ── Global shortcuts ──
+
+// Cmd/Ctrl + P: Open settings dialog
+useGlobalHotkeys({
+  keys: ['Ctrl+P', 'Cmd+P'],
+  handler: () => {
+    settingsDialogVisible.value = true
+    return false
+  },
+  priority: 100
+})
+
+// Cmd/Ctrl + B: Toggle sidebar collapse
+useGlobalHotkeys({
+  keys: ['Ctrl+B', 'Cmd+B'],
+  handler: () => {
+    toggleSidebarCollapse()
+    return false
+  },
+  priority: 100
+})
 </script>
 
 <template>

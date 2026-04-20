@@ -19,7 +19,7 @@ import { useCompactContext } from '@features/compact-context'
 import { useSessionStats } from '@features/send-message/model/useSessionStats'
 import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 
-const { session, messages, status, queued, currentSessionId, queryHistory, setCurrentSessionId, updateSession } = useSession()
+const { session, messages, status, queued, currentSessionId, queryHistory, setCurrentSessionId, updateSession, setError } = useSession()
 const { projects, updateProjectInList } = useProject()
 
 const wsConnection = inject('wsConnection')
@@ -114,7 +114,68 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('vp-cancel-rewind', handleCancelRewind)
+  window.removeEventListener('vp-dialog-open', handleDialogOpen)
+  window.removeEventListener('vp-debug-toggle', handleDebugToggle)
+  window.removeEventListener('vp-voice-toggle', handleVoiceToggle)
+  window.removeEventListener('vp-camera-toggle', handleCameraToggle)
+  window.removeEventListener('vp-clear-context', handleClearContext)
 })
+
+// 监听全局快捷键触发的弹窗打开事件
+function handleDialogOpen(e) {
+  const dialog = e.detail?.dialog
+  switch (dialog) {
+    case 'agent-manager':
+      agentDialogVisible.value = true
+      break
+    case 'plugin-manager':
+      pluginDialogVisible.value = true
+      break
+    case 'memory-manager':
+      memoryDialogVisible.value = true
+      break
+    case 'command-palette':
+      cmdVisible.value = true
+      break
+    case 'history':
+      showHistory.value = true
+      break
+    case 'im-binding':
+      imDialogVisible.value = true
+      break
+  }
+}
+
+// 监听 debug 模式切换
+function handleDebugToggle(e) {
+  debugMode.value = e.detail?.enabled ?? false
+}
+
+// 监听 voice 切换（需要让 VoiceInputButton 组件处理）
+function handleVoiceToggle() {
+  window.dispatchEvent(new CustomEvent('vp-voice-toggle-global'))
+}
+
+// 监听 camera 切换（需要让 VideoInputButton 组件处理）
+function handleCameraToggle() {
+  window.dispatchEvent(new CustomEvent('vp-camera-toggle-global'))
+}
+
+// 监听 clear context
+function handleClearContext() {
+  if (!currentSessionId.value) {
+    setError('No active session to clear context')
+    return
+  }
+  compactContext(currentSessionId.value)
+}
+
+// 注册全局事件监听
+window.addEventListener('vp-dialog-open', handleDialogOpen)
+window.addEventListener('vp-debug-toggle', handleDebugToggle)
+window.addEventListener('vp-voice-toggle', handleVoiceToggle)
+window.addEventListener('vp-camera-toggle', handleCameraToggle)
+window.addEventListener('vp-clear-context', handleClearContext)
 
 function handleCancelRewind(e) {
   const prompt = e.detail?.prompt || ''

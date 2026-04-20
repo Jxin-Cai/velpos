@@ -2,12 +2,41 @@
 import { watch, computed } from 'vue'
 import { configuredMarked } from '@features/message-display'
 import { useMemoryManager } from '../model/useMemoryManager'
+import { useDialogManager } from '@shared/lib/useDialogManager'
+import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
   projectDir: { type: String, default: '' },
 })
 const emit = defineEmits(['close'])
+
+// 使用全局弹窗管理器
+const { useDialog } = useDialogManager()
+const visibleWrapper = {
+  get value() {
+    return props.visible
+  },
+  set value(newValue) {
+    if (!newValue) {
+      emit('close')
+    }
+  }
+}
+useDialog('memory-manager', visibleWrapper)
+
+// ESC to close dialog
+useGlobalHotkeys({
+  keys: 'Escape',
+  handler: () => {
+    if (props.visible) {
+      emit('close')
+      return false
+    }
+    return true
+  },
+  priority: 100
+})
 
 const {
   content, loading, editing, editContent, saving,
