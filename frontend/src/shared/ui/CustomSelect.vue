@@ -9,7 +9,6 @@ const props = defineProps({
   options: {
     type: Array,
     required: true,
-    // [{ value, label }]
   },
   displayMap: {
     type: Object,
@@ -24,16 +23,8 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 const isOpen = ref(false)
-const openUpward = ref(false)
 const wrapperRef = ref(null)
-
-const selectedLabel = (() => {
-  if (props.displayMap && props.displayMap[props.modelValue]) {
-    return props.displayMap[props.modelValue]
-  }
-  const opt = props.options.find(o => o.value === props.modelValue)
-  return opt ? opt.label : props.placeholder
-})()
+const menuStyle = ref({})
 
 function getLabel() {
   if (props.displayMap && props.displayMap[props.modelValue]) {
@@ -43,20 +34,40 @@ function getLabel() {
   return opt ? opt.label : props.placeholder
 }
 
+function positionMenu() {
+  const el = wrapperRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const menuHeight = props.options.length * 36 + 8
+  const spaceBelow = window.innerHeight - rect.bottom
+  const spaceAbove = rect.top
+
+  let top, origin
+  if (spaceBelow >= menuHeight || spaceBelow >= spaceAbove) {
+    top = rect.bottom + 4
+    origin = 'top'
+  } else {
+    top = rect.top - menuHeight - 4
+    origin = 'bottom'
+  }
+
+  menuStyle.value = {
+    position: 'fixed',
+    top: top + 'px',
+    left: 'auto',
+    right: (window.innerWidth - rect.right) + 'px',
+    minWidth: Math.max(rect.width, 200) + 'px',
+    zIndex: 9999,
+  }
+}
+
 function toggle() {
   if (isOpen.value) {
     isOpen.value = false
     return
   }
-  // Check if near bottom of viewport
-  const el = wrapperRef.value
-  if (el) {
-    const rect = el.getBoundingClientRect()
-    const spaceBelow = window.innerHeight - rect.bottom
-    const menuHeight = props.options.length * 36 + 8
-    openUpward.value = spaceBelow < menuHeight && rect.top > menuHeight
-  }
   isOpen.value = true
+  nextTick(() => positionMenu())
 }
 
 function select(value) {
@@ -71,11 +82,11 @@ function onClickOutside(e) {
 }
 
 onMounted(() => {
-  document.addEventListener('click', onClickOutside)
+  document.addEventListener('click', onClickOutside, true)
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('click', onClickOutside)
+  document.removeEventListener('click', onClickOutside, true)
 })
 </script>
 
@@ -85,19 +96,21 @@ onBeforeUnmount(() => {
       <span class="custom-select-text">{{ getLabel() }}</span>
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
-    <Transition name="dropdown-fade">
-      <div v-if="isOpen" class="custom-select-menu" :class="{ 'custom-select-menu--up': openUpward }">
-        <button
-          v-for="opt in options"
-          :key="opt.value"
-          class="custom-select-option"
-          :class="{ selected: modelValue === opt.value }"
-          @click="select(opt.value)"
-        >
-          {{ opt.label }}
-        </button>
-      </div>
-    </Transition>
+    <Teleport to="body">
+      <Transition name="dropdown-fade">
+        <div v-if="isOpen" class="custom-select-menu" :style="menuStyle">
+          <button
+            v-for="opt in options"
+            :key="opt.value"
+            class="custom-select-option"
+            :class="{ selected: modelValue === opt.value }"
+            @click="select(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -146,23 +159,16 @@ onBeforeUnmount(() => {
 .custom-select-text {
   font-weight: 500;
 }
+</style>
 
+<style>
+/* Unscoped for Teleported menu */
 .custom-select-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 100;
-  min-width: 200px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
   padding: 4px;
-}
-
-.custom-select-menu--up {
-  top: auto;
-  bottom: calc(100% + 4px);
 }
 
 .custom-select-option {
