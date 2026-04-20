@@ -254,10 +254,23 @@ onBeforeUnmount(() => {
   min-height: 48px;
   box-sizing: border-box;
   transition:
-    background var(--transition-fast),
-    border-color var(--transition-fast),
+    background 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
     box-shadow var(--transition-fast);
   position: relative;
+}
+
+.session-item::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  transform: scaleY(0);
+  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .session-item:hover {
@@ -271,8 +284,11 @@ onBeforeUnmount(() => {
 }
 
 .session-item.active {
-  border-left-color: var(--accent);
   background: var(--accent-dim);
+}
+
+.session-item.active::after {
+  transform: scaleY(1);
 }
 
 .session-item.active .session-name {
