@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useVoiceInput } from '../model/useVoiceInput'
+import { useHotkeyHint } from '@shared/lib/useHotkeyHint'
 
 const props = defineProps({
   disabled: { type: Boolean, default: false },
@@ -9,6 +10,7 @@ const props = defineProps({
 const emit = defineEmits(['text'])
 
 const { isRecording, supported, stopRecording, toggle } = useVoiceInput()
+const { isModifierPressed } = useHotkeyHint()
 
 const isDisabled = computed(() => (!supported.value || props.disabled) && !isRecording.value)
 
@@ -50,6 +52,7 @@ onBeforeUnmount(() => {
     </svg>
     <span v-if="isRecording" class="recording-dot"></span>
     <span class="toolbar-btn-label">{{ isRecording ? 'Stop' : 'Voice' }}</span>
+    <span v-if="isModifierPressed" class="hotkey-badge">K</span>
   </button>
 </template>
 
@@ -98,5 +101,33 @@ onBeforeUnmount(() => {
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
+}
+
+.hotkey-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  margin-left: 4px;
+  animation: hotkey-badge-appear 0.15s ease-out;
+}
+
+@keyframes hotkey-badge-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 </style>

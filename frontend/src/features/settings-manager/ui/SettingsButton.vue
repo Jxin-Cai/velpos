@@ -1,4 +1,7 @@
 <script setup>
+import { inject } from 'vue'
+import { useHotkeyHint } from '@shared/lib/useHotkeyHint'
+
 defineProps({
   disabled: {
     type: Boolean,
@@ -7,6 +10,7 @@ defineProps({
 })
 
 const emit = defineEmits(['click'])
+const { isModifierPressed } = useHotkeyHint()
 </script>
 
 <template>
@@ -21,6 +25,7 @@ const emit = defineEmits(['click'])
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
     </svg>
     <span class="settings-btn-label">Settings</span>
+    <span v-if="isModifierPressed" class="hotkey-badge">P</span>
   </button>
 </template>
 
@@ -58,6 +63,34 @@ const emit = defineEmits(['click'])
 
 .settings-btn-label {
   font-weight: 500;
+}
+
+.hotkey-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  margin-left: 4px;
+  animation: hotkey-badge-appear 0.15s ease-out;
+}
+
+@keyframes hotkey-badge-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @media (max-width: 768px) {

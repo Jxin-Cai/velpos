@@ -14,6 +14,7 @@ import { TerminalButton, TerminalDrawer } from '@features/terminal'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
 import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
+import { useHotkeyHint } from '@shared/lib/useHotkeyHint'
 
 const {
   session,
@@ -51,6 +52,7 @@ const { fetchStatus: fetchImStatus, fetchChannels: fetchImChannels, resetState: 
 
 const { addNotification } = useNotifications()
 const { markWorking, markDone } = useWorkingSessions()
+const { startListening: startHotkeyHintListening } = useHotkeyHint()
 
 const ready = ref(false)
 const initError = ref(null)
@@ -312,6 +314,9 @@ onMounted(async () => {
 
   // Listen for Claude Code session import events to scroll to new position
   window.addEventListener('vp-session-imported', handleSessionImported)
+
+  // Start listening for Cmd/Ctrl key for hotkey hints
+  startHotkeyHintListening()
 })
 
 onUnmounted(() => {
