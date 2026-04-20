@@ -155,21 +155,30 @@ const collapsedGroups = ref(new Set(
 function toggleGroup(id) {
   const next = new Set(collapsedGroups.value)
   if (next.has(id)) {
-    // Expand: remove from collapsed set, animate from 0 to scrollHeight, then remove limit
+    // Expand: keep collapsed briefly, measure, then animate open
     next.delete(id)
-    collapsedGroups.value = next
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
-    nextTick(() => {
-      const el = groupContentRefs[id]
-      if (el) {
-        el.style.maxHeight = el.scrollHeight + 'px'
+    const el = groupContentRefs[id]
+    if (el) {
+      // Force max-height to 0 first (still collapsed visually)
+      el.style.maxHeight = '0px'
+      el.style.opacity = '0'
+      collapsedGroups.value = next
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+      nextTick(() => {
+        const targetHeight = el.scrollHeight
+        el.style.maxHeight = targetHeight + 'px'
+        el.style.opacity = '1'
         const onEnd = () => {
           el.style.maxHeight = 'none'
+          el.style.opacity = ''
           el.removeEventListener('transitionend', onEnd)
         }
         el.addEventListener('transitionend', onEnd)
-      }
-    })
+      })
+    } else {
+      collapsedGroups.value = next
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+    }
   } else {
     // Collapse: set max-height to current height first, then collapse next frame
     next.add(id)
@@ -675,8 +684,7 @@ defineExpose({ scrollToSession })
 
 .group-content {
   overflow: hidden;
-  opacity: 1;
-  transition: max-height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: max-height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .group-content.collapsed {
