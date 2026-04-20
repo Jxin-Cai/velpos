@@ -178,6 +178,26 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   transition: background var(--transition-base), color var(--transition-base);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Allow text selection and text cursor only in explicit text areas */
+input,
+textarea,
+[contenteditable="true"],
+.markdown-body {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+/* Code blocks should also be selectable */
+pre,
+code {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 #app {
