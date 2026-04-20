@@ -278,6 +278,16 @@ function getPermLabel(value) {
   return found ? found.label : value
 }
 
+// Get color class for permission mode (matching CC CLI colors)
+function getPermColorClass(value) {
+  switch (value) {
+    case 'acceptEdits': return 'perm-purple'
+    case 'plan': return 'perm-green'
+    case 'bypassPermissions': return 'perm-red'
+    default: return 'perm-gray'
+  }
+}
+
 function handlePermSelect(mode) {
   showPermMenu.value = false
   currentPermMode.value = mode
@@ -789,6 +799,7 @@ function formatMaxTokens(n) {
           <div class="dropdown-wrapper" @click.stop>
             <button
               class="dash-chip dash-perm"
+              :class="[getPermColorClass(currentPermMode)]"
               :disabled="!currentSessionId"
               @click="showPermMenu = !showPermMenu; showModelMenu = false; showHistory = false"
               title="Permission mode"
@@ -804,7 +815,7 @@ function formatMaxTokens(n) {
                 v-for="pm in permModes"
                 :key="pm.value"
                 class="dropdown-item"
-                :class="{ active: pm.value === currentPermMode }"
+                :class="[getPermColorClass(pm.value), { active: pm.value === currentPermMode }]"
                 @click="handlePermSelect(pm.value)"
               >
                 {{ pm.label }}
@@ -1005,14 +1016,18 @@ function formatMaxTokens(n) {
 }
 
 .dropdown-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  filter: brightness(1.15);
 }
 
 .dropdown-item.active {
-  color: var(--accent);
-  background: var(--accent-dim);
+  font-weight: 600;
 }
+
+/* When active, use the permission color background */
+.dropdown-item.perm-purple.active { background: var(--purple-dim); }
+.dropdown-item.perm-green.active { background: var(--green-dim); }
+.dropdown-item.perm-red.active { background: var(--red-dim); }
+.dropdown-item.perm-gray.active { background: var(--bg-tertiary); }
 
 .model-menu {
   min-width: 260px;
@@ -1326,8 +1341,32 @@ button.dash-chip[disabled] {
 }
 
 .dash-perm {
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+/* Permission mode colors - matching CC CLI */
+.dash-perm.perm-purple,
+.dropdown-item.perm-purple {
+  color: var(--purple);
+  background: var(--purple-dim);
+}
+
+.dash-perm.perm-green,
+.dropdown-item.perm-green {
   color: var(--green);
   background: var(--green-dim);
+}
+
+.dash-perm.perm-red,
+.dropdown-item.perm-red {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.dash-perm.perm-gray,
+.dropdown-item.perm-gray {
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
 }
 
 .dash-tools {
