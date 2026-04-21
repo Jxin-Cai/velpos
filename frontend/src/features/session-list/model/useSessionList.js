@@ -109,7 +109,10 @@ export function useSessionList() {
     addProject(project)
 
     // Create a session in the new project
-    const session = await createSession({ projectId: project.id })
+    const session = await createSession({
+      projectId: project.id,
+      projectDir: project.dir_path || '',
+    })
     addSession({ ...session, source: 'velpos' })
     setCurrentProjectId(project.id)
     switchSession(session.session_id)
