@@ -20,6 +20,8 @@ Velpos（意成）是一个基于 [Claude Agent SDK](https://github.com/anthropi
 
 这使得 **非技术人员** 也能更容易地构建和运营多 Agent AI 助手——无需手写 prompt、手动拼工具链，或维护脆弱的命令流程。
 
+![Velpos 项目介绍图](./resources/intro-zh.png)
+
 <br/>
 
 ## 目录
