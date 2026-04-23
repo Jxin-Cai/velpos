@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { pickProjectDirectory } from '@entities/project'
 
 const props = defineProps({
   visible: {
@@ -10,13 +11,32 @@ const props = defineProps({
 
 const emit = defineEmits(['confirm', 'cancel'])
 
+const mode = ref('github')
 const projectName = ref('')
 const githubUrl = ref('')
+const projectPath = ref('')
 const creating = ref(false)
-const nameInput = ref(null)
+const picking = ref(false)
+const pickerError = ref('')
+const primaryInput = ref(null)
 
+const isMac = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform || window.navigator.userAgent)
 const PROJECT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+
+function getPathBaseName(path) {
+  const trimmed = path.trim().replace(/[\\/]+$/, '')
+  if (!trimmed) return ''
+  const parts = trimmed.split(/[\\/]/)
+  return parts[parts.length - 1] || ''
+}
+
+const resolvedProjectName = computed(() => {
+  if (mode.value === 'local') return getPathBaseName(projectPath.value)
+  return projectName.value.trim()
+})
+
 const nameError = computed(() => {
+  if (mode.value !== 'github') return ''
   const name = projectName.value.trim()
   if (!name) return ''
   if (!PROJECT_NAME_RE.test(name)) {
@@ -24,39 +44,79 @@ const nameError = computed(() => {
   }
   return ''
 })
-const nameValid = computed(() => projectName.value.trim() && !nameError.value)
+
+const pathError = computed(() => {
+  if (mode.value !== 'local') return ''
+  return projectPath.value.trim() ? '' : 'Project path is required.'
+})
+
+const canConfirm = computed(() => {
+  if (creating.value || picking.value) return false
+  if (mode.value === 'local') return !!projectPath.value.trim()
+  return !!projectName.value.trim() && !nameError.value
+})
 
 watch(() => props.visible, (val) => {
   if (val) {
     nextTick(() => {
-      nameInput.value?.focus()
+      primaryInput.value?.focus()
     })
   } else {
+    mode.value = 'github'
     projectName.value = ''
     githubUrl.value = ''
+    projectPath.value = ''
     creating.value = false
+    picking.value = false
+    pickerError.value = ''
   }
 })
 
 function extractRepoName(url) {
   if (!url) return ''
-  // Handle URLs like https://github.com/user/repo.git or git@github.com:user/repo.git
   const match = url.match(/\/([^/]+?)(?:\.git)?$/)
   return match ? match[1] : ''
 }
 
 function handleGithubUrlInput() {
-  // Auto-fill project name from URL if name is empty or was auto-filled
   const extracted = extractRepoName(githubUrl.value)
   if (extracted && (!projectName.value || projectName.value === extractRepoName(githubUrl.value.slice(0, -1)))) {
     projectName.value = extracted
   }
 }
 
+async function handlePickDirectory() {
+  if (!isMac || picking.value) return
+  pickerError.value = ''
+  picking.value = true
+  try {
+    const result = await pickProjectDirectory()
+    if (result?.dir_path) {
+      mode.value = 'local'
+      projectPath.value = result.dir_path
+    }
+  } catch (err) {
+    pickerError.value = err.message || 'Failed to pick directory'
+  } finally {
+    picking.value = false
+  }
+}
+
 function handleConfirm() {
-  if (!nameValid.value || creating.value) return
+  if (!canConfirm.value) return
   creating.value = true
+
+  if (mode.value === 'local') {
+    emit('confirm', {
+      mode: 'local',
+      name: resolvedProjectName.value,
+      dirPath: projectPath.value.trim(),
+    })
+    return
+  }
+
   emit('confirm', {
+    mode: 'github',
     name: projectName.value.trim(),
     githubUrl: githubUrl.value.trim(),
   })
@@ -101,53 +161,111 @@ onBeforeUnmount(() => {
       <div class="dialog">
         <h2 class="dialog-title">New Project</h2>
 
-        <div class="form-group">
-          <label class="form-label" for="github-url">
-            GitHub URL
-          </label>
-          <input
-            id="github-url"
-            v-model="githubUrl"
-            type="text"
-            class="form-input"
-            placeholder="https://github.com/user/repo.git"
-            @input="handleGithubUrlInput"
-          />
-          <div class="form-hint">Optional. Clone from a GitHub repository (supports private repos via local Git config).</div>
+        <div class="mode-switch">
+          <button
+            class="mode-btn"
+            :class="{ active: mode === 'github' }"
+            @click="mode = 'github'"
+          >
+            GitHub
+          </button>
+          <button
+            class="mode-btn"
+            :class="{ active: mode === 'local' }"
+            @click="mode = 'local'"
+          >
+            Local Folder
+          </button>
         </div>
 
-        <div class="form-group">
-          <label class="form-label" for="project-name">
-            Project Name <span class="required">*</span>
-          </label>
-          <input
-            id="project-name"
-            ref="nameInput"
-            v-model="projectName"
-            type="text"
-            class="form-input"
-            :class="{ 'form-input-error': nameError }"
-            placeholder="e.g. my-awesome-project"
-            @keydown.enter="handleConfirm"
-          />
-          <div v-if="nameError" class="form-error">{{ nameError }}</div>
-        </div>
+        <template v-if="mode === 'github'">
+          <div class="form-group">
+            <label class="form-label" for="github-url">
+              GitHub URL
+            </label>
+            <input
+              id="github-url"
+              ref="primaryInput"
+              v-model="githubUrl"
+              type="text"
+              class="form-input"
+              placeholder="https://github.com/user/repo.git"
+              @input="handleGithubUrlInput"
+            />
+            <div class="form-hint">Optional. Clone from a GitHub repository.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="project-name">
+              Project Name <span class="required">*</span>
+            </label>
+            <input
+              id="project-name"
+              v-model="projectName"
+              type="text"
+              class="form-input"
+              :class="{ 'form-input-error': nameError }"
+              placeholder="e.g. my-awesome-project"
+              @keydown.enter="handleConfirm"
+            />
+            <div v-if="nameError" class="form-error">{{ nameError }}</div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="form-group">
+            <label class="form-label" for="project-path">
+              Project Path <span class="required">*</span>
+            </label>
+            <div class="path-row">
+              <input
+                id="project-path"
+                ref="primaryInput"
+                v-model="projectPath"
+                type="text"
+                class="form-input"
+                :class="{ 'form-input-error': pathError || pickerError }"
+                placeholder="/Users/you/workspace/my-project"
+                @keydown.enter="handleConfirm"
+              />
+              <button
+                v-if="isMac"
+                class="btn-ghost path-picker-btn"
+                @click="handlePickDirectory"
+                :disabled="picking || creating"
+                type="button"
+              >
+                {{ picking ? 'Opening...' : 'Choose Folder' }}
+              </button>
+            </div>
+            <div class="form-hint">Use a full local path, or choose a folder with the macOS picker.</div>
+            <div v-if="pathError" class="form-error">{{ pathError }}</div>
+            <div v-else-if="pickerError" class="form-error">{{ pickerError }}</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Project Name</label>
+            <div class="readonly-value" :class="{ empty: !resolvedProjectName }">
+              {{ resolvedProjectName || 'Will be derived from the selected folder name' }}
+            </div>
+          </div>
+        </template>
 
         <div class="dialog-actions">
           <button
             class="btn-ghost"
             @click="handleCancel"
-            :disabled="creating"
+            :disabled="creating || picking"
           >
             Cancel
           </button>
           <button
             class="btn-primary"
             @click="handleConfirm"
-            :disabled="!nameValid || creating"
+            :disabled="!canConfirm"
           >
             <span v-if="creating" class="spinner"></span>
-            {{ creating ? (githubUrl ? 'Cloning...' : 'Creating...') : 'Create' }}
+            {{ creating ? (mode === 'github' ? (githubUrl ? 'Cloning...' : 'Creating...') : 'Opening...') : 'Create' }}
           </button>
         </div>
       </div>
@@ -167,7 +285,7 @@ onBeforeUnmount(() => {
 }
 
 .dialog {
-  width: 440px;
+  width: 520px;
   max-width: calc(100vw - 32px);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -183,6 +301,29 @@ onBeforeUnmount(() => {
   margin-bottom: 20px;
 }
 
+.mode-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.mode-btn {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.mode-btn.active {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
+}
+
 .form-group {
   margin-bottom: 16px;
 }
@@ -196,6 +337,20 @@ onBeforeUnmount(() => {
 
 .required {
   color: var(--red);
+}
+
+.path-row {
+  display: flex;
+  gap: 8px;
+}
+
+.path-row .form-input {
+  flex: 1;
+}
+
+.path-picker-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .form-input {
@@ -242,6 +397,22 @@ onBeforeUnmount(() => {
   margin-top: 4px;
 }
 
+.readonly-value {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  word-break: break-all;
+}
+
+.readonly-value.empty {
+  color: var(--text-muted);
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -257,10 +428,7 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast),
-    border-color var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
 .btn-ghost:hover:not(:disabled) {
@@ -285,10 +453,7 @@ onBeforeUnmount(() => {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition:
-    filter var(--transition-fast),
-    transform var(--transition-spring),
-    box-shadow var(--transition-fast);
+  transition: filter var(--transition-fast), transform var(--transition-spring), box-shadow var(--transition-fast);
   box-shadow: var(--shadow-sm);
 }
 

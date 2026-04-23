@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import re
+import sys
 from typing import Any, Awaitable, Callable
 
 from domain.shared.async_utils import safe_create_task
@@ -311,6 +312,29 @@ class ProjectApplicationService:
                     project.id, project.name, dir_path,
                 )
         return mappings
+
+    async def pick_directory(self) -> str:
+        if sys.platform != "darwin":
+            raise BusinessException("Directory picker is only supported on macOS", "UNSUPPORTED_PLATFORM")
+
+        proc = await asyncio.create_subprocess_exec(
+            "osascript",
+            "-e",
+            'POSIX path of (choose folder with prompt "Select project folder")',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err_msg = stderr.decode().strip() if stderr else "directory picker failed"
+            if "User canceled" in err_msg or "(-128)" in err_msg:
+                return ""
+            raise BusinessException(
+                f"Failed to pick directory: {err_msg}",
+                "DIRECTORY_PICK_FAILED",
+            )
+
+        return stdout.decode().strip()
 
     # ------------------------------------------------------------------
     # Agent / Plugin uninstall

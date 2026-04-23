@@ -1,6 +1,124 @@
 import { computed } from 'vue'
 import { useSession } from '@entities/session'
 
+const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
+
+function normalizePlanStatus(status) {
+  if (status === 'running') return 'in_progress'
+  if (status === 'done') return 'completed'
+  return status || 'pending'
+}
+
+function toTaskId(value) {
+  if (value == null || value === '') return ''
+  return String(value)
+}
+
+function parseToolResultContent(content) {
+  if (content == null) return null
+  if (Array.isArray(content) || typeof content === 'object') return content
+  if (typeof content === 'number') return content
+  if (typeof content !== 'string') return null
+
+  const trimmed = content.trim()
+  if (!trimmed) return null
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+}
+
+function normalizeTaskRecord(rawTask, fallback = {}) {
+  if (!rawTask || typeof rawTask !== 'object' || Array.isArray(rawTask)) return null
+
+  const id = toTaskId(rawTask.taskId ?? rawTask.task_id ?? rawTask.id ?? fallback.id)
+  if (!id) return null
+
+  return {
+    id,
+    subject: rawTask.subject || rawTask.content || fallback.subject || '',
+    status: normalizePlanStatus(rawTask.status || fallback.status || 'pending'),
+    description: rawTask.description || fallback.description || '',
+    activeForm: rawTask.activeForm || rawTask.active_form || fallback.activeForm || '',
+  }
+}
+
+function extractTaskRecords(payload) {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object') {
+    if (Array.isArray(payload.tasks)) return payload.tasks
+    if (Array.isArray(payload.items)) return payload.items
+    if (payload.taskId != null || payload.task_id != null || payload.id != null) return [payload]
+  }
+  return []
+}
+
+function buildPendingTask(input = {}, tempId) {
+  return {
+    id: tempId,
+    subject: input.subject || input.content || '',
+    status: normalizePlanStatus(input.status || 'pending'),
+    description: input.description || '',
+    activeForm: input.activeForm || '',
+  }
+}
+
+function upsertTask(tasks, order, taskId, patch) {
+  const prev = tasks[taskId] || {
+    id: taskId,
+    subject: '',
+    status: 'pending',
+    description: '',
+    activeForm: '',
+  }
+  tasks[taskId] = {
+    ...prev,
+    ...patch,
+    id: taskId,
+    status: normalizePlanStatus((patch && patch.status) || prev.status),
+  }
+  if (!order.includes(taskId)) order.push(taskId)
+}
+
+function replaceTaskId(tasks, order, oldId, newId, patch = {}) {
+  const prev = tasks[oldId] || {}
+  delete tasks[oldId]
+  const index = order.indexOf(oldId)
+  if (index !== -1) order.splice(index, 1, newId)
+  upsertTask(tasks, order, newId, { ...prev, ...patch, id: newId })
+}
+
+function buildTodoWriteTasks(messages, sessionRunning) {
+  let latestTodos = null
+
+  for (const msg of messages) {
+    if (msg.type !== 'assistant' || !msg.content?.blocks) continue
+    for (const block of msg.content.blocks) {
+      if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos) {
+        latestTodos = block.input.todos
+      }
+    }
+  }
+
+  if (!latestTodos) return []
+
+  return latestTodos.map((todo, i) => {
+    let todoStatus = normalizePlanStatus(todo.status || 'pending')
+    if (!sessionRunning && todoStatus === 'in_progress') {
+      todoStatus = 'completed'
+    }
+    return {
+      id: `plan-${i}`,
+      subject: todo.subject || todo.content || '',
+      status: todoStatus,
+      description: todo.description || '',
+      activeForm: todo.activeForm || '',
+    }
+  })
+}
+
 export function useTaskProgress() {
   const { messages, status } = useSession()
 
@@ -48,8 +166,6 @@ export function useTaskProgress() {
     }
 
     const all = Object.values(tasks)
-    // If session is no longer running, force-complete any still-running tasks
-    // (they won't receive a terminal notification if the stream broke)
     const sessionRunning = status.value === 'running'
     if (!sessionRunning) {
       for (const t of all) {
@@ -59,7 +175,6 @@ export function useTaskProgress() {
         }
       }
     }
-    // Running first (oldest first), then non-running (newest first)
     const running = all.filter(t => t.status === 'running').sort((a, b) => a.startTime - b.startTime)
     const done = all.filter(t => t.status !== 'running').sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
     return [...running, ...done]
@@ -78,38 +193,119 @@ export function useTaskProgress() {
 
   const hasActiveTasks = computed(() => taskCounts.value.running > 0)
 
-  // ── Plan tasks from TodoWrite tool calls ──────────────────
-
   const planTasks = computed(() => {
-    let latestTodos = null
+    const sessionRunning = status.value === 'running'
+    const fallbackTodos = buildTodoWriteTasks(messages.value, sessionRunning)
+
+    let hasTaskToolActivity = false
+    let tasks = {}
+    let order = []
+    const toolUseById = {}
+    const pendingCreatesByUseId = {}
 
     for (const msg of messages.value) {
-      if (msg.type !== 'assistant' || !msg.content?.blocks) continue
-      for (const block of msg.content.blocks) {
-        if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos) {
-          // TodoWrite sends the full current list each time — last call wins
-          latestTodos = block.input.todos
+      if (msg.type === 'assistant' && msg.content?.blocks) {
+        for (const block of msg.content.blocks) {
+          if (block.type !== 'tool_use') continue
+
+          if (TASK_TOOL_NAMES.has(block.name)) {
+            hasTaskToolActivity = true
+            if (block.id) toolUseById[block.id] = block
+          }
+
+          if (block.name === 'TaskCreate' && block.id) {
+            const tempId = `pending:${block.id}`
+            const pendingTask = buildPendingTask(block.input || {}, tempId)
+            pendingCreatesByUseId[block.id] = pendingTask
+            upsertTask(tasks, order, tempId, pendingTask)
+          }
+
+          if (block.name === 'TaskUpdate') {
+            const taskId = toTaskId(block.input?.taskId ?? block.input?.task_id)
+            if (!taskId) continue
+            upsertTask(tasks, order, taskId, {
+              subject: block.input?.subject,
+              status: block.input?.status,
+              description: block.input?.description,
+              activeForm: block.input?.activeForm,
+            })
+          }
+        }
+      }
+
+      if (msg.type === 'tool_result' && msg.content?.results) {
+        for (const result of msg.content.results) {
+          const toolUse = toolUseById[result.tool_use_id]
+          if (!toolUse || !TASK_TOOL_NAMES.has(toolUse.name)) continue
+
+          hasTaskToolActivity = true
+          const parsed = parseToolResultContent(result.content)
+
+          if (toolUse.name === 'TaskCreate') {
+            const pendingTask = pendingCreatesByUseId[result.tool_use_id]
+            let createdTask = normalizeTaskRecord(parsed, pendingTask)
+            if (!createdTask && pendingTask) {
+              const createdTaskId = toTaskId(parsed)
+              if (createdTaskId) {
+                createdTask = { ...pendingTask, id: createdTaskId }
+              }
+            }
+            if (pendingTask && createdTask) {
+              replaceTaskId(tasks, order, pendingTask.id, createdTask.id, createdTask)
+            }
+            continue
+          }
+
+          if (toolUse.name === 'TaskList') {
+            const listedTasks = extractTaskRecords(parsed)
+              .map(item => normalizeTaskRecord(item))
+              .filter(Boolean)
+
+            if (listedTasks.length > 0) {
+              const nextTasks = {}
+              const nextOrder = []
+              for (const task of listedTasks) {
+                nextTasks[task.id] = { ...(tasks[task.id] || {}), ...task }
+                nextOrder.push(task.id)
+              }
+              for (const existingId of order) {
+                if (!nextTasks[existingId] && tasks[existingId]) {
+                  nextTasks[existingId] = tasks[existingId]
+                  nextOrder.push(existingId)
+                }
+              }
+              tasks = nextTasks
+              order = nextOrder
+            }
+            continue
+          }
+
+          if (toolUse.name === 'TaskGet') {
+            const fetchedTask = normalizeTaskRecord(parsed)
+            if (fetchedTask) {
+              upsertTask(tasks, order, fetchedTask.id, fetchedTask)
+            }
+          }
         }
       }
     }
 
-    if (!latestTodos) return []
+    let finalTasks = hasTaskToolActivity
+      ? order.map(id => tasks[id]).filter(Boolean)
+      : fallbackTodos
 
-    const sessionRunning = status.value === 'running'
-    return latestTodos.map((todo, i) => {
-      let todoStatus = todo.status || 'pending'
-      // If session is no longer running, force-complete in_progress items
-      if (!sessionRunning && todoStatus === 'in_progress') {
-        todoStatus = 'completed'
-      }
-      return {
-        id: `plan-${i}`,
-        subject: todo.subject || todo.content || '',
-        status: todoStatus,
-        description: todo.description || '',
-        activeForm: todo.activeForm || '',
-      }
-    })
+    if (!hasTaskToolActivity && finalTasks.length === 0) return []
+    if (hasTaskToolActivity && finalTasks.length === 0) finalTasks = fallbackTodos
+
+    if (!sessionRunning) {
+      finalTasks = finalTasks.map(task => (
+        task.status === 'in_progress'
+          ? { ...task, status: 'completed' }
+          : task
+      ))
+    }
+
+    return finalTasks
   })
 
   const planTaskCounts = computed(() => {

@@ -1,7 +1,7 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
-defineProps({
+const props = defineProps({
   result: {
     type: Object,
     required: true,
@@ -9,6 +9,17 @@ defineProps({
 })
 
 const expanded = ref(false)
+
+const displayContent = computed(() => {
+  const content = props.result.content
+  if (content == null || content === '') return ''
+  if (typeof content === 'string') return content
+  try {
+    return JSON.stringify(content, null, 2)
+  } catch {
+    return String(content)
+  }
+})
 </script>
 
 <template>
@@ -32,7 +43,7 @@ const expanded = ref(false)
     </div>
     <div class="tool-result-content-wrapper">
       <div class="tool-result-content" v-if="result.content">
-        <pre>{{ result.content }}</pre>
+        <pre>{{ displayContent }}</pre>
       </div>
     </div>
   </div>

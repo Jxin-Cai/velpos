@@ -103,12 +103,38 @@ export function useSessionList() {
     }
   }
 
-  async function handleCreate({ name, githubUrl }) {
-    // Create a new project, which creates the project directory
+  async function handleCreate(payload) {
+    if (payload?.mode === 'local') {
+      const dirPath = payload.dirPath?.trim()
+      if (!dirPath) return
+
+      const ensured = await ensureProjectsByDirs([dirPath])
+      const projectId = ensured.mappings?.[dirPath]
+      if (!projectId) {
+        throw new Error('Failed to create project from local path')
+      }
+
+      const projectsData = await listProjects()
+      setProjects(projectsData.projects || [])
+      const project = (projectsData.projects || []).find(p => p.id === projectId)
+      if (!project) {
+        throw new Error('Created project not found after refresh')
+      }
+
+      const session = await createSession({
+        projectId: project.id,
+        projectDir: project.dir_path || dirPath,
+      })
+      addSession({ ...session, source: 'velpos' })
+      setCurrentProjectId(project.id)
+      switchSession(session.session_id)
+      return
+    }
+
+    const { name, githubUrl } = payload
     const project = await createProject(name, githubUrl || '')
     addProject(project)
 
-    // Create a session in the new project
     const session = await createSession({
       projectId: project.id,
       projectDir: project.dir_path || '',

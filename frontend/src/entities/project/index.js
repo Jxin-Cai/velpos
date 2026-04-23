@@ -6,6 +6,7 @@ export {
   deleteProject,
   reorderProjects,
   ensureProjectsByDirs,
+  pickProjectDirectory,
   initPlugin,
   completePluginInit,
   resetPlugin,

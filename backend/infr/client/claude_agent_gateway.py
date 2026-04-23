@@ -77,6 +77,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._is_im_bound_fn = fn
 
     @staticmethod
+    def _normalize_tool_result_content(content: Any) -> Any:
+        if content is None or isinstance(content, (str, list, dict, int, float, bool)):
+            return content
+        return str(content)[:500]
+
+    @staticmethod
     def _create_stderr_collector() -> tuple[list[str], "Callable[[str], None]"]:
         """Create a stderr line collector and its callback."""
         lines: list[str] = []
@@ -777,7 +783,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                             {
                                 "type": "tool_result",
                                 "tool_use_id": getattr(block, "tool_use_id", ""),
-                                "content": str(getattr(block, "content", ""))[:500],
+                                "content": ClaudeAgentGateway._normalize_tool_result_content(getattr(block, "content", None)),
                                 "is_error": getattr(block, "is_error", False),
                             }
                         )
@@ -819,7 +825,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                         results.append(
                             {
                                 "tool_use_id": getattr(item, "tool_use_id", ""),
-                                "content": str(getattr(item, "content", ""))[:500],
+                                "content": ClaudeAgentGateway._normalize_tool_result_content(getattr(item, "content", None)),
                                 "is_error": getattr(item, "is_error", False),
                             }
                         )
@@ -827,7 +833,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                         results.append(
                             {
                                 "tool_use_id": item.get("tool_use_id", ""),
-                                "content": str(item.get("content", ""))[:500],
+                                "content": ClaudeAgentGateway._normalize_tool_result_content(item.get("content")),
                                 "is_error": item.get("is_error", False),
                             }
                         )

@@ -20,6 +20,7 @@ from ohs.http.dto.project_dto import (
     GitCheckoutRequest,
     GitCheckoutResponse,
     InitPluginRequest,
+    PickDirectoryResponse,
     ProjectDetailResponse,
     ProjectListResponse,
     ProjectResponse,
@@ -93,6 +94,14 @@ async def ensure_projects_by_dirs(
 ) -> ApiResponse[EnsureProjectsResponse]:
     mappings = await service.ensure_projects_for_dirs(request.dir_paths)
     return ApiResponse.success(EnsureProjectsResponse(mappings=mappings))
+
+
+@router.post("/pick-directory", summary="Pick a local directory")
+async def pick_directory(
+    service: ServiceDep,
+) -> ApiResponse[PickDirectoryResponse]:
+    dir_path = await service.pick_directory()
+    return ApiResponse.success(PickDirectoryResponse(dir_path=dir_path))
 
 
 @router.post("/{project_id}/init-plugin", summary="Initialize plugin for project")

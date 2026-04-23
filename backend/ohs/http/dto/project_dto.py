@@ -83,6 +83,10 @@ class EnsureProjectsResponse(BaseModel):
     mappings: dict[str, str] = Field(description="Mapping of dir_path to project_id")
 
 
+class PickDirectoryResponse(BaseModel):
+    dir_path: str = Field(description="Selected directory path")
+
+
 class GitBranchesResponse(BaseModel):
     current: str
     branches: list[str]

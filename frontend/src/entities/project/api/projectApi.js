@@ -24,6 +24,10 @@ export function ensureProjectsByDirs(dirPaths) {
   return post('/projects/ensure-by-dirs', { dir_paths: dirPaths })
 }
 
+export function pickProjectDirectory() {
+  return post('/projects/pick-directory', {})
+}
+
 export function initPlugin(projectId, pluginType, sessionId) {
   return post(`/projects/${projectId}/init-plugin`, { plugin_type: pluginType, session_id: sessionId })
 }

@@ -148,7 +148,7 @@ def _convert_user_message(
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     results.append({
                         "tool_use_id": block.get("tool_use_id", ""),
-                        "content": str(block.get("content", "")),
+                        "content": block.get("content"),
                         "is_error": block.get("is_error", False),
                     })
             pf_messages.append(Message.create(
@@ -201,7 +201,7 @@ def _convert_assistant_message(
                 blocks.append({
                     "type": "tool_result",
                     "tool_use_id": block.get("tool_use_id", ""),
-                    "content": str(block.get("content", "")),
+                    "content": block.get("content"),
                     "is_error": block.get("is_error", False),
                 })
 
