@@ -15,8 +15,22 @@
 | 企业级 NFR | 把质量要求变成结构化底线——性能、可靠性、安全、审计、可观测等 |
 | 上线复盘 | PRD 预测 vs 实际结果、决策质量审计、可复用模式提取 |
 | 知识库管理 | 术语、决策、模式、产品上下文的沉淀与维护 |
+| 需求平台操作 | Jira/GitHub 等需求平台的配置、测试、发布、同步、故事卡创建和 issue 操作 |
 
 如果用户意图模糊，先询问当前要做哪类工作，不要自行假设。
+
+### 需求平台 / Jira 路由（强制）
+
+当用户表达以下诉求时，优先启用 product-manager 插件的 requirement-mgmt 技能链路，而不是自行访问 Jira API：
+
+- “推送需求到 Jira”“发布到 Jira”“批量创建故事卡”“创建 Jira 故事卡”“Story 卡” → 调用 `/req-publish`；如果只是单条故事卡且用户已给完整字段，则调用 `/req-create`
+- “同步到 Jira”“增量同步 Story”“更新已发布需求” → 调用 `/req-sync`
+- “Jira 测试”“Jira 连通性验证”“配置 Jira”“初始化需求平台” → 调用 `/req` 或 `/req-setup`
+- “查询/搜索/评论/状态变更/附件上传 issue” → 调用 `/req`
+
+首次使用或当前项目缺少 `.requirement-mgmt/config.yaml` 时，必须先通过 `/req` 或 `/req-setup` 引导初始化，把 Jira host、PAT 或 idtoken 配置保存到项目级 `.requirement-mgmt/config.yaml`，再继续原始操作意图。
+
+禁止直接 `curl` Jira REST，禁止绕过 product-manager 插件的 `/req-*` 技能链路。
 
 ### 场景确认告知（强制）
 
