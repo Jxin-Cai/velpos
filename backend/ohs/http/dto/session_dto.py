@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from domain.session.model.session import Session
+from domain.session.model.session_audit_event import SessionAuditEvent
 from ohs.assembler.session_assembler import SessionAssembler
 
 _DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-opus-4-6")
@@ -147,3 +148,50 @@ class SessionDetailResponse(BaseModel):
             updated_time=summary["updated_time"],
             messages=[SessionAssembler.message_to_dict(msg) for msg in session.messages],
         )
+
+
+class SessionArtifactResponse(BaseModel):
+    id: str
+    path: str
+    label: str
+    source_message_index: int
+    message_type: str
+
+
+class SessionArtifactListResponse(BaseModel):
+    artifacts: list[SessionArtifactResponse]
+
+    @classmethod
+    def from_dict_list(cls, artifacts: list[dict[str, Any]]) -> SessionArtifactListResponse:
+        return cls(artifacts=[SessionArtifactResponse(**item) for item in artifacts])
+
+
+class SessionAuditEventResponse(BaseModel):
+    id: str
+    session_id: str
+    event_type: str
+    actor: str
+    payload: dict[str, Any]
+    created_time: str
+
+    @classmethod
+    def from_domain(cls, event: SessionAuditEvent) -> SessionAuditEventResponse:
+        return cls(
+            id=event.id,
+            session_id=event.session_id,
+            event_type=event.event_type,
+            actor=event.actor,
+            payload=event.payload,
+            created_time=event.created_time.isoformat(),
+        )
+
+
+class SessionAuditEventListResponse(BaseModel):
+    events: list[SessionAuditEventResponse]
+
+    @classmethod
+    def from_domain_list(
+        cls,
+        events: list[SessionAuditEvent],
+    ) -> SessionAuditEventListResponse:
+        return cls(events=[SessionAuditEventResponse.from_domain(e) for e in events])

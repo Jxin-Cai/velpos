@@ -10,5 +10,6 @@ export {
   renameSession,
   importClaudeSession,
   listModels,
+  listSessionArtifacts,
   compactSession,
 } from './api/sessionApi'

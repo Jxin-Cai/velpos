@@ -101,6 +101,7 @@ async def websocket_endpoint(
 
         # Include effective permission mode so frontend can sync
         session_summary["permission_mode"] = gateway.get_permission_mode(session_id)
+        session_summary["waiting_for_slot"] = service.is_waiting_for_slot(session_id)
 
         await websocket.send_json({
             "event": "connected",
@@ -170,7 +171,7 @@ async def websocket_endpoint(
                     )
 
                     if not current_session.is_running:
-                        task = asyncio.create_task(service.run_claude_query(command))
+                        task = asyncio.create_task(service.submit_query(command))
                         task.add_done_callback(
                             lambda t: t.exception() and logger.error(
                                 "run_claude_query task crashed: %s", t.exception()
@@ -178,7 +179,7 @@ async def websocket_endpoint(
                         )
                     else:
                         # Queue for after current query completes (latest-wins)
-                        service.queue_message(session_id, command)
+                        await service.queue_message(session_id, command)
                         await websocket.send_json({
                             "event": "message_queued",
                             "prompt": prompt,
@@ -208,6 +209,7 @@ async def websocket_endpoint(
                         summary["git_branch"] = branch_info.get("current", "")
                     except Exception:
                         pass
+                summary["waiting_for_slot"] = service.is_waiting_for_slot(session_id)
                 await websocket.send_json({
                     "event": "status",
                     "session": summary,
@@ -227,6 +229,7 @@ async def websocket_endpoint(
                                 summary["git_branch"] = branch_info.get("current", "")
                             except Exception:
                                 pass
+                        summary["waiting_for_slot"] = service.is_waiting_for_slot(session_id)
                         await websocket.send_json({
                             "event": "status",
                             "session": summary,

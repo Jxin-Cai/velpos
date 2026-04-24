@@ -2,7 +2,7 @@
 import { ref, computed, inject, onMounted, onUnmounted, watch } from 'vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useDialogManager } from '@shared/lib/useDialogManager'
-import { useSession, listModels } from '@entities/session'
+import { useSession, listModels, listSessionArtifacts } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, useSendMessage } from '@features/send-message'
 import { CancelButton, useCancelQuery } from '@features/cancel-query'
@@ -19,12 +19,23 @@ import { useCompactContext } from '@features/compact-context'
 import { useSessionStats } from '@features/send-message/model/useSessionStats'
 import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 
-const { session, messages, status, queued, currentSessionId, queryHistory, setCurrentSessionId, updateSession, setError } = useSession()
+const { session, messages, status, queued, waitingForSlot, recovery, currentSessionId, queryHistory, setCurrentSessionId, updateSession, setError } = useSession()
 const { projects, updateProjectInList } = useProject()
 
 const wsConnection = inject('wsConnection')
 
 const isRunning = computed(() => status.value === 'running')
+const recoveryPending = computed(() => recovery.value?.pending_request || null)
+const recoveryQueued = computed(() => recovery.value?.queued_command || null)
+const isCancelRequested = computed(() => Boolean(recovery.value?.cancel_requested))
+const showRecoveryHint = computed(() => Boolean(recoveryPending.value || isCancelRequested.value || (recoveryQueued.value && !isRunning.value)))
+const recoveryHintText = computed(() => {
+  if (isCancelRequested.value) return 'Cancellation is being restored'
+  if (recoveryPending.value?.interaction_type === 'permission') return 'Waiting for permission response'
+  if (recoveryPending.value?.interaction_type === 'user_choice') return 'Waiting for your answer'
+  if (recoveryQueued.value) return 'Queued prompt restored'
+  return ''
+})
 const debugMode = ref(localStorage.getItem('pf_debug_mode') === 'true')
 
 // Current project for this session
@@ -194,6 +205,8 @@ watch(currentSessionId, (newId) => {
     fetchImStatus(newId)
     fetchImChannels()
     invalidateCmdCache()
+    showArtifacts.value = false
+    artifacts.value = []
   }
 })
 
@@ -209,7 +222,32 @@ function handleImPrompt(prompt) {
 
 // History popover
 const showHistory = ref(false)
+const showArtifacts = ref(false)
+const artifacts = ref([])
+const artifactLoading = ref(false)
 useDialog('history', showHistory)
+
+async function handleArtifactsClick() {
+  showArtifacts.value = !showArtifacts.value
+  showHistory.value = false
+  showModelMenu.value = false
+  showPermMenu.value = false
+  if (!showArtifacts.value || !currentSessionId.value) return
+  artifactLoading.value = true
+  try {
+    const res = await listSessionArtifacts(currentSessionId.value)
+    artifacts.value = res?.artifacts || []
+  } catch {
+    artifacts.value = []
+  } finally {
+    artifactLoading.value = false
+  }
+}
+
+function handleArtifactOpen(path) {
+  openPath(path)
+  showArtifacts.value = false
+}
 
 function formatDuration(ms) {
   if (!ms) return '-'
@@ -475,6 +513,7 @@ function handleClickOutside() {
   showProjectCopyMenu.value = false
   showBranchMenu.value = false
   showTaskPanel.value = false
+  showArtifacts.value = false
 }
 
 // Plugin management
@@ -518,6 +557,14 @@ function formatMaxTokens(n) {
     <MessageList :messages="displayMessages">
       <template #footer>
         <ThinkingIndicator :visible="isRunning" />
+        <div v-if="showRecoveryHint" class="recovery-indicator">
+          <span class="recovery-badge">Recovered</span>
+          <span>{{ recoveryHintText }}</span>
+        </div>
+        <div v-if="waitingForSlot" class="queue-indicator">
+          <span class="queue-dot"></span>
+          Waiting for an available execution slot
+        </div>
         <div v-if="queued && isRunning" class="queue-indicator">
           <span class="queue-dot"></span>
           Your message is queued — will run after current task
@@ -841,6 +888,44 @@ function formatMaxTokens(n) {
             </template>
             <span v-if="toolStats.length > 5" class="tool-more">+{{ toolStats.length - 5 }}</span>
           </span>
+          <div class="dropdown-wrapper" @click.stop>
+            <button
+              class="dash-chip dash-artifacts"
+              :disabled="!currentSessionId"
+              @click="handleArtifactsClick"
+              title="Session artifacts"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                <line x1="12" y1="22.08" x2="12" y2="12"/>
+              </svg>
+              Artifacts
+              <span v-if="artifacts.length" class="tool-count">{{ artifacts.length }}</span>
+            </button>
+            <Transition name="dropdown-fade">
+            <div v-if="showArtifacts" class="artifact-panel">
+              <div class="artifact-header">
+                <span class="history-title">Artifacts</span>
+              </div>
+              <div class="artifact-list">
+                <div v-if="artifactLoading" class="dropdown-empty">Loading...</div>
+                <div v-else-if="artifacts.length === 0" class="dropdown-empty">No artifacts found</div>
+                <button
+                  v-else
+                  v-for="artifact in artifacts"
+                  :key="artifact.id"
+                  class="artifact-item"
+                  :title="artifact.path"
+                  @click="handleArtifactOpen(artifact.path)"
+                >
+                  <span class="artifact-name">{{ artifact.label }}</span>
+                  <span class="artifact-path">{{ artifact.path }}</span>
+                </button>
+              </div>
+            </div>
+            </Transition>
+          </div>
           <template v-if="taskCounts.total > 0 || hasPlanTasks">
             <div class="dropdown-wrapper" @click.stop>
               <button
@@ -902,6 +987,27 @@ function formatMaxTokens(n) {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.recovery-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.recovery-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .queue-indicator {
@@ -1193,6 +1299,74 @@ function formatMaxTokens(n) {
   color: var(--text-muted);
   margin-top: 2px;
   padding-left: 34px;
+}
+
+.artifact-panel {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  width: 360px;
+  max-height: 320px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.artifact-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.artifact-list {
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.artifact-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.artifact-item:hover {
+  background: var(--bg-hover);
+}
+
+.artifact-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.artifact-path {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-artifacts {
+  color: var(--purple);
+  background: var(--purple-dim);
 }
 
 /* Session Dashboard */

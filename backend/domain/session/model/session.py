@@ -4,6 +4,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from domain.session.model.message import Message
 from domain.session.model.session_status import SessionStatus
@@ -23,6 +24,9 @@ class Session:
     _name: str = ""
     _sdk_session_id: str = ""
     _last_input_tokens: int = 0
+    _pending_request_context: dict[str, Any] | None = None
+    _queued_command: dict[str, Any] | None = None
+    _cancel_requested: bool = False
     _updated_time: datetime | None = None
 
     @property
@@ -71,6 +75,23 @@ class Session:
         return self._last_input_tokens
 
     @property
+    def pending_request_context(self) -> dict[str, Any] | None:
+        return dict(self._pending_request_context) if self._pending_request_context else None
+
+    @property
+    def queued_command(self) -> dict[str, Any] | None:
+        if self._queued_command is None:
+            return None
+        return {
+            "prompt": self._queued_command.get("prompt", ""),
+            "image_paths": list(self._queued_command.get("image_paths", [])),
+        }
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested
+
+    @property
     def updated_time(self) -> datetime | None:
         return self._updated_time
 
@@ -116,6 +137,9 @@ class Session:
             _name="",
             _sdk_session_id="",
             _last_input_tokens=0,
+            _pending_request_context=None,
+            _queued_command=None,
+            _cancel_requested=False,
             _updated_time=datetime.now(),
         )
 
@@ -133,6 +157,9 @@ class Session:
         name: str = "",
         sdk_session_id: str = "",
         last_input_tokens: int = 0,
+        pending_request_context: dict[str, Any] | None = None,
+        queued_command: dict[str, Any] | None = None,
+        cancel_requested: bool = False,
         updated_time: datetime | None = None,
     ) -> Session:
         """Reconstitute a Session from persisted data.
@@ -153,6 +180,12 @@ class Session:
             _name=name,
             _sdk_session_id=sdk_session_id,
             _last_input_tokens=last_input_tokens,
+            _pending_request_context=dict(pending_request_context) if pending_request_context else None,
+            _queued_command={
+                "prompt": queued_command.get("prompt", ""),
+                "image_paths": list(queued_command.get("image_paths", [])),
+            } if queued_command else None,
+            _cancel_requested=cancel_requested,
             _updated_time=updated_time,
         )
 
@@ -246,6 +279,34 @@ class Session:
     def update_last_input_tokens(self, input_tokens: int) -> None:
         """Update the last query's input_tokens (reflects current context window size)."""
         self._last_input_tokens = input_tokens
+        self._updated_time = datetime.now()
+
+    def update_pending_request_context(self, context: dict[str, Any] | None) -> None:
+        self._pending_request_context = dict(context) if context else None
+        self._updated_time = datetime.now()
+
+    def clear_pending_request_context(self) -> None:
+        self._pending_request_context = None
+        self._updated_time = datetime.now()
+
+    def update_queued_command(self, prompt: str, image_paths: list[str] | None = None) -> None:
+        self._queued_command = {
+            "prompt": prompt,
+            "image_paths": list(image_paths or []),
+        }
+        self._updated_time = datetime.now()
+
+    def clear_queued_command(self) -> None:
+        self._queued_command = None
+        self._updated_time = datetime.now()
+
+    def mark_cancel_requested(self) -> None:
+        self._cancel_requested = True
+        self._updated_time = datetime.now()
+
+    def clear_cancel_requested(self) -> None:
+        self._cancel_requested = False
+        self._updated_time = datetime.now()
 
     def clear_context(self) -> None:
         """清空会话上下文，完全重置到初始状态。
@@ -273,15 +334,21 @@ class Session:
         self._continue_conversation = False
         self._sdk_session_id = ""
         self._last_input_tokens = 0
+        self._pending_request_context = None
+        self._queued_command = None
+        self._cancel_requested = False
         self._status = SessionStatus.IDLE
+        self._updated_time = datetime.now()
 
     def rename(self, name: str) -> None:
         """Rename this session."""
         self._name = name
+        self._updated_time = datetime.now()
 
     def change_model(self, model: str) -> None:
         """Change the model for this session."""
         self._model = model
+        self._updated_time = datetime.now()
 
     def initialize_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Set absolute usage values for resume scenarios.

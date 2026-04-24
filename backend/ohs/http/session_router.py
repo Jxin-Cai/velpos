@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from application.session.command.clear_context_command import ClearContextCommand
 from application.session.command.create_session_command import CreateSessionCommand
@@ -16,6 +16,8 @@ from ohs.http.dto.session_dto import (
     CreateSessionRequest,
     ImportClaudeSessionRequest,
     RenameSessionRequest,
+    SessionArtifactListResponse,
+    SessionAuditEventListResponse,
     SessionDetailResponse,
     SessionListResponse,
     SessionResponse,
@@ -98,6 +100,25 @@ async def get_session(
 ) -> ApiResponse[SessionDetailResponse]:
     session = await service.get_session(session_id)
     return ApiResponse.success(SessionDetailResponse.from_domain(session))
+
+
+@router.get("/{session_id}/artifacts", summary="List session artifacts")
+async def list_session_artifacts(
+    session_id: str,
+    service: ServiceDep,
+) -> ApiResponse[SessionArtifactListResponse]:
+    artifacts = await service.list_artifacts(session_id)
+    return ApiResponse.success(SessionArtifactListResponse.from_dict_list(artifacts))
+
+
+@router.get("/{session_id}/audit-events", summary="List session audit events")
+async def list_session_audit_events(
+    session_id: str,
+    service: ServiceDep,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> ApiResponse[SessionAuditEventListResponse]:
+    events = await service.list_audit_events(session_id, limit=limit)
+    return ApiResponse.success(SessionAuditEventListResponse.from_domain_list(events))
 
 
 @router.delete("/{session_id}", summary="Delete session")

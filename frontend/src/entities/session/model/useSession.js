@@ -65,6 +65,16 @@ const queued = computed(() => {
   return state ? state.queued : false
 })
 
+const waitingForSlot = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return Boolean(state?.session?.waiting_for_slot)
+})
+
+const recovery = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state?.session?.recovery || null
+})
+
 // ── Targeted APIs (write to specific session by ID) ──
 
 function updateSessionFor(sessionId, data) {
@@ -136,7 +146,7 @@ function setStatusFor(sessionId, s) {
   const state = _ensureState(sessionId)
   if (!state) return
   state.status = s
-  if (s === 'running' || s === 'idle') {
+  if (s === 'idle') {
     state.queued = false
   }
 }
@@ -227,6 +237,8 @@ export function useSession() {
     status,
     error,
     queued,
+    waitingForSlot,
+    recovery,
     queryHistory,
     // Global state
     sessions,

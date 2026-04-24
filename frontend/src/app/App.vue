@@ -107,6 +107,12 @@ provide('wsConnection', wsConnection)
 provide('wsConnections', _connections) // 提供整个连接池给全局快捷键拦截器
 provide('switchSession', switchSession) // 提供session切换函数
 
+function syncRecoveryState(sessionId, sessionData) {
+  const hasQueued = Boolean(sessionData?.recovery?.queued_command)
+  const status = sessionData?.status || 'idle'
+  setQueuedFor(sessionId, hasQueued && status === 'running')
+}
+
 function setupUnifiedHandler(connection, sessionId) {
   connection.onEvent((data) => {
     const isCurrent = (currentSessionId.value === sessionId)
@@ -125,6 +131,7 @@ function setupUnifiedHandler(connection, sessionId) {
         updateSessionFor(sessionId, data.session)
         if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
         setStatusFor(sessionId, data.session.status || 'idle')
+        syncRecoveryState(sessionId, data.session)
         updateSessionInList(sessionId, data.session)
         if (data.session.status === 'running') {
           markWorking(sessionId, { sessionName: sess?.name || data.session.name || '', projectName: proj?.name || '' })
@@ -174,6 +181,10 @@ function setupUnifiedHandler(connection, sessionId) {
         setQueuedFor(sessionId, true)
         break
 
+      case 'resource_waiting':
+        updateSessionFor(sessionId, { waiting_for_slot: true })
+        break
+
       case 'user_choice_request':
         addMessageTo(sessionId, {
           type: 'interactive',
@@ -220,6 +231,8 @@ function setupUnifiedHandler(connection, sessionId) {
         updateSessionFor(sessionId, data.session)
         if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
         setStatusFor(sessionId, data.session.status || 'idle')
+        updateSessionFor(sessionId, { waiting_for_slot: false })
+        setQueuedFor(sessionId, false)
         updateSessionInList(sessionId, data.session)
         markDone(sessionId)
         if (isCurrent) {
@@ -236,7 +249,11 @@ function setupUnifiedHandler(connection, sessionId) {
           delete sessionUpdate.git_branch
         }
         updateSessionFor(sessionId, sessionUpdate)
+        if (data.session.status === 'running' || data.session.status === 'idle') {
+          updateSessionFor(sessionId, { waiting_for_slot: false })
+        }
         setStatusFor(sessionId, data.session.status || 'idle')
+        syncRecoveryState(sessionId, data.session)
         updateSessionInList(sessionId, data.session)
         break
       }

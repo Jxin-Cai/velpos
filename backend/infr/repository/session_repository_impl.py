@@ -92,6 +92,9 @@ class SessionRepositoryImpl(SessionRepository):
             name=session.name,
             sdk_session_id=session.sdk_session_id,
             last_input_tokens=session.last_input_tokens,
+            pending_request_context_json=SessionRepositoryImpl._serialize_json_field(session.pending_request_context),
+            queued_command_json=SessionRepositoryImpl._serialize_json_field(session.queued_command),
+            cancel_requested=1 if session.cancel_requested else 0,
         )
 
     @staticmethod
@@ -113,8 +116,23 @@ class SessionRepositoryImpl(SessionRepository):
             name=model.name,
             sdk_session_id=model.sdk_session_id,
             last_input_tokens=model.last_input_tokens,
+            pending_request_context=SessionRepositoryImpl._deserialize_json_field(model.pending_request_context_json),
+            queued_command=SessionRepositoryImpl._deserialize_json_field(model.queued_command_json),
+            cancel_requested=model.cancel_requested == 1,
             updated_time=model.updated_time,
         )
+
+    @staticmethod
+    def _serialize_json_field(value: dict[str, Any] | None) -> str:
+        if not value:
+            return ""
+        return json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _deserialize_json_field(json_str: str) -> dict[str, Any] | None:
+        if not json_str:
+            return None
+        return json.loads(json_str)
 
     @staticmethod
     def _serialize_messages(messages: list[Message]) -> str:

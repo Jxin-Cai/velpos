@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, String, SmallInteger
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.dialects.mysql import MEDIUMTEXT, TEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infr.config.base import Base
@@ -47,6 +47,15 @@ class SessionModel(Base):
     )
     last_input_tokens: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0",
+    )
+    pending_request_context_json: Mapped[str] = mapped_column(
+        MEDIUMTEXT, nullable=True,
+    )
+    queued_command_json: Mapped[str] = mapped_column(
+        TEXT, nullable=True,
+    )
+    cancel_requested: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default="0",
     )
     created_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now,
