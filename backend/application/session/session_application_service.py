@@ -258,6 +258,21 @@ class SessionApplicationService:
             "recovery": SessionApplicationService._recovery_to_dict(session),
         }
 
+    async def _refresh_context_usage(self, session: Session) -> bool:
+        context_usage = await self._claude_agent_gateway.get_context_usage(session.session_id)
+        if not context_usage:
+            return False
+        total_tokens = context_usage.get("total_tokens", 0)
+        if total_tokens <= 0:
+            return False
+        session.update_last_input_tokens(total_tokens)
+        logger.info(
+            "[session=%s] live context usage: %d tokens",
+            session.session_id,
+            total_tokens,
+        )
+        return True
+
     async def create_session(self, command: CreateSessionCommand) -> Session:
         """Create a new Claude Code interaction session.
 
@@ -573,6 +588,8 @@ class SessionApplicationService:
                     await self._consume_message_stream(session, msg_stream)
                 else:
                     raise
+
+            await self._refresh_context_usage(session)
 
             # If cancelled during stream consumption, skip normal completion
             if command.session_id in self._cancelled_sessions:
@@ -1237,13 +1254,8 @@ class SessionApplicationService:
 
             session.complete_compact(messages, usage)
 
-            # /compact's input_tokens reflects the OLD context size before
-            # compaction.  We cannot accurately measure the new context size
-            # without sending a real query (which would consume tokens and
-            # pollute history).  Instead, estimate: compacted context is
-            # roughly 10-20% of the original.  Use 15% as a reasonable middle
-            # ground so the progress bar gives useful feedback.
-            if compact_usage["input_tokens"] > 0:
+            refreshed = await self._refresh_context_usage(session)
+            if not refreshed and compact_usage["input_tokens"] > 0:
                 estimated_post = int(compact_usage["input_tokens"] * 0.15)
                 session.update_last_input_tokens(estimated_post)
                 logger.info(
