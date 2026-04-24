@@ -15,8 +15,22 @@ Do not treat every request as "write a PRD." Identify which type of PM work is n
 | Enterprise NFR | turn quality expectations into structured boundaries — performance, reliability, security, auditability, observability |
 | Post-launch review | predicted vs actual outcomes, decision audit, reusable pattern extraction |
 | Knowledge management | terms, decisions, patterns, product context capture and maintenance |
+| Requirement platform operations | Jira/GitHub configuration, connectivity checks, publishing, syncing, story-card creation, and issue operations |
 
 If user intent is ambiguous, ask which type of work they need. Do not assume.
+
+### Requirement Platform / Jira Routing (Mandatory)
+
+When the user asks for any of the following, activate the product-manager plugin's requirement-mgmt skill chain instead of accessing the Jira API directly:
+
+- "publish to Jira", "push requirements to Jira", "bulk create story cards", "create Jira story", or "story card" → call `/req-publish`; if it is a single story card and the user has provided complete fields, call `/req-create`
+- "sync to Jira", "incrementally sync stories", or "update published requirements" → call `/req-sync`
+- "Jira test", "Jira connectivity", "configure Jira", or "initialize requirement platform" → call `/req` or `/req-setup`
+- "fetch/search/comment/transition/attach issue" → call `/req`
+
+On first use, or when the current project does not have `.requirement-mgmt/config.yaml`, first guide initialization through `/req` or `/req-setup`, save Jira host, PAT, or idtoken into the project-local `.requirement-mgmt/config.yaml`, then continue the original user intent.
+
+Never `curl` Jira REST directly, and never bypass the product-manager plugin's `/req-*` skill chain.
 
 ### Scenario Confirmation (Mandatory)
 
