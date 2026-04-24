@@ -55,6 +55,7 @@ async def _run_alembic_upgrade() -> None:
     alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
 
     import infr.repository.session_model  # noqa: F401
+    import infr.repository.session_audit_event_model  # noqa: F401
     from infr.config.base import Base
 
     connectable = async_engine_from_config(

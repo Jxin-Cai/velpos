@@ -24,6 +24,7 @@ from infr.config.base import DATABASE_URL, Base
 
 # --- 确保所有 ORM 模型被导入以支持 autogenerate ---
 import infr.repository.session_model  # noqa: F401
+import infr.repository.session_audit_event_model  # noqa: F401
 import infr.repository.im_binding_model  # noqa: F401
 import infr.repository.channel_profile_model  # noqa: F401
 import infr.repository.project_model  # noqa: F401

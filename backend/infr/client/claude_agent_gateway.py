@@ -55,6 +55,8 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._pending_user_responses: dict[str, asyncio.Future] = {}
         # session_id -> pending request context (questions list for AskUserQuestion)
         self._pending_request_context: dict[str, dict[str, Any]] = {}
+        # callback for persisting pending request context
+        self._persist_pending_request_context_fn: Any = None
         # session_id -> last activity timestamp
         self._last_activity: dict[str, float] = {}
         # session_id -> asyncio.TimerHandle for scheduled idle disconnect
@@ -75,6 +77,26 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     def set_is_im_bound_fn(self, fn: Any) -> None:
         """Set the callback to check if a session has an active IM binding."""
         self._is_im_bound_fn = fn
+
+    def set_persist_pending_request_context_fn(self, fn: Any) -> None:
+        """Set the callback for persisting pending request context."""
+        self._persist_pending_request_context_fn = fn
+
+    async def _persist_pending_request_context(
+        self,
+        session_id: str,
+        context: dict[str, Any] | None,
+    ) -> None:
+        if not self._persist_pending_request_context_fn:
+            return
+        try:
+            await self._persist_pending_request_context_fn(session_id, context)
+        except Exception:
+            logger.warning(
+                "persist pending request context failed: session=%s",
+                session_id,
+                exc_info=True,
+            )
 
     @staticmethod
     def _normalize_tool_result_content(content: Any) -> Any:
@@ -367,6 +389,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         if timer is not None:
             timer.cancel()
         fut = self._pending_user_responses.pop(session_id, None)
+        self._pending_request_context.pop(session_id, None)
         if fut and not fut.done():
             fut.cancel()
 
@@ -419,6 +442,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     "questions": tool_input.get("questions", []) if tool_name == "AskUserQuestion" else [],
                     "tool_input": str(tool_input)[:500] if tool_name != "AskUserQuestion" else "",
                 }
+                pending_context = dict(self._pending_request_context[session_id])
+
+            await self._persist_pending_request_context(session_id, pending_context)
 
             # Broadcast to WS clients
             await self._broadcast_fn(session_id, event_data)
@@ -428,8 +454,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 response = await asyncio.wait_for(fut, timeout=300)
             except asyncio.TimeoutError:
                 logger.warning("can_use_tool timeout: session=%s, tool=%s", session_id, tool_name)
-                self._pending_user_responses.pop(session_id, None)
-                self._pending_request_context.pop(session_id, None)
                 return PermissionResultDeny(message="User response timeout")
             except asyncio.CancelledError:
                 logger.info("can_use_tool cancelled: session=%s, tool=%s", session_id, tool_name)
@@ -438,6 +462,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 async with self._lock:
                     self._pending_user_responses.pop(session_id, None)
                     self._pending_request_context.pop(session_id, None)
+                await self._persist_pending_request_context(session_id, None)
 
             if tool_name == "AskUserQuestion":
                 # For AskUserQuestion, pass answers via updated_input
@@ -483,14 +508,17 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
         Returns True if a pending response was cancelled, False if none was pending.
         """
+        cancelled = False
         async with self._lock:
             fut = self._pending_user_responses.pop(session_id, None)
             self._pending_request_context.pop(session_id, None)
             if fut and not fut.done():
                 fut.cancel()
-                logger.info("cancel_pending_response: session=%s", session_id)
-                return True
-        return False
+                cancelled = True
+        await self._persist_pending_request_context(session_id, None)
+        if cancelled:
+            logger.info("cancel_pending_response: session=%s", session_id)
+        return cancelled
 
     async def set_model(self, session_id: str, model: str) -> None:
         client = self._clients.get(session_id)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from domain.session.model.session_audit_event import SessionAuditEvent
 from domain.shared.async_utils import safe_create_task
 
 from fastapi import Depends
@@ -44,6 +45,7 @@ from infr.repository.channel_init_repository_impl import ChannelInitRepositoryIm
 from infr.repository.channel_profile_repository_impl import ChannelProfileRepositoryImpl
 from infr.repository.im_binding_repository_impl import ImBindingRepositoryImpl
 from infr.repository.project_repository_impl import ProjectRepositoryImpl
+from infr.repository.session_audit_event_repository_impl import SessionAuditEventRepositoryImpl
 from infr.repository.session_repository_impl import SessionRepositoryImpl
 from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.im_binding.model.binding_status import BindingStatus
@@ -57,8 +59,21 @@ _claude_agent_gateway = ClaudeAgentGateway()
 async def _broadcast_with_im(session_id: str, data: dict) -> None:
     """Broadcast to WS clients and forward user_choice_request to IM."""
     await _connection_manager.broadcast(session_id, data)
+    event = data.get("event")
+    if event in {"permission_request", "user_choice_request"}:
+        audit_type = "ask_user_question_requested" if event == "user_choice_request" else "permission_requested"
+        try:
+            await _record_session_audit_event(
+                SessionAuditEvent.create(
+                    session_id=session_id,
+                    event_type=audit_type,
+                    payload={"tool_name": data.get("tool_name", "")},
+                )
+            )
+        except Exception:
+            logger.warning("Failed to record pending request audit for session %s", session_id, exc_info=True)
     # Also sync user_choice_request to IM so IM users can see and answer
-    if data.get("event") == "user_choice_request":
+    if event == "user_choice_request":
         questions = data.get("questions", [])
         lines = ["[User Input Required]"]
         for i, q in enumerate(questions):
@@ -130,6 +145,28 @@ async def _is_session_im_bound(session_id: str) -> bool:
 
 
 _claude_agent_gateway.set_is_im_bound_fn(_is_session_im_bound)
+
+
+async def _persist_pending_request_context(
+    session_id: str,
+    context: dict | None,
+) -> None:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        repo = SessionRepositoryImpl(db_session)
+        session = await repo.find_by_id(session_id)
+        if session is None:
+            return
+        if context:
+            session.update_pending_request_context(context)
+        else:
+            session.clear_pending_request_context()
+        await repo.save(session)
+        await db_session.commit()
+
+
+_claude_agent_gateway.set_persist_pending_request_context_fn(_persist_pending_request_context)
 
 
 async def _on_assistant_response(session_id: str, content: str) -> None:
@@ -213,11 +250,21 @@ async def _im_unbind_for_session(session_id: str) -> None:
         )
 
 
+async def _record_session_audit_event(event) -> None:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        repo = SessionAuditEventRepositoryImpl(db_session)
+        await repo.save(event)
+        await db_session.commit()
+
+
 async def get_session_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> SessionApplicationService:
     repository = SessionRepositoryImpl(db_session)
     project_repo = ProjectRepositoryImpl(db_session)
+    audit_repo = SessionAuditEventRepositoryImpl(db_session)
     return SessionApplicationService(
         session_repository=repository,
         claude_agent_gateway=_claude_agent_gateway,
@@ -227,6 +274,8 @@ async def get_session_application_service(
         on_user_message=_on_user_message,
         project_repository=project_repo,
         im_unbind_fn=_im_unbind_for_session,
+        audit_event_repository=audit_repo,
+        audit_event_recorder=_record_session_audit_event,
     )
 
 

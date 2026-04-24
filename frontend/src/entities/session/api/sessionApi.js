@@ -40,6 +40,10 @@ export function listModels() {
   return get('/sessions/meta/models')
 }
 
+export function listSessionArtifacts(sessionId) {
+  return get(`/sessions/${sessionId}/artifacts`)
+}
+
 export function compactSession(sessionId) {
   return post(`/sessions/${sessionId}/compact`)
 }

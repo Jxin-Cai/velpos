@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 from domain.shared.async_utils import safe_create_task
 from collections.abc import Awaitable, Callable
@@ -22,6 +23,8 @@ from domain.session.service.message_conversion_service import MessageConversionS
 from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from domain.session.repository.session_repository import SessionRepository
+from domain.session.model.session_audit_event import SessionAuditEvent
+from domain.session.repository.session_audit_event_repository import SessionAuditEventRepository
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,8 @@ class SessionApplicationService:
         on_user_message: Callable[[str, str], Awaitable[None]] | None = None,
         project_repository: ProjectRepository | None = None,
         im_unbind_fn: Callable[[str], Awaitable[None]] | None = None,
+        audit_event_repository: SessionAuditEventRepository | None = None,
+        audit_event_recorder: Callable[[SessionAuditEvent], Awaitable[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -48,10 +53,34 @@ class SessionApplicationService:
         self._on_user_message = on_user_message
         self._project_repository = project_repository
         self._im_unbind_fn = im_unbind_fn
+        self._audit_event_repository = audit_event_repository
+        self._audit_event_recorder = audit_event_recorder
         # Latest-wins queue: at most one pending message per session
         self._queued_messages: dict[str, RunQueryCommand] = {}
         # Tracks sessions that have been cancelled (to prevent retry in run_claude_query)
         self._cancelled_sessions: set[str] = set()
+        max_concurrent = int(os.getenv("SESSION_MAX_CONCURRENT_QUERIES", "2"))
+        self._query_semaphore = asyncio.Semaphore(max(1, max_concurrent))
+        self._waiting_for_slot: set[str] = set()
+
+    def is_waiting_for_slot(self, session_id: str) -> bool:
+        return session_id in self._waiting_for_slot
+
+    async def submit_query(self, command: RunQueryCommand) -> None:
+        if self._query_semaphore.locked():
+            self._waiting_for_slot.add(command.session_id)
+            await self._connection_manager.broadcast(
+                command.session_id,
+                {"event": "resource_waiting", "status": "waiting_slot"},
+            )
+            await self._record_audit_event(
+                command.session_id,
+                "resource_waiting",
+                payload={"reason": "concurrency_limit"},
+            )
+        async with self._query_semaphore:
+            self._waiting_for_slot.discard(command.session_id)
+            await self.run_claude_query(command)
 
     async def _save_session(self, session: Session, *, commit: bool = False) -> None:
         """Persist a session and optionally commit immediately.
@@ -63,6 +92,149 @@ class SessionApplicationService:
         await self._session_repository.save(session)
         if commit:
             await self._session_repository.commit()
+
+    async def _record_audit_event(
+        self,
+        session_id: str,
+        event_type: str,
+        actor: str = "system",
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self._audit_event_repository is None and self._audit_event_recorder is None:
+            return
+        try:
+            event = SessionAuditEvent.create(
+                session_id=session_id,
+                event_type=event_type,
+                actor=actor,
+                payload=payload,
+            )
+            if self._audit_event_recorder is not None:
+                await self._audit_event_recorder(event)
+            elif self._audit_event_repository is not None:
+                await self._audit_event_repository.save(event)
+        except Exception:
+            logger.warning(
+                "[session=%s] audit event write failed: %s",
+                session_id,
+                event_type,
+                exc_info=True,
+            )
+
+    async def list_audit_events(
+        self,
+        session_id: str,
+        limit: int = 100,
+    ) -> list[SessionAuditEvent]:
+        if self._audit_event_repository is None:
+            return []
+        return await self._audit_event_repository.find_by_session_id(
+            session_id=session_id,
+            limit=max(1, min(limit, 500)),
+        )
+
+    async def _set_cancel_requested(self, session_id: str, requested: bool) -> None:
+        session = await self._session_repository.find_by_id(session_id)
+        if session is None:
+            return
+        if requested:
+            session.mark_cancel_requested()
+        else:
+            session.clear_cancel_requested()
+        await self._save_session(session, commit=True)
+
+    async def _set_queued_command(
+        self,
+        session_id: str,
+        command: RunQueryCommand | None,
+    ) -> None:
+        session = await self._session_repository.find_by_id(session_id)
+        if session is None:
+            return
+        if command is None:
+            session.clear_queued_command()
+        else:
+            session.update_queued_command(command.prompt, command.image_paths)
+        await self._save_session(session, commit=True)
+
+    @staticmethod
+    def _recovery_to_dict(session: Session) -> dict[str, Any]:
+        pending_request = session.pending_request_context
+        queued_command = session.queued_command
+
+        pending_summary = None
+        if pending_request:
+            tool_name = pending_request.get("tool_name", "")
+            if tool_name == "AskUserQuestion":
+                pending_summary = {
+                    "interaction_type": "user_choice",
+                    "tool_name": tool_name,
+                    "questions": pending_request.get("questions", []),
+                }
+            else:
+                pending_summary = {
+                    "interaction_type": "permission",
+                    "tool_name": tool_name,
+                    "tool_input": pending_request.get("tool_input", ""),
+                }
+
+        queued_summary = None
+        if queued_command:
+            queued_summary = {
+                "prompt": queued_command.get("prompt", ""),
+                "image_count": len(queued_command.get("image_paths", [])),
+            }
+
+        return {
+            "pending_request": pending_summary,
+            "queued_command": queued_summary,
+            "cancel_requested": session.cancel_requested,
+        }
+
+    @staticmethod
+    def _artifact_candidates_from_value(value: Any) -> list[str]:
+        candidates: list[str] = []
+        if isinstance(value, str):
+            candidates.extend(
+                match.group(0).rstrip('.,:;)]}"\'')
+                for match in re.finditer(r"(?:/|~/?|\./|\.\./)[^\s`'\"<>]+", value)
+            )
+        elif isinstance(value, dict):
+            for key, nested in value.items():
+                if key in {"file_path", "path", "paths", "filename", "output_file"}:
+                    candidates.extend(SessionApplicationService._artifact_candidates_from_value(nested))
+                elif isinstance(nested, (dict, list)):
+                    candidates.extend(SessionApplicationService._artifact_candidates_from_value(nested))
+        elif isinstance(value, list):
+            for item in value:
+                candidates.extend(SessionApplicationService._artifact_candidates_from_value(item))
+        return candidates
+
+    @staticmethod
+    def _artifact_label(path: str) -> str:
+        clean = path.rstrip("/")
+        return clean.split("/")[-1] or clean
+
+    async def list_artifacts(self, session_id: str) -> list[dict[str, Any]]:
+        session = await self.get_session(session_id)
+        artifacts: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for index, message in enumerate(session.messages):
+            content = message.content
+            for path in self._artifact_candidates_from_value(content):
+                if path in seen:
+                    continue
+                seen.add(path)
+                artifacts.append({
+                    "id": f"artifact-{len(artifacts) + 1}",
+                    "path": path,
+                    "label": self._artifact_label(path),
+                    "source_message_index": index,
+                    "message_type": message.message_type.value,
+                })
+
+        return artifacts
 
     @staticmethod
     def _session_to_dict(session: Session) -> dict[str, Any]:
@@ -83,6 +255,7 @@ class SessionApplicationService:
             "sdk_session_id": session.sdk_session_id,
             "updated_time": session.updated_time.isoformat() if session.updated_time else None,
             "git_branch": "",
+            "recovery": SessionApplicationService._recovery_to_dict(session),
         }
 
     async def create_session(self, command: CreateSessionCommand) -> Session:
@@ -267,9 +440,22 @@ class SessionApplicationService:
         if session is None:
             raise BusinessException("Session not found")
 
+        if session.cancel_requested:
+            session.clear_cancel_requested()
+
         logger.info(
             "[session=%s] 收到用户请求",
             command.session_id,
+        )
+
+        await self._record_audit_event(
+            command.session_id,
+            "query_started",
+            actor="user",
+            payload={
+                "image_count": len(command.image_paths),
+                "prompt_length": len(command.prompt),
+            },
         )
 
         # Append image file paths to prompt if present
@@ -390,6 +576,7 @@ class SessionApplicationService:
 
             # If cancelled during stream consumption, skip normal completion
             if command.session_id in self._cancelled_sessions:
+                session.clear_cancel_requested()
                 logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
                 return
 
@@ -408,10 +595,20 @@ class SessionApplicationService:
                 command.session_id,
                 {"input_tokens": session.usage.input_tokens, "output_tokens": session.usage.output_tokens},
             )
+            await self._record_audit_event(
+                command.session_id,
+                "query_finished",
+                payload={
+                    "input_tokens": session.usage.input_tokens,
+                    "output_tokens": session.usage.output_tokens,
+                    "message_count": session.message_count,
+                },
+            )
 
         except Exception as e:
             # If cancelled, skip error handling — cancel_query handles everything
             if command.session_id in self._cancelled_sessions:
+                session.clear_cancel_requested()
                 logger.info("[session=%s] 查询异常但已取消, 跳过错误处理", command.session_id)
                 return
             logger.error(
@@ -421,6 +618,11 @@ class SessionApplicationService:
                 exc_info=True,
             )
             session.fail_query(error_message=str(e))
+            await self._record_audit_event(
+                command.session_id,
+                "query_failed",
+                payload={"error": str(e)[:500]},
+            )
             await self._connection_manager.broadcast(
                 session.session_id,
                 {"event": "error", "message": str(e)},
@@ -480,8 +682,14 @@ class SessionApplicationService:
             # Execute queued follow-up message if present
             queued = self._queued_messages.pop(command.session_id, None)
             if queued:
+                await self._set_queued_command(command.session_id, None)
+                await self._record_audit_event(
+                    command.session_id,
+                    "queue_started",
+                    payload={"prompt_length": len(queued.prompt)},
+                )
                 logger.info("[session=%s] 执行排队的后续消息", command.session_id)
-                safe_create_task(self.run_claude_query(queued))
+                safe_create_task(self.submit_query(queued))
 
     # Maximum seconds to wait for the next message from the Claude stream.
     # If no message arrives within this window AND the CLI process has died,
@@ -693,7 +901,10 @@ class SessionApplicationService:
         7. Broadcasts rewind event with the original prompt.
         """
         self._cancelled_sessions.add(session_id)
-        self.clear_queued_message(session_id)
+        self._waiting_for_slot.discard(session_id)
+        await self._record_audit_event(session_id, "cancel_requested", actor="user")
+        await self._set_cancel_requested(session_id, True)
+        await self.clear_queued_message(session_id)
 
         # Step 0: Cancel any pending user response (permission/choice) so the
         # query's can_use_tool callback stops blocking and the stream can finish.
@@ -766,20 +977,44 @@ class SessionApplicationService:
             )
 
         self._cancelled_sessions.discard(session_id)
+        await self._set_cancel_requested(session_id, False)
+        await self._record_audit_event(
+            session_id,
+            "cancel_completed",
+            payload={"restored_prompt_length": len(prompt)},
+        )
 
     # ── Message queue (latest-wins) ───────────────────────────
 
-    def queue_message(self, session_id: str, command: RunQueryCommand) -> None:
+    async def queue_message(self, session_id: str, command: RunQueryCommand) -> None:
         """Queue a follow-up message to run after the current query finishes.
 
         Latest-wins: only the most recent queued message per session is kept.
         """
+        previous = self._queued_messages.get(session_id)
         self._queued_messages[session_id] = command
+        await self._set_queued_command(session_id, command)
+        if previous is not None:
+            await self._record_audit_event(
+                session_id,
+                "queue_dropped",
+                payload={"prompt_length": len(previous.prompt)},
+            )
+        await self._record_audit_event(
+            session_id,
+            "queue_enqueued",
+            actor="user",
+            payload={
+                "prompt_length": len(command.prompt),
+                "image_count": len(command.image_paths),
+            },
+        )
         logger.info("[session=%s] 消息已排队 (latest-wins)", session_id)
 
-    def clear_queued_message(self, session_id: str) -> None:
+    async def clear_queued_message(self, session_id: str) -> None:
         """Clear any queued message for a session (e.g. on cancel)."""
         removed = self._queued_messages.pop(session_id, None)
+        await self._set_queued_command(session_id, None)
         if removed:
             logger.info("[session=%s] 已清除排队消息", session_id)
 
@@ -812,6 +1047,12 @@ class SessionApplicationService:
         next connect, even if no SDK client is currently connected.
         """
         await self._claude_agent_gateway.set_permission_mode(session_id, mode)
+        await self._record_audit_event(
+            session_id,
+            "permission_mode_changed",
+            actor="user",
+            payload={"mode": mode},
+        )
 
     async def get_models(self) -> list[dict]:
         """Get available models from Claude Code."""
@@ -819,7 +1060,15 @@ class SessionApplicationService:
 
     async def resolve_user_response(self, session_id: str, response_data: dict) -> bool:
         """Resolve a pending user response (choice answer or permission decision)."""
-        return await self._claude_agent_gateway.resolve_user_response(session_id, response_data)
+        resolved = await self._claude_agent_gateway.resolve_user_response(session_id, response_data)
+        if resolved:
+            await self._record_audit_event(
+                session_id,
+                "user_response_resolved",
+                actor="user",
+                payload={"response_keys": sorted(response_data.keys())},
+            )
+        return resolved
 
     async def commit(self) -> None:
         """Commit the underlying DB session."""
