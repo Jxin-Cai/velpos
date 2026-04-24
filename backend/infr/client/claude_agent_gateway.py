@@ -593,6 +593,35 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         except Exception:
             logger.debug("set_permission_mode after open_connection failed (non-critical): session=%s", session_id)
 
+    async def get_context_usage(self, session_id: str) -> dict[str, Any] | None:
+        client = self._clients.get(session_id)
+        if client is None:
+            return None
+
+        public_method = getattr(client, "get_context_usage", None)
+        try:
+            if public_method:
+                raw = await public_method()
+            else:
+                query = getattr(client, "_query", None)
+                send_control = getattr(query, "_send_control_request", None)
+                if send_control is None:
+                    return None
+                raw = await send_control({"subtype": "get_context_usage"}, timeout=10.0)
+        except Exception:
+            logger.debug("get_context_usage unavailable: session=%s", session_id, exc_info=True)
+            return None
+
+        data = raw.get("usage", raw) if isinstance(raw, dict) else {}
+        total_tokens = data.get("totalTokens", data.get("total_tokens", 0))
+        max_tokens = data.get("maxTokens", data.get("max_tokens", 0))
+        percentage = data.get("percentage", 0)
+        return {
+            "total_tokens": int(total_tokens or 0),
+            "max_tokens": int(max_tokens or 0),
+            "percentage": float(percentage or 0),
+        }
+
     def get_connected_model(self, session_id: str) -> str | None:
         """Return the model used for the current connection, or None if not connected."""
         return self._connected_models.get(session_id)
@@ -900,6 +929,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     "usage": {
                         "input_tokens": context_tokens,
                         "output_tokens": output_tokens,
+                        "raw_input_tokens": input_tokens,
+                        "cache_creation_input_tokens": cache_creation,
+                        "cache_read_input_tokens": cache_read,
                     },
                 },
                 "input_tokens": context_tokens,

@@ -256,8 +256,15 @@ function formatDuration(ms) {
 }
 
 function formatTokens(n) {
-  if (!n) return '0'
-  return n.toLocaleString()
+  const value = Number(n) || 0
+  return `${(value / 1000).toFixed(2)}k`
+}
+
+function formatCacheHit(usage) {
+  const input = Number(usage?.input_tokens) || 0
+  const cacheRead = Number(usage?.cache_read_input_tokens) || 0
+  if (input <= 0) return '0.00%'
+  return `${((cacheRead / input) * 100).toFixed(2)}%`
 }
 
 const totalUsage = computed(() => {
@@ -698,7 +705,9 @@ function formatMaxTokens(n) {
                   <span v-if="q.is_error" class="history-error-tag">Error</span>
                 </div>
                 <div class="history-item-tokens">
-                  {{ formatTokens(q.usage?.input_tokens) }} in / {{ formatTokens(q.usage?.output_tokens) }} out
+                  <span>Input {{ formatTokens(q.usage?.input_tokens) }}</span>
+                  <span>Output {{ formatTokens(q.usage?.output_tokens) }}</span>
+                  <span>Cache hit {{ formatCacheHit(q.usage) }}</span>
                 </div>
               </div>
             </div>
@@ -1294,6 +1303,9 @@ function formatMaxTokens(n) {
 }
 
 .history-item-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--text-muted);

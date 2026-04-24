@@ -186,6 +186,10 @@ class ClaudeAgentGateway(ABC):
         """
         ...
 
+    async def get_context_usage(self, session_id: str) -> dict[str, Any] | None:
+        """Return live Claude Code context usage for an active session if supported."""
+        return None
+
     async def resolve_user_response(self, session_id: str, response_data: dict[str, Any]) -> bool:
         """Resolve a pending user response (choice answer or permission decision).
 
