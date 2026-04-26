@@ -16,9 +16,9 @@ const props = defineProps({
     type: String,
     default: null,
   },
-  loading: {
-    type: Boolean,
-    default: false,
+  scheduleCounts: {
+    type: Object,
+    default: () => ({}),
   },
 })
 
@@ -29,6 +29,7 @@ const emit = defineEmits([
   'batch-delete',
   'rename',
   'create-in-project',
+  'open-scheduler',
   'delete-project',
   'reorder-projects',
 ])
@@ -48,6 +49,10 @@ try {
   }
 } catch (e) {
   console.warn('Failed to load pinned projects:', e)
+}
+
+function scheduleCount(projectId) {
+  return props.scheduleCounts?.[projectId] || 0
 }
 
 function isProjectPinned(projectId) {
@@ -487,6 +492,19 @@ defineExpose({ scrollToSession })
                 </button>
                 <button
                   v-if="group.id !== '__unassigned__'"
+                  class="project-action-btn project-clock-btn"
+                  @click.stop="emit('open-scheduler', group.id)"
+                  aria-label="Configure project clock"
+                  title="Project clock"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  <span v-if="scheduleCount(group.id)" class="project-clock-badge">{{ scheduleCount(group.id) }}</span>
+                </button>
+                <button
+                  v-if="group.id !== '__unassigned__'"
                   class="project-action-btn project-add-btn"
                   @click.stop="emit('create-in-project', group.id)"
                   aria-label="Create session in this project"
@@ -748,6 +766,7 @@ defineExpose({ scrollToSession })
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+  position: relative;
   flex-shrink: 0;
   transition: opacity var(--transition-fast), width var(--transition-fast);
   padding: 0;
@@ -761,6 +780,22 @@ defineExpose({ scrollToSession })
   width: 18px;
 }
 
+.project-clock-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: 9px;
+  line-height: 13px;
+  font-weight: 700;
+}
+
+.project-clock-btn:hover,
 .project-add-btn:hover {
   color: var(--accent);
   background: var(--accent-dim);

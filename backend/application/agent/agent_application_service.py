@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
+from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
 from domain.project.acl.plugin_manager import PluginManager
+from domain.shared.business_exception import BusinessException
 from infr.agent.catalog import (
     AGENT_CATALOG,
     CATEGORIES,
@@ -20,8 +21,10 @@ class AgentApplicationService:
     def __init__(
         self,
         plugin_manager: PluginManager | None = None,
+        claude_md_revision_service: ClaudeMdRevisionApplicationService | None = None,
     ) -> None:
         self._plugin_manager = plugin_manager
+        self._claude_md_revision_service = claude_md_revision_service
 
     async def list_agents(self, language: str = "en") -> dict[str, Any]:
         name_key = f"name_{language}" if language in ("en", "zh") else "name_en"
@@ -70,14 +73,11 @@ class AgentApplicationService:
         if current_agent and current_agent.get("id") != agent_id:
             await self._uninstall_agent_plugins(current_agent["id"], project_dir)
 
-        # Overwrite CLAUDE.md with agent role prompt
         prompt_content = read_prompt(agent_id, agent_meta["category"], language)
-        claude_md_path = Path(project_dir) / "CLAUDE.md"
-        claude_md_path.parent.mkdir(parents=True, exist_ok=True)
-        claude_md_path.write_text(prompt_content, encoding="utf-8")
+        await self._apply_claude_md_revision(project_dir, prompt_content)
         logger.info(
-            "Wrote agent prompt to CLAUDE.md: agent=%s, lang=%s, path=%s",
-            agent_id, language, claude_md_path,
+            "Applied agent prompt through CLAUDE.md revision: agent=%s, lang=%s, project=%s",
+            agent_id, language, project_dir,
         )
 
         # Install new agent's plugins
@@ -104,13 +104,29 @@ class AgentApplicationService:
         project.unload_agent()
         await project_repository.save(project)
 
-        # Clear CLAUDE.md
-        claude_md_path = Path(project.dir_path) / "CLAUDE.md"
-        if claude_md_path.exists():
-            claude_md_path.write_text("", encoding="utf-8")
+        await self._apply_claude_md_revision(project.dir_path, "")
 
         logger.info("Unloaded agent for project: %s", project_id)
         return project
+
+    async def _apply_claude_md_revision(self, project_dir: str, content: str) -> None:
+        if self._claude_md_revision_service is None:
+            raise BusinessException("CLAUDE.md revision service is not configured")
+        revision = await self._claude_md_revision_service.create_draft(
+            project_dir=project_dir,
+            content=content,
+            created_by="agent",
+        )
+        revision = await self._claude_md_revision_service.propose(revision.id)
+        revision = await self._claude_md_revision_service.approve(revision.id)
+        result = await self._claude_md_revision_service.apply(
+            revision_id=revision.id,
+            project_dir=project_dir,
+            expected_base_revision_id=revision.base_revision_id,
+            expected_file_hash=revision.base_file_hash,
+        )
+        if result.conflict:
+            raise BusinessException("CLAUDE.md changed while applying agent revision")
 
     async def _install_agent_plugins(self, agent_id: str, project_dir: str) -> None:
         if not self._plugin_manager:

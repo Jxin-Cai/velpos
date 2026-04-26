@@ -1,12 +1,16 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useSession } from '@entities/session'
-import { listModels } from '@entities/session'
+import { listModels, getSessionUsage, getProjectUsage } from '@entities/session'
 
 const DEFAULT_CONTEXT_SIZE = 200000
 
 // Cached model context sizes from backend
 const modelContextSizes = ref({})
+const usageSummary = ref(null)
+const projectUsageSummary = ref(null)
+let usageFetchKey = ''
 let modelsFetched = false
+
 
 async function ensureModelsFetched() {
   if (modelsFetched) return
@@ -29,10 +33,33 @@ async function ensureModelsFetched() {
 export function useSessionStats() {
   const { session, messages, queryHistory, status } = useSession()
 
-  // Lazy-load models on first use
   ensureModelsFetched()
 
-  // Git branch: from session data if available
+  async function refreshUsage() {
+    const current = session.value
+    if (!current?.session_id) return
+    const key = `${current.session_id}:${current.project_id || ''}:${current.usage?.input_tokens || 0}:${current.usage?.output_tokens || 0}`
+    if (key === usageFetchKey) return
+    usageFetchKey = key
+    try {
+      const [sessionUsage, projectUsage] = await Promise.all([
+        getSessionUsage(current.session_id),
+        current.project_id ? getProjectUsage(current.project_id, true) : Promise.resolve(null),
+      ])
+      usageSummary.value = sessionUsage
+      projectUsageSummary.value = projectUsage
+    } catch {
+      // keep previous usage display
+    }
+  }
+
+  watch(
+    () => [session.value?.session_id, session.value?.project_id, session.value?.usage?.input_tokens, session.value?.usage?.output_tokens],
+    refreshUsage,
+    { immediate: true },
+  )
+
+
   const gitBranch = computed(() => session.value?.git_branch || '')
 
   // Last query duration
@@ -144,5 +171,7 @@ export function useSessionStats() {
     contextUsage,
     toolStats,
     activeSubagents,
+    usageSummary,
+    projectUsageSummary,
   }
 }

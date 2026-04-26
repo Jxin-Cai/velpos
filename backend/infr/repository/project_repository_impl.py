@@ -62,6 +62,8 @@ class ProjectRepositoryImpl(ProjectRepository):
             agents_json=project.agents,
             plugins_json=project.plugins,
             sort_order=project.sort_order,
+            active_claude_md_revision_id=project.active_claude_md_revision_id,
+            claude_md_file_hash=project.claude_md_file_hash,
             created_time=project.created_at,
             updated_time=project.updated_at,
         )
@@ -75,6 +77,8 @@ class ProjectRepositoryImpl(ProjectRepository):
             agents=model.agents_json or {},
             plugins=model.plugins_json or {},
             sort_order=model.sort_order,
+            active_claude_md_revision_id=model.active_claude_md_revision_id,
+            claude_md_file_hash=model.claude_md_file_hash,
             created_at=model.created_time,
             updated_at=model.updated_time,
         )

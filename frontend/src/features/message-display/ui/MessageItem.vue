@@ -97,6 +97,7 @@ watch(
       renderedBlocks.value = [{
         type: 'user',
         html: cachedParse(content.text || ''),
+        attachments: content.attachments || [],
       }]
       return
     }
@@ -178,6 +179,22 @@ watch(
   { immediate: true, deep: true },
 )
 
+function attachmentHref(attachment) {
+  if (!attachment?.id) return '#'
+  return `/api/attachments/${encodeURIComponent(attachment.id)}/download`
+}
+
+function attachmentName(attachment) {
+  return attachment?.filename || attachment?.name || 'attachment'
+}
+
+function attachmentSize(attachment) {
+  const n = Number(attachment?.size_bytes || attachment?.size || 0)
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${n} B`
+}
+
 // Event delegation for code copy buttons and file path links
 function handleDelegatedClick(e) {
   // Handle code copy button
@@ -230,6 +247,21 @@ function handleDelegatedClick(e) {
             :class="{ 'user-text-collapsed': isUserMsgOverflow && !isUserMsgExpanded }"
             v-html="block.html"
           ></div>
+          <div v-if="block.attachments?.length" class="user-attachments">
+            <a
+              v-for="attachment in block.attachments"
+              :key="attachment.id || attachment.filename"
+              class="user-attachment"
+              :href="attachmentHref(attachment)"
+              target="_blank"
+              rel="noreferrer"
+              :title="attachmentName(attachment)"
+            >
+              <span class="user-attachment-icon">FILE</span>
+              <span class="user-attachment-name">{{ attachmentName(attachment) }}</span>
+              <span class="user-attachment-size">{{ attachmentSize(attachment) }}</span>
+            </a>
+          </div>
           <button
             v-if="isUserMsgOverflow"
             class="user-expand-btn"
@@ -354,6 +386,50 @@ function handleDelegatedClick(e) {
   overflow: hidden;
   mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+}
+
+.user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.user-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.user-attachment:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.user-attachment-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.user-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-attachment-size {
+  flex-shrink: 0;
+  color: var(--text-muted);
 }
 
 .user-expand-btn {

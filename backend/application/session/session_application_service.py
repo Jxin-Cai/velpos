@@ -4,6 +4,8 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
+import uuid
 
 from domain.shared.async_utils import safe_create_task
 from collections.abc import Awaitable, Callable
@@ -13,11 +15,13 @@ from application.session.command.clear_context_command import ClearContextComman
 from application.session.command.create_session_command import CreateSessionCommand
 from application.session.command.import_claude_session_command import ImportClaudeSessionCommand
 from application.session.command.run_query_command import RunQueryCommand
+from application.session.session_run_timeline_service import SessionRunTimelineService
 from domain.session.acl.claude_agent_gateway import ClaudeAgentGateway
 from domain.session.acl.connection_manager import ConnectionManager
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 from domain.session.model.session import Session
+from domain.session.model.session_run_step import SessionRunStep
 from domain.session.model.usage import Usage
 from domain.session.service.message_conversion_service import MessageConversionService
 from domain.project.model.project import Project
@@ -44,6 +48,8 @@ class SessionApplicationService:
         im_unbind_fn: Callable[[str], Awaitable[None]] | None = None,
         audit_event_repository: SessionAuditEventRepository | None = None,
         audit_event_recorder: Callable[[SessionAuditEvent], Awaitable[None]] | None = None,
+        usage_recorder: Callable[[str, str, str, int, int, int, int], Awaitable[None]] | None = None,
+        timeline_service: SessionRunTimelineService | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -55,6 +61,8 @@ class SessionApplicationService:
         self._im_unbind_fn = im_unbind_fn
         self._audit_event_repository = audit_event_repository
         self._audit_event_recorder = audit_event_recorder
+        self._usage_recorder = usage_recorder
+        self._timeline_service = timeline_service
         # Latest-wins queue: at most one pending message per session
         self._queued_messages: dict[str, RunQueryCommand] = {}
         # Tracks sessions that have been cancelled (to prevent retry in run_claude_query)
@@ -67,20 +75,30 @@ class SessionApplicationService:
         return session_id in self._waiting_for_slot
 
     async def submit_query(self, command: RunQueryCommand) -> None:
-        if self._query_semaphore.locked():
-            self._waiting_for_slot.add(command.session_id)
-            await self._connection_manager.broadcast(
-                command.session_id,
-                {"event": "resource_waiting", "status": "waiting_slot"},
-            )
-            await self._record_audit_event(
-                command.session_id,
-                "resource_waiting",
-                payload={"reason": "concurrency_limit"},
-            )
-        async with self._query_semaphore:
+        self._claude_agent_gateway.mark_active(command.session_id)
+        try:
+            if self._query_semaphore.locked():
+                self._waiting_for_slot.add(command.session_id)
+                await self._connection_manager.broadcast(
+                    command.session_id,
+                    {"event": "resource_waiting", "status": "waiting_slot"},
+                )
+                await self._record_audit_event(
+                    command.session_id,
+                    "resource_waiting",
+                    payload={"reason": "concurrency_limit"},
+                )
+            async with self._query_semaphore:
+                self._waiting_for_slot.discard(command.session_id)
+                await self.run_claude_query(command)
+        except asyncio.CancelledError:
             self._waiting_for_slot.discard(command.session_id)
-            await self.run_claude_query(command)
+            self._claude_agent_gateway.mark_idle(command.session_id)
+            raise
+        except Exception:
+            self._waiting_for_slot.discard(command.session_id)
+            self._claude_agent_gateway.mark_idle(command.session_id)
+            raise
 
     async def _save_session(self, session: Session, *, commit: bool = False) -> None:
         """Persist a session and optionally commit immediately.
@@ -121,6 +139,86 @@ class SessionApplicationService:
                 exc_info=True,
             )
 
+    async def _record_usage_ledger(self, session: Session) -> None:
+        if self._usage_recorder is None:
+            return
+        if session.usage.input_tokens <= 0 and session.usage.output_tokens <= 0:
+            return
+        try:
+            await self._usage_recorder(
+                session.session_id,
+                session.project_id,
+                session.model,
+                session.usage.input_tokens,
+                session.usage.output_tokens,
+                0,
+                0,
+            )
+        except Exception:
+            logger.warning("[session=%s] usage ledger write failed", session.session_id, exc_info=True)
+
+    async def _start_run_step(
+        self,
+        session_id: str,
+        run_id: str,
+        step_type: str,
+        title: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        commit: bool = True,
+    ) -> SessionRunStep | None:
+        if self._timeline_service is None:
+            return None
+        try:
+            return await self._timeline_service.start_step(
+                session_id, run_id, step_type, title, payload, commit=commit,
+            )
+        except Exception:
+            logger.warning("[session=%s] run step start failed", session_id, exc_info=True)
+            return None
+
+    async def _progress_run_step(
+        self,
+        step: SessionRunStep | None,
+        payload: dict[str, Any] | None = None,
+        *,
+        commit: bool = False,
+    ) -> None:
+        if self._timeline_service is None or step is None:
+            return
+        try:
+            await self._timeline_service.progress_step(step, payload, commit=commit)
+        except Exception:
+            logger.warning("[session=%s] run step progress failed", step.session_id, exc_info=True)
+
+    async def _complete_run_step(
+        self,
+        step: SessionRunStep | None,
+        payload: dict[str, Any] | None = None,
+        *,
+        commit: bool = True,
+    ) -> None:
+        if self._timeline_service is None or step is None or step.status != "running":
+            return
+        try:
+            await self._timeline_service.complete_step(step, payload, commit=commit)
+        except Exception:
+            logger.warning("[session=%s] run step complete failed", step.session_id, exc_info=True)
+
+    async def _fail_run_step(
+        self,
+        step: SessionRunStep | None,
+        payload: dict[str, Any] | None = None,
+        *,
+        commit: bool = True,
+    ) -> None:
+        if self._timeline_service is None or step is None or step.status != "running":
+            return
+        try:
+            await self._timeline_service.fail_step(step, payload, commit=commit)
+        except Exception:
+            logger.warning("[session=%s] run step fail failed", step.session_id, exc_info=True)
+
     async def list_audit_events(
         self,
         session_id: str,
@@ -154,7 +252,7 @@ class SessionApplicationService:
         if command is None:
             session.clear_queued_command()
         else:
-            session.update_queued_command(command.prompt, command.image_paths)
+            session.update_queued_command(command.prompt, command.image_paths, command.attachments)
         await self._save_session(session, commit=True)
 
     @staticmethod
@@ -183,6 +281,7 @@ class SessionApplicationService:
             queued_summary = {
                 "prompt": queued_command.get("prompt", ""),
                 "image_count": len(queued_command.get("image_paths", [])),
+                "attachment_count": len(queued_command.get("attachments", [])),
             }
 
         return {
@@ -323,6 +422,25 @@ class SessionApplicationService:
         """List all sessions."""
         return await self._session_repository.find_all()
 
+    async def get_current_git_branch(self, project_dir: str) -> str:
+        if not project_dir:
+            return ""
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "-C", project_dir, "rev-parse", "--abbrev-ref", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return result.stdout.strip()
+        except Exception:
+            return ""
+
+    async def get_git_branch_for_session(self, session_id: str) -> str:
+        session = await self.get_session(session_id)
+        return await self.get_current_git_branch(session.project_dir)
+
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session by session_id.
 
@@ -458,6 +576,19 @@ class SessionApplicationService:
         if session.cancel_requested:
             session.clear_cancel_requested()
 
+        run_id = uuid.uuid4().hex[:8]
+        run_step = await self._start_run_step(
+            command.session_id,
+            run_id,
+            "run",
+            "执行用户请求",
+            {
+                "image_count": len(command.image_paths),
+                "attachment_count": len(command.attachments),
+                "prompt_length": len(command.prompt),
+            },
+        )
+
         logger.info(
             "[session=%s] 收到用户请求",
             command.session_id,
@@ -469,30 +600,45 @@ class SessionApplicationService:
             actor="user",
             payload={
                 "image_count": len(command.image_paths),
+                "attachment_count": len(command.attachments),
                 "prompt_length": len(command.prompt),
             },
         )
 
-        # Append image file paths to prompt if present
+        attachment_refs = []
+        image_paths = set(command.image_paths)
+        for attachment in command.attachments:
+            path = attachment.get("path", "")
+            filename = attachment.get("filename", "attachment")
+            mime_type = attachment.get("mime_type", "")
+            if not path:
+                continue
+            if mime_type.startswith("image/") or path in image_paths:
+                attachment_refs.append(f"[Image: {path}]")
+            else:
+                attachment_refs.append(f"[Attachment: {filename} path={path}]")
+
         actual_prompt = command.prompt
-        if command.image_paths:
-            image_refs = "\n".join(
-                f"[Image: {path}]" for path in command.image_paths
-            )
-            actual_prompt = f"{command.prompt}\n\n{image_refs}"
+        if attachment_refs:
+            actual_prompt = f"{command.prompt}\n\n" + "\n".join(attachment_refs)
             logger.info(
-                "[session=%s] 附加 %d 张图片到 prompt",
+                "[session=%s] 附加 %d 个附件到 prompt",
                 command.session_id,
-                len(command.image_paths),
+                len(attachment_refs),
             )
 
         session.start_query()
         self._claude_agent_gateway.mark_active(command.session_id)
 
         # Save user message and broadcast
+        message_id = uuid.uuid4().hex[:12]
         user_message = Message.create(
             message_type=MessageType.USER,
-            content={"text": actual_prompt},
+            content={
+                "message_id": message_id,
+                "text": actual_prompt,
+                "attachments": command.attachments,
+            },
         )
         session.add_message(user_message)
 
@@ -560,7 +706,7 @@ class SessionApplicationService:
                 )
 
             try:
-                await self._consume_message_stream(session, msg_stream)
+                await self._consume_message_stream(session, msg_stream, run_id)
             except Exception as stream_err:
                 # If cancelled, don't retry — let cancel_query handle cleanup
                 if command.session_id in self._cancelled_sessions:
@@ -568,6 +714,7 @@ class SessionApplicationService:
                         "[session=%s] 消息流因取消而中断, 跳过重试",
                         command.session_id,
                     )
+                    await self._fail_run_step(run_step, {"cancelled": True, "stage": "stream"})
                     return
                 # If send_query's stream fails mid-iteration (e.g. dead CLI process),
                 # fall back to a fresh connect
@@ -585,7 +732,7 @@ class SessionApplicationService:
                         cwd=session.project_dir,
                         sdk_session_id=session.sdk_session_id,
                     )
-                    await self._consume_message_stream(session, msg_stream)
+                    await self._consume_message_stream(session, msg_stream, run_id)
                 else:
                     raise
 
@@ -594,6 +741,7 @@ class SessionApplicationService:
             # If cancelled during stream consumption, skip normal completion
             if command.session_id in self._cancelled_sessions:
                 session.clear_cancel_requested()
+                await self._fail_run_step(run_step, {"cancelled": True, "stage": "completion"})
                 logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
                 return
 
@@ -612,6 +760,15 @@ class SessionApplicationService:
                 command.session_id,
                 {"input_tokens": session.usage.input_tokens, "output_tokens": session.usage.output_tokens},
             )
+            await self._record_usage_ledger(session)
+            await self._complete_run_step(
+                run_step,
+                {
+                    "input_tokens": session.usage.input_tokens,
+                    "output_tokens": session.usage.output_tokens,
+                    "message_count": session.message_count,
+                },
+            )
             await self._record_audit_event(
                 command.session_id,
                 "query_finished",
@@ -626,6 +783,7 @@ class SessionApplicationService:
             # If cancelled, skip error handling — cancel_query handles everything
             if command.session_id in self._cancelled_sessions:
                 session.clear_cancel_requested()
+                await self._fail_run_step(run_step, {"cancelled": True, "stage": "error"})
                 logger.info("[session=%s] 查询异常但已取消, 跳过错误处理", command.session_id)
                 return
             logger.error(
@@ -635,6 +793,7 @@ class SessionApplicationService:
                 exc_info=True,
             )
             session.fail_query(error_message=str(e))
+            await self._fail_run_step(run_step, {"error": str(e)[:500]})
             await self._record_audit_event(
                 command.session_id,
                 "query_failed",
@@ -703,7 +862,7 @@ class SessionApplicationService:
                 await self._record_audit_event(
                     command.session_id,
                     "queue_started",
-                    payload={"prompt_length": len(queued.prompt)},
+                    payload={"prompt_length": len(queued.prompt), "attachment_count": len(queued.attachments)},
                 )
                 logger.info("[session=%s] 执行排队的后续消息", command.session_id)
                 safe_create_task(self.submit_query(queued))
@@ -714,8 +873,22 @@ class SessionApplicationService:
     # positives during long tool executions (e.g. large file writes).
     _STREAM_MSG_TIMEOUT = 300  # 5 minutes
 
+    @staticmethod
+    def _tool_names_from_content(content: dict[str, Any]) -> list[str]:
+        names: list[str] = []
+        if isinstance(content, dict):
+            for block in content.get("blocks", []):
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    name = str(block.get("name") or "")
+                    if name:
+                        names.append(name)
+        return names
+
     async def _consume_message_stream(
-        self, session: "Session", msg_stream: "AsyncIterator[dict]"
+        self,
+        session: "Session",
+        msg_stream: "AsyncIterator[dict]",
+        run_id: str,
     ) -> None:
         """Iterate over the message stream, persist messages and broadcast to WS.
 
@@ -727,114 +900,163 @@ class SessionApplicationService:
         last_save_time = loop.time()
         save_interval = 2.0  # save at most every 2s for cross-session visibility
 
+        saw_context_input_usage = False
+        stream_step = await self._start_run_step(
+            session.session_id,
+            run_id,
+            "stream",
+            "接收 Claude 消息流",
+        )
+        message_count = 0
+        tool_count = 0
         aiter = msg_stream.__aiter__()
-        while True:
-            try:
-                msg_dict = await asyncio.wait_for(
-                    aiter.__anext__(), timeout=self._STREAM_MSG_TIMEOUT,
-                )
-            except StopAsyncIteration:
-                break
-            except asyncio.TimeoutError:
-                # Timeout waiting for next message — check if CLI is still alive
-                if not self._claude_agent_gateway.is_process_alive(session.session_id):
-                    logger.error(
-                        "[session=%s] CLI 进程已退出且消息流超时, 终止消费",
+        next_msg_task: asyncio.Task | None = None
+        try:
+            while True:
+                if next_msg_task is None:
+                    next_msg_task = asyncio.create_task(aiter.__anext__())
+                try:
+                    msg_dict = await asyncio.wait_for(
+                        asyncio.shield(next_msg_task), timeout=self._STREAM_MSG_TIMEOUT,
+                    )
+                    next_msg_task = None
+                except StopAsyncIteration:
+                    next_msg_task = None
+                    break
+                except asyncio.TimeoutError:
+                    # Timeout waiting for next message — check if CLI is still alive.
+                    # Keep the same __anext__ task alive; cancelling it can close the SDK stream.
+                    if not self._claude_agent_gateway.is_process_alive(session.session_id):
+                        logger.error(
+                            "[session=%s] CLI 进程已退出且消息流超时, 终止消费",
+                            session.session_id,
+                        )
+                        next_msg_task.cancel()
+                        raise RuntimeError("Claude CLI process exited unexpectedly")
+                    logger.info(
+                        "[session=%s] 消息流等待超时但进程仍存活, 继续等待",
                         session.session_id,
                     )
-                    raise RuntimeError("Claude CLI process exited unexpectedly")
-                # Process is alive but slow (e.g. long tool execution) — keep waiting
+                    await self._connection_manager.broadcast(
+                        session.session_id,
+                        {"event": "stream_waiting", "status": "waiting_output"},
+                    )
+                    continue
+                msg_type_str = msg_dict["message_type"]
+                message = MessageConversionService.convert_stream_message(msg_dict)
+                if message is None:
+                    logger.warning(
+                        "[session=%s] 未知消息类型: %s, 跳过",
+                        session.session_id,
+                        msg_type_str,
+                    )
+                    continue
+
+                session.add_message(message)
+                message_count += 1
+                tool_names = self._tool_names_from_content(message.content)
+                tool_count += len(tool_names)
+
                 logger.info(
-                    "[session=%s] 消息流等待超时但进程仍存活, 继续等待",
-                    session.session_id,
-                )
-                continue
-            msg_type_str = msg_dict["message_type"]
-            message = MessageConversionService.convert_stream_message(msg_dict)
-            if message is None:
-                logger.warning(
-                    "[session=%s] 未知消息类型: %s, 跳过",
+                    "[session=%s] Claude回复 [%s]",
                     session.session_id,
                     msg_type_str,
                 )
-                continue
 
-            session.add_message(message)
+                await self._connection_manager.broadcast(
+                    session.session_id,
+                    {"event": "message", "data": {"type": message.message_type.value, "content": message.content}},
+                )
+                await self._progress_run_step(
+                    stream_step,
+                    {
+                        "message_count": message_count,
+                        "last_message_type": msg_type_str,
+                        "last_tool_names": tool_names,
+                        "tool_count": tool_count,
+                    },
+                    commit=False,
+                )
 
-            logger.info(
-                "[session=%s] Claude回复 [%s]",
-                session.session_id,
-                msg_type_str,
-            )
+                # Per-turn context from AssistantMessage — accurate context window size
+                if "context_input_tokens" in msg_dict:
+                    session.update_last_input_tokens(msg_dict["context_input_tokens"])
+                    saw_context_input_usage = True
 
-            await self._connection_manager.broadcast(
-                session.session_id,
-                {"event": "message", "data": {"type": message.message_type.value, "content": message.content}},
-            )
+                if "input_tokens" in msg_dict and "output_tokens" in msg_dict:
+                    # ResultMessage may carry cumulative tokens across all turns.
+                    # Use it only when AssistantMessage did not provide live per-turn context.
+                    if not saw_context_input_usage:
+                        content = msg_dict.get("content", {})
+                        num_turns = max(
+                            msg_dict.get("num_turns")
+                            or content.get("num_turns")
+                            or 1,
+                            1,
+                        )
+                        if num_turns == 1:
+                            session.update_last_input_tokens(msg_dict["input_tokens"])
+                        else:
+                            estimated = int(msg_dict["input_tokens"] * 2 / (num_turns + 1))
+                            session.update_last_input_tokens(estimated)
 
-            # Per-turn context from AssistantMessage — accurate context window size
-            if "context_input_tokens" in msg_dict:
-                session.update_last_input_tokens(msg_dict["context_input_tokens"])
-
-            if "input_tokens" in msg_dict and "output_tokens" in msg_dict:
-                # ResultMessage carries cumulative tokens across all turns.
-                # Only use as fallback for context estimation if no per-turn
-                # data was provided by AssistantMessage.
-                if session.last_input_tokens == 0:
-                    num_turns = max(msg_dict.get("num_turns", 1) or 1, 1)
-                    if num_turns == 1:
-                        session.update_last_input_tokens(msg_dict["input_tokens"])
+                    # Cumulative usage tracking (for cost / billing display)
+                    if (
+                        session.sdk_session_id
+                        and session.usage.input_tokens == 0
+                        and session.usage.output_tokens == 0
+                    ):
+                        session.initialize_usage(
+                            input_tokens=msg_dict["input_tokens"],
+                            output_tokens=msg_dict["output_tokens"],
+                        )
+                        logger.info(
+                            "[session=%s] resume 首次 usage 设定: in=%d, out=%d",
+                            session.session_id,
+                            msg_dict["input_tokens"],
+                            msg_dict["output_tokens"],
+                        )
                     else:
-                        estimated = int(msg_dict["input_tokens"] * 2 / (num_turns + 1))
-                        session.update_last_input_tokens(estimated)
+                        session.update_usage(
+                            input_tokens=msg_dict["input_tokens"],
+                            output_tokens=msg_dict["output_tokens"],
+                        )
 
-                # Cumulative usage tracking (for cost / billing display)
-                if (
-                    session.sdk_session_id
-                    and session.usage.input_tokens == 0
-                    and session.usage.output_tokens == 0
-                ):
-                    session.initialize_usage(
-                        input_tokens=msg_dict["input_tokens"],
-                        output_tokens=msg_dict["output_tokens"],
-                    )
-                    logger.info(
-                        "[session=%s] resume 首次 usage 设定: in=%d, out=%d",
-                        session.session_id,
-                        msg_dict["input_tokens"],
-                        msg_dict["output_tokens"],
-                    )
-                else:
-                    session.update_usage(
-                        input_tokens=msg_dict["input_tokens"],
-                        output_tokens=msg_dict["output_tokens"],
-                    )
+                # Capture SDK session_id for resume support
+                # Always update: resume may produce a new session_id
+                if "sdk_session_id" in msg_dict:
+                    new_sid = msg_dict["sdk_session_id"]
+                    if new_sid and new_sid != session.sdk_session_id:
+                        session.update_sdk_session_id(new_sid)
+                        logger.info(
+                            "[session=%s] 更新 SDK session_id: %s",
+                            session.session_id,
+                            new_sid,
+                        )
 
-            # Capture SDK session_id for resume support
-            # Always update: resume may produce a new session_id
-            if "sdk_session_id" in msg_dict:
-                new_sid = msg_dict["sdk_session_id"]
-                if new_sid and new_sid != session.sdk_session_id:
-                    session.update_sdk_session_id(new_sid)
-                    logger.info(
-                        "[session=%s] 更新 SDK session_id: %s",
-                        session.session_id,
-                        new_sid,
-                    )
-
-            # Periodic save: ensure reconnecting clients see recent messages.
-            # Uses the same DB session with explicit commit for visibility.
-            now = loop.time()
-            is_result = msg_type_str == "result"
-            if is_result or (now - last_save_time >= save_interval):
-                try:
-                    await self._save_session(session, commit=True)
-                    last_save_time = now
-                except Exception:
-                    logger.warning(
-                        "[session=%s] periodic save failed",
-                        session.session_id, exc_info=True,
-                    )
+                # Periodic save: ensure reconnecting clients see recent messages.
+                # Uses the same DB session with explicit commit for visibility.
+                now = loop.time()
+                is_result = msg_type_str == "result"
+                if is_result or (now - last_save_time >= save_interval):
+                    try:
+                        await self._save_session(session, commit=True)
+                        last_save_time = now
+                    except Exception:
+                        logger.warning(
+                            "[session=%s] periodic save failed",
+                            session.session_id, exc_info=True,
+                        )
+            await self._complete_run_step(
+                stream_step,
+                {"message_count": message_count, "tool_count": tool_count},
+            )
+        except Exception as exc:
+            await self._fail_run_step(stream_step, {"error": str(exc)[:500]})
+            raise
+        finally:
+            if next_msg_task is not None and not next_msg_task.done():
+                next_msg_task.cancel()
 
     async def _fire_outbound(self, session_id: str, text: str) -> None:
         """Best-effort outbound IM sync — errors are logged, never raised."""
@@ -1024,6 +1246,7 @@ class SessionApplicationService:
             payload={
                 "prompt_length": len(command.prompt),
                 "image_count": len(command.image_paths),
+                "attachment_count": len(command.attachments),
             },
         )
         logger.info("[session=%s] 消息已排队 (latest-wins)", session_id)

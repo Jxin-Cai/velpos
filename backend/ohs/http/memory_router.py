@@ -3,15 +3,25 @@ from __future__ import annotations
 import os
 import logging
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
+from domain.memory.model.claude_md_revision import ClaudeMdRevision
+from ohs.dependencies import get_claude_md_revision_application_service
 from ohs.http.api_response import ApiResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/memory", tags=["Memory"])
+
+ClaudeMdRevisionServiceDep = Annotated[
+    ClaudeMdRevisionApplicationService,
+    Depends(get_claude_md_revision_application_service),
+]
 
 
 def _get_memory_dir(project_dir: str) -> Path | None:
@@ -30,41 +40,167 @@ class MemoryFileWrite(BaseModel):
     content: str
 
 
+class ClaudeMdDraftRequest(BaseModel):
+    project_dir: str
+    content: str
+    base_revision_id: str = ""
+
+
+class ClaudeMdUpdateRequest(BaseModel):
+    content: str
+
+
+class ClaudeMdRejectRequest(BaseModel):
+    reason: str = ""
+
+
+class ClaudeMdApplyRequest(BaseModel):
+    project_dir: str
+    expected_base_revision_id: str
+    expected_file_hash: str
+
+
+def _revision_to_dict(revision: ClaudeMdRevision) -> dict:
+    return {
+        "id": revision.id,
+        "project_id": revision.project_id,
+        "version_no": revision.version_no,
+        "state": revision.state.value,
+        "content": revision.content,
+        "content_hash": revision.content_hash,
+        "base_revision_id": revision.base_revision_id,
+        "base_file_hash": revision.base_file_hash,
+        "created_by": revision.created_by,
+        "created_time": revision.created_time.isoformat(),
+        "proposed_time": revision.proposed_time.isoformat() if revision.proposed_time else None,
+        "approved_time": revision.approved_time.isoformat() if revision.approved_time else None,
+        "applied_time": revision.applied_time.isoformat() if revision.applied_time else None,
+        "rejected_time": revision.rejected_time.isoformat() if revision.rejected_time else None,
+        "reject_reason": revision.reject_reason,
+    }
+
+
 @router.get("/claude-md")
-async def read_claude_md(project_dir: str = Query(...)):
-    """Read the project root CLAUDE.md file."""
-    proj_path = Path(project_dir)
-    if not proj_path.is_dir():
-        return ApiResponse.success(data={"content": ""})
-
-    claude_md_path = proj_path / "CLAUDE.md"
-    if not claude_md_path.exists() or not claude_md_path.is_file():
-        return ApiResponse.success(data={"content": ""})
-
-    # Safety: ensure within project_dir
-    if not claude_md_path.resolve().is_relative_to(proj_path.resolve()):
-        return ApiResponse.fail(code=-1, message="Invalid path")
-
-    content = claude_md_path.read_text(encoding="utf-8")
-    return ApiResponse.success(data={"content": content})
+async def read_claude_md(
+    service: ClaudeMdRevisionServiceDep,
+    project_dir: str = Query(...),
+):
+    """Read project CLAUDE.md and initialize revision history if needed."""
+    data = await service.read_current(project_dir)
+    return ApiResponse.success(data=data)
 
 
 @router.put("/claude-md")
-async def write_claude_md(body: MemoryFileWrite):
-    """Write the project root CLAUDE.md file."""
-    proj_path = Path(body.project_dir)
-    if not proj_path.is_dir():
-        return ApiResponse.fail(code=-1, message="Project directory not found")
+async def write_claude_md(
+    body: MemoryFileWrite,
+    service: ClaudeMdRevisionServiceDep,
+):
+    """Create a draft revision for project CLAUDE.md without writing the file."""
+    revision = await service.create_draft(body.project_dir, body.content)
+    logger.info("CLAUDE.md draft created: %s", revision.id)
+    return ApiResponse.success(data={"revision": _revision_to_dict(revision)})
 
-    claude_md_path = proj_path / "CLAUDE.md"
 
-    # Safety: ensure within project_dir
-    if not claude_md_path.resolve().is_relative_to(proj_path.resolve()):
-        return ApiResponse.fail(code=-1, message="Invalid path")
+@router.get("/claude-md/versions")
+async def list_claude_md_versions(
+    service: ClaudeMdRevisionServiceDep,
+    project_dir: str = Query(...),
+):
+    revisions = await service.list_versions(project_dir)
+    return ApiResponse.success(data={"versions": [_revision_to_dict(r) for r in revisions]})
 
-    claude_md_path.write_text(body.content, encoding="utf-8")
-    logger.info("CLAUDE.md written: %s", claude_md_path)
-    return ApiResponse.success(data={"name": "CLAUDE.md"})
+
+@router.post("/claude-md/drafts")
+async def create_claude_md_draft(
+    body: ClaudeMdDraftRequest,
+    service: ClaudeMdRevisionServiceDep,
+):
+    revision = await service.create_draft(
+        project_dir=body.project_dir,
+        content=body.content,
+        base_revision_id=body.base_revision_id,
+    )
+    return ApiResponse.success(data={"revision": _revision_to_dict(revision)})
+
+
+@router.patch("/claude-md/revisions/{revision_id}")
+async def update_claude_md_revision(
+    revision_id: str,
+    body: ClaudeMdUpdateRequest,
+    service: ClaudeMdRevisionServiceDep,
+):
+    revision = await service.update_revision(revision_id, body.content)
+    return ApiResponse.success(data={"revision": _revision_to_dict(revision)})
+
+
+@router.post("/claude-md/revisions/{revision_id}/propose")
+async def propose_claude_md_revision(
+    revision_id: str,
+    service: ClaudeMdRevisionServiceDep,
+):
+    revision = await service.propose(revision_id)
+    return ApiResponse.success(data={"revision": _revision_to_dict(revision)})
+
+
+@router.post("/claude-md/revisions/{revision_id}/approve")
+async def approve_claude_md_revision(
+    revision_id: str,
+    service: ClaudeMdRevisionServiceDep,
+):
+    revision = await service.approve(revision_id)
+    return ApiResponse.success(data={"revision": _revision_to_dict(revision)})
+
+
+@router.post("/claude-md/revisions/{revision_id}/reject")
+async def reject_claude_md_revision(
+    revision_id: str,
+    body: ClaudeMdRejectRequest,
+    service: ClaudeMdRevisionServiceDep,
+):
+    revision = await service.reject(revision_id, body.reason)
+    return ApiResponse.success(data={"revision": _revision_to_dict(revision)})
+
+
+@router.post("/claude-md/revisions/{revision_id}/apply")
+async def apply_claude_md_revision(
+    revision_id: str,
+    body: ClaudeMdApplyRequest,
+    service: ClaudeMdRevisionServiceDep,
+):
+    result = await service.apply(
+        revision_id=revision_id,
+        project_dir=body.project_dir,
+        expected_base_revision_id=body.expected_base_revision_id,
+        expected_file_hash=body.expected_file_hash,
+    )
+    data = {
+        "revision": _revision_to_dict(result.revision),
+        "conflict": result.conflict,
+        "current_file_hash": result.current_file_hash,
+    }
+    if result.conflict:
+        response = ApiResponse.fail(code=-409, message="CLAUDE.md has changed on disk")
+        payload = response.model_dump()
+        payload["data"] = data
+        return JSONResponse(status_code=409, content=payload)
+    return ApiResponse.success(data=data)
+
+
+@router.delete("/claude-md/revisions/{revision_id}")
+async def delete_claude_md_revision(
+    revision_id: str,
+    service: ClaudeMdRevisionServiceDep,
+):
+    await service.delete_revision(revision_id)
+    return ApiResponse.success()
+
+
+@router.get("/claude-md/revisions/{revision_id}/diff")
+async def diff_claude_md_revision(
+    revision_id: str,
+    service: ClaudeMdRevisionServiceDep,
+):
+    return ApiResponse.success(data=await service.diff_revision(revision_id))
 
 
 @router.get("")
@@ -84,7 +220,6 @@ async def list_memory_files(project_dir: str = Query(...)):
             except Exception:
                 files.append({"name": f.name, "preview": "(read error)", "size": 0})
 
-    # Read MEMORY.md index
     index_path = mem_dir / "MEMORY.md"
     index_content = ""
     if index_path.exists():
@@ -122,7 +257,6 @@ async def read_memory_file(filename: str, project_dir: str = Query(...)):
     if not file_path.exists() or not file_path.is_file():
         return ApiResponse.fail(code=-1, message="File not found")
 
-    # Safety: ensure the file is within mem_dir
     if not file_path.resolve().is_relative_to(mem_dir.resolve()):
         return ApiResponse.fail(code=-1, message="Invalid filename")
 

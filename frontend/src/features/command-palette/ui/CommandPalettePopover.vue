@@ -10,6 +10,10 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  policyRows: {
+    type: Array,
+    default: () => [],
+  },
   loading: {
     type: Boolean,
     default: false,
@@ -20,11 +24,12 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['select', 'close', 'update:searchQuery'])
+const emit = defineEmits(['select', 'close', 'update:searchQuery', 'policy-change'])
 
 const popoverEl = ref(null)
 const searchEl = ref(null)
 const activeIndex = ref(0)
+const manageMode = ref(false)
 
 const filteredCommands = computed(() => {
   const q = props.searchQuery.toLowerCase()
@@ -32,6 +37,15 @@ const filteredCommands = computed(() => {
   return props.commands.filter(
     c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)
   )
+})
+
+const filteredPolicyRows = computed(() => {
+  const q = props.searchQuery.toLowerCase()
+  if (!q) return props.policyRows
+  return props.policyRows.filter(row => (
+    row.command_name.toLowerCase().includes(q)
+    || (row.description || '').toLowerCase().includes(q)
+  ))
 })
 
 watch(() => props.visible, (val) => {
@@ -60,8 +74,8 @@ onBeforeUnmount(() => {
 })
 
 function handleKeydown(e) {
-  const len = filteredCommands.value.length
-  if (!len) return
+  const len = manageMode.value ? 0 : filteredCommands.value.length
+  if (!len && e.key !== 'Escape') return
 
   // 如果有修饰键（全局快捷键），不处理，让事件传播到全局处理器
   const hasModifiers = e.ctrlKey || e.metaKey
@@ -110,25 +124,62 @@ function onSearchInput(e) {
         placeholder="Search commands..."
         type="text"
       />
+      <button class="cmd-manage-btn" @click="manageMode = !manageMode">
+        {{ manageMode ? 'Browse' : 'Manage' }}
+      </button>
     </div>
 
     <div class="cmd-list">
       <div v-if="loading" class="cmd-loading">Loading commands...</div>
-      <div v-else-if="filteredCommands.length === 0" class="cmd-empty">No commands found</div>
-      <div
-        v-else
-        v-for="(cmd, index) in filteredCommands"
-        :key="cmd.name"
-        class="cmd-item"
-        :class="{ 'cmd-item--active': index === activeIndex }"
-        @click="selectItem(cmd)"
-        @mouseenter="activeIndex = index"
-      >
-        <span class="cmd-name">/{{ cmd.name }}</span>
-        <span v-if="cmd.type === 'prompt'" class="cmd-tag cmd-tag--prompt">skill</span>
-        <span v-else-if="cmd.type === 'local' || cmd.type === 'local-jsx'" class="cmd-tag cmd-tag--local">built-in</span>
-        <span class="cmd-desc">{{ cmd.description }}</span>
-      </div>
+      <template v-else-if="manageMode">
+        <div v-if="filteredPolicyRows.length === 0" class="cmd-empty">No commands found</div>
+        <div
+          v-for="row in filteredPolicyRows"
+          :key="row.command_name + ':' + row.command_type"
+          class="cmd-policy-item"
+        >
+          <div class="cmd-policy-main">
+            <span class="cmd-name">/{{ row.command_name }}</span>
+            <span class="cmd-tag" :class="row.command_type === 'prompt' ? 'cmd-tag--prompt' : 'cmd-tag--local'">
+              {{ row.command_type === 'prompt' ? 'skill' : row.command_type }}
+            </span>
+            <span class="cmd-desc">{{ row.description || 'Policy override' }}</span>
+          </div>
+          <div class="cmd-policy-actions">
+            <button
+              class="cmd-policy-btn"
+              :class="{ active: row.enabled }"
+              @click="emit('policy-change', row, { enabled: !row.enabled })"
+            >
+              {{ row.enabled ? 'Enabled' : 'Disabled' }}
+            </button>
+            <button
+              class="cmd-policy-btn"
+              :class="{ active: row.visible }"
+              @click="emit('policy-change', row, { visible: !row.visible })"
+            >
+              {{ row.visible ? 'Visible' : 'Hidden' }}
+            </button>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div v-if="filteredCommands.length === 0" class="cmd-empty">No commands found</div>
+        <div
+          v-else
+          v-for="(cmd, index) in filteredCommands"
+          :key="cmd.name"
+          class="cmd-item"
+          :class="{ 'cmd-item--active': index === activeIndex }"
+          @click="selectItem(cmd)"
+          @mouseenter="activeIndex = index"
+        >
+          <span class="cmd-name">/{{ cmd.name }}</span>
+          <span v-if="cmd.type === 'prompt'" class="cmd-tag cmd-tag--prompt">skill</span>
+          <span v-else-if="cmd.type === 'local' || cmd.type === 'local-jsx'" class="cmd-tag cmd-tag--local">built-in</span>
+          <span class="cmd-desc">{{ cmd.description }}</span>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -172,6 +223,21 @@ function onSearchInput(e) {
   color: var(--text-primary);
   font-size: 13px;
   font-family: var(--font-sans);
+}
+
+.cmd-manage-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.cmd-manage-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
 }
 
 .cmd-search::placeholder {
@@ -230,6 +296,47 @@ function onSearchInput(e) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cmd-policy-item {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.cmd-policy-item:hover {
+  background: var(--bg-hover);
+}
+
+.cmd-policy-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cmd-policy-actions {
+  display: flex;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.cmd-policy-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+
+.cmd-policy-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .cmd-loading,

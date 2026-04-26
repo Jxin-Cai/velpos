@@ -78,6 +78,7 @@ class SessionResponse(BaseModel):
     sdk_session_id: str = ""
     updated_time: str | None = None
     source: str = ""
+    git_branch: str = ""
     im_binding: dict | None = None
 
     @classmethod
@@ -85,8 +86,9 @@ class SessionResponse(BaseModel):
         cls,
         session: Session,
         binding_info: dict | None = None,
+        git_branch: str = "",
     ) -> SessionResponse:
-        summary = SessionAssembler.to_summary(session)
+        summary = SessionAssembler.to_summary(session, git_branch=git_branch)
         return cls(
             session_id=summary["session_id"],
             project_id=summary["project_id"],
@@ -99,6 +101,7 @@ class SessionResponse(BaseModel):
             sdk_session_id=summary.get("sdk_session_id", ""),
             updated_time=summary["updated_time"],
             source=summary.get("source", ""),
+            git_branch=summary.get("git_branch", ""),
             im_binding=binding_info,
         )
 
@@ -111,11 +114,13 @@ class SessionListResponse(BaseModel):
         cls,
         sessions: list[Session],
         binding_map: dict | None = None,
+        git_branch_map: dict | None = None,
     ) -> SessionListResponse:
         binding_map = binding_map or {}
+        git_branch_map = git_branch_map or {}
         return cls(
             sessions=[
-                SessionResponse.from_domain(s, binding_map.get(s.session_id))
+                SessionResponse.from_domain(s, binding_map.get(s.session_id), git_branch_map.get(s.session_id, ""))
                 for s in sessions
             ],
         )
@@ -131,11 +136,12 @@ class SessionDetailResponse(BaseModel):
     project_dir: str
     name: str
     updated_time: str | None
+    git_branch: str = ""
     messages: list[dict[str, Any]]
 
     @classmethod
-    def from_domain(cls, session: Session) -> SessionDetailResponse:
-        summary = SessionAssembler.to_summary(session)
+    def from_domain(cls, session: Session, git_branch: str = "") -> SessionDetailResponse:
+        summary = SessionAssembler.to_summary(session, git_branch=git_branch)
         return cls(
             session_id=summary["session_id"],
             project_id=summary["project_id"],
@@ -146,8 +152,61 @@ class SessionDetailResponse(BaseModel):
             project_dir=summary["project_dir"],
             name=summary["name"],
             updated_time=summary["updated_time"],
+            git_branch=summary.get("git_branch", ""),
             messages=[SessionAssembler.message_to_dict(msg) for msg in session.messages],
         )
+
+
+class BranchSessionRequest(BaseModel):
+    message_index: int = Field(ge=0)
+    name: str = Field(default="", max_length=200)
+    branch_count: int = Field(default=1, ge=1, le=8)
+    worktree_enabled: bool = False
+
+
+class CompareSessionResponse(BaseModel):
+    left_session_id: str
+    right_session_id: str
+    common_prefix_count: int
+    left_only_count: int
+    right_only_count: int
+    left_message_count: int
+    right_message_count: int
+    left_only: list[dict[str, Any]]
+    right_only: list[dict[str, Any]]
+    code_diff: dict[str, Any] = Field(default_factory=dict)
+    analysis_prompt: str = ""
+
+
+class ConvergeBranchesRequest(BaseModel):
+    target_session_id: str = Field(min_length=1, max_length=8)
+
+
+class ConvergeBranchesResponse(BaseModel):
+    target_session_id: str
+    deleted_session_ids: list[str]
+    merged: bool = False
+    cleanup_errors: list[str] = Field(default_factory=list)
+
+
+class SessionBranchResponse(BaseModel):
+    id: str
+    source_session_id: str
+    branch_session_id: str
+    source_message_index: int
+    name: str
+    root_session_id: str = ""
+    group_id: str = ""
+    sequence_no: int = 1
+    worktree_enabled: bool = False
+    worktree_path: str = ""
+    base_branch: str = ""
+    created_time: str
+
+
+class BranchSessionResponse(BaseModel):
+    branches: list[SessionBranchResponse]
+    sessions: list[SessionResponse]
 
 
 class SessionArtifactResponse(BaseModel):

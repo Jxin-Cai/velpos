@@ -85,6 +85,7 @@ class Session:
         return {
             "prompt": self._queued_command.get("prompt", ""),
             "image_paths": list(self._queued_command.get("image_paths", [])),
+            "attachments": list(self._queued_command.get("attachments", [])),
         }
 
     @property
@@ -184,6 +185,7 @@ class Session:
             _queued_command={
                 "prompt": queued_command.get("prompt", ""),
                 "image_paths": list(queued_command.get("image_paths", [])),
+                "attachments": list(queued_command.get("attachments", [])),
             } if queued_command else None,
             _cancel_requested=cancel_requested,
             _updated_time=updated_time,
@@ -289,10 +291,16 @@ class Session:
         self._pending_request_context = None
         self._updated_time = datetime.now()
 
-    def update_queued_command(self, prompt: str, image_paths: list[str] | None = None) -> None:
+    def update_queued_command(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._queued_command = {
             "prompt": prompt,
             "image_paths": list(image_paths or []),
+            "attachments": list(attachments or []),
         }
         self._updated_time = datetime.now()
 
@@ -332,6 +340,20 @@ class Session:
         self._messages = []
         self._usage = Usage.zero()
         self._continue_conversation = False
+        self._sdk_session_id = ""
+        self._last_input_tokens = 0
+        self._pending_request_context = None
+        self._queued_command = None
+        self._cancel_requested = False
+        self._status = SessionStatus.IDLE
+        self._updated_time = datetime.now()
+
+    def restore_messages(self, messages: list[Message]) -> None:
+        if self._status in (SessionStatus.RUNNING, SessionStatus.COMPACTING):
+            raise ValueError("Cannot restore context while session is running")
+        self._messages = list(messages)
+        self._usage = Usage.zero()
+        self._continue_conversation = bool(self._messages)
         self._sdk_session_id = ""
         self._last_input_tokens = 0
         self._pending_request_context = None

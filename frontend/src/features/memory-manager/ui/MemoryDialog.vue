@@ -1,5 +1,5 @@
 <script setup>
-import { watch, computed } from 'vue'
+import { watch, computed, ref, onMounted, onUnmounted } from 'vue'
 import { configuredMarked } from '@features/message-display'
 import { useMemoryManager } from '../model/useMemoryManager'
 import { useDialogManager } from '@shared/lib/useDialogManager'
@@ -9,23 +9,19 @@ const props = defineProps({
   visible: { type: Boolean, default: false },
   projectDir: { type: String, default: '' },
 })
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'evolve'])
 
-// 使用全局弹窗管理器
 const { useDialog } = useDialogManager()
 const visibleWrapper = {
   get value() {
     return props.visible
   },
   set value(newValue) {
-    if (!newValue) {
-      emit('close')
-    }
+    if (!newValue) emit('close')
   }
 }
 useDialog('memory-manager', visibleWrapper)
 
-// ESC to close dialog
 useGlobalHotkeys({
   keys: 'Escape',
   handler: () => {
@@ -38,14 +34,21 @@ useGlobalHotkeys({
   priority: 100
 })
 
+const activeTab = ref('claude')
+
 const {
-  content, loading, editing, editContent, saving,
-  loadClaudeMd, startEdit, cancelEdit, save, reset,
+  content, versions, selectedRevision, selectedContent, canEditSelected,
+  projectMemories, selectedMemory, memoryEditing, memoryDraft,
+  loading, editing, editContent, saving, applying, error, conflictMessage,
+  loadClaudeMd, loadProjectMemories, selectRevision, selectMemory,
+  startEdit, cancelEdit, save, startMemoryEdit, cancelMemoryEdit,
+  saveProjectMemory, removeProjectMemory, toggleProjectMemory,
+  proposeSelected, approveSelected, rejectSelected, deleteSelectedRevision, applySelected, reset,
 } = useMemoryManager()
 
 const renderedContent = computed(() => {
-  if (!content.value) return ''
-  return configuredMarked(content.value)
+  if (!selectedContent.value) return ''
+  return configuredMarked(selectedContent.value)
 })
 
 const renderedPreview = computed(() => {
@@ -53,76 +56,230 @@ const renderedPreview = computed(() => {
   return configuredMarked(editContent.value)
 })
 
+const renderedMemoryContent = computed(() => {
+  if (!selectedMemory.value?.content) return ''
+  return configuredMarked(selectedMemory.value.content)
+})
+
+const renderedMemoryPreview = computed(() => {
+  if (!memoryDraft.value.content) return ''
+  return configuredMarked(memoryDraft.value.content)
+})
+
+const selectedState = computed(() => selectedRevision.value?.state || '')
+const canPropose = computed(() => selectedState.value === 'draft')
+const canApprove = computed(() => selectedState.value === 'proposed')
+const canApply = computed(() => selectedState.value === 'approved')
+const canReject = computed(() => ['draft', 'proposed', 'approved', 'conflicted'].includes(selectedState.value))
+const canDeleteRevision = computed(() => Boolean(selectedRevision.value) && selectedState.value !== 'applied')
+
 watch(() => props.visible, (v) => {
   if (v && props.projectDir) {
     loadClaudeMd(props.projectDir)
+    loadProjectMemories(props.projectDir)
   } else if (!v) {
     reset()
   }
 })
 
+function handleRefresh() {
+  if (props.visible && props.projectDir) {
+    loadClaudeMd(props.projectDir)
+  }
+}
+
+onMounted(() => window.addEventListener('vp-memory-refresh', handleRefresh))
+onUnmounted(() => window.removeEventListener('vp-memory-refresh', handleRefresh))
+
 async function handleSave() {
   await save(props.projectDir)
+}
+
+async function handleApply() {
+  await applySelected(props.projectDir)
+}
+
+async function handleMemorySave() {
+  await saveProjectMemory(props.projectDir)
+}
+
+function handleNewMemory() {
+  selectMemory(null)
+  startMemoryEdit()
 }
 </script>
 
 <template>
   <teleport to="body">
     <Transition name="dialog-fade">
-    <div v-if="visible" class="memory-overlay" @click.self="emit('close')">
-      <div class="memory-dialog" :class="{ 'memory-dialog--editing': editing }">
-        <div class="memory-header">
-          <h3 class="memory-title">CLAUDE.md</h3>
-          <div class="header-actions">
-            <template v-if="!editing">
-              <button class="action-btn edit" @click="startEdit" :disabled="!content && !editing">Edit</button>
-            </template>
-            <template v-else>
-              <button class="action-btn save" @click="handleSave" :disabled="saving">
-                {{ saving ? 'Saving...' : 'Save' }}
-              </button>
-              <button class="action-btn cancel" @click="cancelEdit">Cancel</button>
-            </template>
-            <button class="close-btn" @click="emit('close')">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <div class="memory-body">
-          <div v-if="loading" class="loading-state">
-            <div class="spinner"></div>
-            <span>Loading...</span>
-          </div>
-
-          <!-- Edit mode: split pane -->
-          <template v-else-if="editing">
-            <div class="split-pane">
-              <div class="split-editor">
-                <div class="split-label">Editor</div>
-                <textarea
-                  v-model="editContent"
-                  class="content-editor"
-                  spellcheck="false"
-                ></textarea>
-              </div>
-              <div class="split-divider"></div>
-              <div class="split-preview">
-                <div class="split-label">Preview</div>
-                <div class="content-rendered markdown-body" v-html="renderedPreview"></div>
-              </div>
+      <div v-if="visible" class="memory-overlay" @click.self="emit('close')">
+        <div class="memory-dialog" :class="{ 'memory-dialog--editing': editing || memoryEditing }">
+          <div class="memory-header">
+            <div>
+              <h3 class="memory-title">Project Memory</h3>
+              <div class="memory-subtitle">Versioned CLAUDE.md and shared project memories</div>
             </div>
-          </template>
+            <div class="header-actions">
+              <template v-if="activeTab === 'claude'">
+                <template v-if="!editing">
+                  <button
+                    class="action-btn"
+                    :disabled="!props.projectDir"
+                    title="Extract lessons from the current session and propose a CLAUDE.md upgrade"
+                    @click="emit('evolve')"
+                  >
+                    Evolve
+                  </button>
+                  <button class="action-btn edit" @click="startEdit" :disabled="!canEditSelected || loading">
+                    {{ selectedRevision ? 'Edit Draft' : 'New Draft' }}
+                  </button>
+                  <button class="action-btn" @click="proposeSelected" :disabled="!canPropose || saving">Propose</button>
+                  <button class="action-btn" @click="approveSelected" :disabled="!canApprove || saving">Approve</button>
+                  <button class="action-btn save" @click="handleApply" :disabled="!canApply || applying">
+                    {{ applying ? 'Applying...' : 'Apply' }}
+                  </button>
+                  <button class="action-btn danger" @click="deleteSelectedRevision" :disabled="!canDeleteRevision || saving">Delete Version</button>
+                  <button class="action-btn danger" @click="rejectSelected('Rejected from UI')" :disabled="!canReject || saving">Reject</button>
+                </template>
+                <template v-else>
+                  <button class="action-btn save" @click="handleSave" :disabled="saving">
+                    {{ saving ? 'Saving...' : 'Save Draft' }}
+                  </button>
+                  <button class="action-btn cancel" @click="cancelEdit">Cancel</button>
+                </template>
+              </template>
+              <template v-else>
+                <template v-if="!memoryEditing">
+                  <button class="action-btn edit" @click="handleNewMemory">New Memory</button>
+                  <button class="action-btn" @click="startMemoryEdit(selectedMemory)" :disabled="!selectedMemory">Edit</button>
+                  <button class="action-btn" @click="toggleProjectMemory(selectedMemory)" :disabled="!selectedMemory || saving">
+                    {{ selectedMemory?.state === 'disabled' ? 'Enable' : 'Disable' }}
+                  </button>
+                  <button class="action-btn danger" @click="removeProjectMemory(selectedMemory?.id)" :disabled="!selectedMemory || saving">Delete</button>
+                </template>
+                <template v-else>
+                  <button class="action-btn save" @click="handleMemorySave" :disabled="saving || !memoryDraft.title">
+                    {{ saving ? 'Saving...' : 'Save Memory' }}
+                  </button>
+                  <button class="action-btn cancel" @click="cancelMemoryEdit">Cancel</button>
+                </template>
+              </template>
+              <button class="close-btn" @click="emit('close')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+          </div>
 
-          <!-- View mode: rendered markdown -->
-          <div v-else-if="content" class="content-rendered markdown-body" v-html="renderedContent"></div>
+          <div class="memory-tabs">
+            <button :class="{ active: activeTab === 'claude' }" @click="activeTab = 'claude'">CLAUDE.md</button>
+            <button :class="{ active: activeTab === 'project' }" @click="activeTab = 'project'">Project Memories</button>
+          </div>
 
-          <div v-else class="empty-state">(empty)</div>
+          <div v-if="error || conflictMessage" class="notice" :class="{ conflict: conflictMessage }">
+            {{ conflictMessage || error }}
+          </div>
+
+          <div class="memory-body">
+            <div v-if="loading" class="loading-state">
+              <div class="spinner"></div>
+              <span>Loading...</span>
+            </div>
+
+            <template v-else-if="activeTab === 'claude'">
+              <aside class="version-sidebar">
+                <div class="version-header">Versions</div>
+                <button
+                  v-for="revision in versions"
+                  :key="revision.id"
+                  class="version-item"
+                  :class="{ active: selectedRevision?.id === revision.id }"
+                  @click="selectRevision(revision)"
+                >
+                  <span class="version-main">v{{ revision.version_no }}</span>
+                  <span class="state-badge" :class="revision.state">{{ revision.state }}</span>
+                </button>
+                <div v-if="versions.length === 0" class="empty-version">No versions</div>
+              </aside>
+
+              <section class="content-panel">
+                <div v-if="selectedRevision" class="revision-meta">
+                  <span>v{{ selectedRevision.version_no }}</span>
+                  <span class="state-badge" :class="selectedRevision.state">{{ selectedRevision.state }}</span>
+                  <span class="hash">{{ selectedRevision.content_hash?.slice(0, 8) }}</span>
+                </div>
+
+                <template v-if="editing">
+                  <div class="split-pane">
+                    <div class="split-editor">
+                      <div class="split-label">Editor</div>
+                      <textarea v-model="editContent" class="content-editor" spellcheck="false"></textarea>
+                    </div>
+                    <div class="split-divider"></div>
+                    <div class="split-preview">
+                      <div class="split-label">Preview</div>
+                      <div class="content-rendered markdown-body" v-html="renderedPreview"></div>
+                    </div>
+                  </div>
+                </template>
+
+                <div v-else-if="selectedContent || content" class="content-rendered markdown-body" v-html="renderedContent"></div>
+                <div v-else class="empty-state">(empty)</div>
+              </section>
+            </template>
+
+            <template v-else>
+              <aside class="version-sidebar">
+                <div class="version-header">Memories</div>
+                <button
+                  v-for="memory in projectMemories"
+                  :key="memory.id"
+                  class="version-item"
+                  :class="{ active: selectedMemory?.id === memory.id }"
+                  @click="selectMemory(memory)"
+                >
+                  <span class="version-main">{{ memory.title }}</span>
+                  <span class="state-badge" :class="memory.state">{{ memory.state }}</span>
+                </button>
+                <div v-if="projectMemories.length === 0" class="empty-version">No memories</div>
+              </aside>
+
+              <section class="content-panel">
+                <div v-if="selectedMemory" class="revision-meta">
+                  <span>{{ selectedMemory.memory_type }}</span>
+                  <span class="state-badge" :class="selectedMemory.state">{{ selectedMemory.state }}</span>
+                  <span class="hash">{{ selectedMemory.id }}</span>
+                </div>
+
+                <template v-if="memoryEditing">
+                  <div class="split-pane">
+                    <div class="split-editor">
+                      <div class="split-label">Editor</div>
+                      <input v-model="memoryDraft.title" class="memory-title-input" placeholder="Title" />
+                      <select v-model="memoryDraft.memory_type" class="memory-type-select">
+                        <option value="note">note</option>
+                        <option value="preference">preference</option>
+                        <option value="decision">decision</option>
+                        <option value="reference">reference</option>
+                      </select>
+                      <textarea v-model="memoryDraft.content" class="content-editor memory-editor" spellcheck="false"></textarea>
+                    </div>
+                    <div class="split-divider"></div>
+                    <div class="split-preview">
+                      <div class="split-label">Preview</div>
+                      <div class="content-rendered markdown-body" v-html="renderedMemoryPreview"></div>
+                    </div>
+                  </div>
+                </template>
+
+                <div v-else-if="selectedMemory" class="content-rendered markdown-body" v-html="renderedMemoryContent"></div>
+                <div v-else class="empty-state">Select or create a project memory</div>
+              </section>
+            </template>
+          </div>
         </div>
       </div>
-    </div>
     </Transition>
   </teleport>
 </template>
@@ -134,7 +291,7 @@ async function handleSave() {
   display: flex; align-items: center; justify-content: center;
 }
 .memory-dialog {
-  width: 720px; max-width: 90vw; max-height: 80vh;
+  width: 980px; max-width: 94vw; max-height: 84vh;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -143,9 +300,7 @@ async function handleSave() {
   overflow: hidden;
   transition: width 0.2s ease;
 }
-.memory-dialog--editing {
-  width: 960px;
-}
+.memory-dialog--editing { width: 1180px; }
 .memory-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 18px;
@@ -156,10 +311,32 @@ async function handleSave() {
   font-size: 14px; font-weight: 600;
   color: var(--text-primary);
   font-family: var(--font-mono);
+  margin: 0;
 }
-.header-actions {
-  display: flex; align-items: center; gap: 6px;
+.memory-subtitle { margin-top: 2px; color: var(--text-muted); font-size: 11px; }
+.header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.memory-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
 }
+.memory-tabs button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+.memory-tabs button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
 .close-btn {
   background: transparent; border: none;
   color: var(--text-muted); cursor: pointer;
@@ -168,39 +345,35 @@ async function handleSave() {
   display: flex; align-items: center;
 }
 .close-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
-
 .action-btn {
-  padding: 5px 14px; border-radius: var(--radius-sm);
+  padding: 5px 12px; border-radius: var(--radius-sm);
   font-size: 12px; font-weight: 500; cursor: pointer;
   border: 1px solid var(--border); transition: all var(--transition-fast);
-  font-family: var(--font-sans);
+  font-family: var(--font-sans); background: transparent; color: var(--text-secondary);
 }
-.action-btn.edit {
-  background: transparent; color: var(--accent); border-color: var(--accent);
-}
-.action-btn.edit:hover { background: var(--accent-dim); }
-.action-btn.edit:disabled { opacity: 0.4; cursor: not-allowed; }
-.action-btn.save {
-  background: var(--accent); color: var(--text-on-accent); border-color: var(--accent);
-}
+.action-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.action-btn.edit { color: var(--accent); border-color: var(--accent); }
+.action-btn.edit:hover:not(:disabled) { background: var(--accent-dim); }
+.action-btn.save { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
 .action-btn.save:hover:not(:disabled) { filter: brightness(1.1); }
-.action-btn.save:disabled { opacity: 0.5; cursor: not-allowed; }
-.action-btn.cancel {
-  background: transparent; color: var(--text-secondary);
+.action-btn.cancel { color: var(--text-secondary); }
+.action-btn.danger { color: var(--danger, #ef4444); }
+.notice {
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  font-size: 12px;
 }
-.action-btn.cancel:hover { background: var(--bg-hover); }
-
+.notice.conflict { color: var(--danger, #ef4444); }
 .memory-body {
-  flex: 1; overflow: hidden; display: flex; flex-direction: column;
-  min-height: 400px;
+  flex: 1; overflow: hidden; display: flex;
+  min-height: 460px;
 }
-.loading-state {
+.loading-state, .empty-state {
   flex: 1; display: flex; align-items: center; justify-content: center;
   gap: 8px; color: var(--text-muted); font-size: 13px;
-}
-.empty-state {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  color: var(--text-muted); font-size: 13px;
 }
 .spinner {
   width: 18px; height: 18px;
@@ -210,41 +383,71 @@ async function handleSave() {
   animation: spin 0.6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* View mode */
+.version-sidebar {
+  width: 190px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-primary);
+  padding: 10px;
+  overflow-y: auto;
+}
+.version-header { color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin: 4px 6px 8px; }
+.version-item {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px; margin-bottom: 4px;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.version-item:hover { background: var(--bg-hover); }
+.version-item.active { border-color: var(--accent); background: var(--accent-dim); color: var(--text-primary); }
+.version-main { font-family: var(--font-mono); font-size: 12px; }
+.empty-version { color: var(--text-muted); font-size: 12px; padding: 8px; }
+.content-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.revision-meta {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted); font-size: 12px;
+}
+.state-badge {
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--bg-tertiary); color: var(--text-muted);
+  font-size: 10px; text-transform: uppercase;
+}
+.state-badge.applied { color: #16a34a; }
+.state-badge.approved { color: var(--accent); }
+.state-badge.disabled { color: var(--text-muted); }
+.state-badge.proposed { color: #d97706; }
+.state-badge.rejected, .state-badge.conflicted { color: var(--danger, #ef4444); }
+.hash { font-family: var(--font-mono); }
 .content-rendered {
   flex: 1; padding: 20px 24px;
   overflow-y: auto; font-size: 14px; line-height: 1.7;
 }
-
-/* Edit mode: split pane */
-.split-pane {
-  flex: 1; display: flex; overflow: hidden;
-}
-.split-editor, .split-preview {
-  flex: 1; display: flex; flex-direction: column;
-  overflow: hidden; min-width: 0;
-}
+.split-pane { flex: 1; display: flex; min-height: 0; }
+.split-editor, .split-preview { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.split-divider { width: 1px; background: var(--border); }
 .split-label {
-  padding: 6px 14px;
-  font-size: 10px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.5px;
-  color: var(--text-muted);
+  padding: 8px 12px; font-size: 11px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase;
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.split-divider {
-  width: 1px; background: var(--border); flex-shrink: 0;
+  background: var(--bg-primary);
 }
 .content-editor {
-  flex: 1; background: var(--bg-primary); color: var(--text-primary);
-  border: none; padding: 16px;
-  font-size: 13px; font-family: var(--font-mono); line-height: 1.7;
-  resize: none; outline: none; overflow-y: auto;
-  tab-size: 2;
+  flex: 1; padding: 16px; border: none; outline: none; resize: none;
+  background: var(--bg-primary); color: var(--text-primary);
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.6;
 }
-.split-preview .content-rendered {
-  padding: 16px;
-  font-size: 13px;
+.memory-title-input,
+.memory-type-select {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
 }
+.memory-editor { margin-top: 10px; }
+.dialog-fade-enter-active, .dialog-fade-leave-active { transition: opacity 0.15s ease; }
+.dialog-fade-enter-from, .dialog-fade-leave-to { opacity: 0; }
 </style>

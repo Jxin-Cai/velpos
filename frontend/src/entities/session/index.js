@@ -12,4 +12,14 @@ export {
   listModels,
   listSessionArtifacts,
   compactSession,
+  createSessionBranch,
+  listSessionBranches,
+  compareSessions,
+  convergeSessionBranches,
 } from './api/sessionApi'
+export {
+  getSessionUsage,
+  getProjectUsage,
+  getProjectBudget,
+  saveProjectBudget,
+} from './api/usageApi'

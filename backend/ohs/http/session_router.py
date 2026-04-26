@@ -8,11 +8,20 @@ from application.session.command.clear_context_command import ClearContextComman
 from application.session.command.create_session_command import CreateSessionCommand
 from application.session.command.import_claude_session_command import ImportClaudeSessionCommand
 from application.session.session_application_service import SessionApplicationService
+from application.session.session_branch_application_service import SessionBranchApplicationService
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
-from ohs.dependencies import get_session_application_service, get_im_channel_application_service
+from ohs.dependencies import (
+    get_im_channel_application_service,
+    get_session_application_service,
+    get_session_branch_application_service,
+)
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.session_dto import (
     BatchDeleteRequest,
+    BranchSessionRequest,
+    BranchSessionResponse,
+    ConvergeBranchesRequest,
+    ConvergeBranchesResponse,
     CreateSessionRequest,
     ImportClaudeSessionRequest,
     RenameSessionRequest,
@@ -28,6 +37,10 @@ router = APIRouter(prefix="/api/sessions", tags=["Session"])
 ServiceDep = Annotated[
     SessionApplicationService,
     Depends(get_session_application_service),
+]
+BranchServiceDep = Annotated[
+    SessionBranchApplicationService,
+    Depends(get_session_branch_application_service),
 ]
 ImServiceDep = Annotated[
     ImChannelApplicationService,
@@ -81,7 +94,8 @@ async def list_sessions(
     sessions = await service.list_sessions()
     bindings = await im_service.list_all_bindings()
     binding_map = {b["session_id"]: b for b in bindings}
-    return ApiResponse.success(SessionListResponse.from_domain_list(sessions, binding_map))
+    git_branch_map = {s.session_id: await service.get_current_git_branch(s.project_dir) for s in sessions}
+    return ApiResponse.success(SessionListResponse.from_domain_list(sessions, binding_map, git_branch_map))
 
 
 # Static paths MUST come before /{session_id} dynamic routes
@@ -99,7 +113,73 @@ async def get_session(
     service: ServiceDep,
 ) -> ApiResponse[SessionDetailResponse]:
     session = await service.get_session(session_id)
-    return ApiResponse.success(SessionDetailResponse.from_domain(session))
+    git_branch = await service.get_current_git_branch(session.project_dir)
+    return ApiResponse.success(SessionDetailResponse.from_domain(session, git_branch=git_branch))
+
+
+def _branch_to_dict(branch) -> dict:
+    return {
+        "id": branch.id,
+        "source_session_id": branch.source_session_id,
+        "branch_session_id": branch.branch_session_id,
+        "source_message_index": branch.source_message_index,
+        "name": branch.name,
+        "root_session_id": branch.root_session_id,
+        "group_id": branch.group_id,
+        "sequence_no": branch.sequence_no,
+        "worktree_enabled": branch.worktree_enabled,
+        "worktree_path": branch.worktree_path,
+        "base_branch": branch.base_branch,
+        "created_time": branch.created_time.isoformat(),
+    }
+
+
+@router.post("/{session_id}/branches", summary="Create session branch")
+async def create_session_branch(
+    session_id: str,
+    request: BranchSessionRequest,
+    service: BranchServiceDep,
+) -> ApiResponse[BranchSessionResponse]:
+    result = await service.create_branch(
+        session_id,
+        request.message_index,
+        request.name,
+        request.branch_count,
+        request.worktree_enabled,
+    )
+    return ApiResponse.success(BranchSessionResponse(
+        branches=[_branch_to_dict(branch) for branch in result.branches],
+        sessions=[SessionResponse.from_domain(session) for session in result.sessions],
+    ))
+
+
+@router.get("/{session_id}/branches", summary="List session branches")
+async def list_session_branches(
+    session_id: str,
+    service: BranchServiceDep,
+) -> ApiResponse[dict]:
+    branches = await service.list_branches(session_id)
+    return ApiResponse.success({"branches": [_branch_to_dict(branch) for branch in branches]})
+
+
+@router.get("/{session_id}/compare", summary="Compare sessions")
+async def compare_sessions(
+    session_id: str,
+    service: BranchServiceDep,
+    right: str = Query(..., description="Right session id"),
+) -> ApiResponse[CompareSessionResponse]:
+    result = await service.compare_sessions(session_id, right)
+    return ApiResponse.success(CompareSessionResponse(**result))
+
+
+@router.post("/{session_id}/branches/converge", summary="Converge session branches")
+async def converge_session_branches(
+    session_id: str,
+    request: ConvergeBranchesRequest,
+    service: BranchServiceDep,
+) -> ApiResponse[ConvergeBranchesResponse]:
+    result = await service.converge_branches(session_id, request.target_session_id)
+    return ApiResponse.success(ConvergeBranchesResponse(**result))
 
 
 @router.get("/{session_id}/artifacts", summary="List session artifacts")

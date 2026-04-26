@@ -120,7 +120,7 @@ function buildTodoWriteTasks(messages, sessionRunning) {
 }
 
 export function useTaskProgress() {
-  const { messages, status } = useSession()
+  const { messages, status, runSteps } = useSession()
 
   const allTasks = computed(() => {
     const tasks = {}
@@ -321,5 +321,33 @@ export function useTaskProgress() {
 
   const hasPlanTasks = computed(() => planTasks.value.length > 0)
 
-  return { allTasks, taskCounts, hasActiveTasks, planTasks, planTaskCounts, hasPlanTasks }
+  const timelineSteps = computed(() => runSteps.value.map(step => ({
+    ...step,
+    startedAt: step.started_time ? new Date(step.started_time).getTime() : Date.now(),
+  })))
+
+  const timelineCounts = computed(() => {
+    const counts = { running: 0, completed: 0, failed: 0, total: 0 }
+    for (const step of timelineSteps.value) {
+      counts.total++
+      if (step.status === 'running') counts.running++
+      else if (step.status === 'completed') counts.completed++
+      else if (step.status === 'failed') counts.failed++
+    }
+    return counts
+  })
+
+  const hasTimelineSteps = computed(() => timelineSteps.value.length > 0)
+
+  return {
+    allTasks,
+    taskCounts,
+    hasActiveTasks,
+    planTasks,
+    planTaskCounts,
+    hasPlanTasks,
+    timelineSteps,
+    timelineCounts,
+    hasTimelineSteps,
+  }
 }

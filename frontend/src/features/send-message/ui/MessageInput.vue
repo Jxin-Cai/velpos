@@ -29,7 +29,7 @@ const placeholderText = computed(() => {
   const sendShortcut = shouldEnterSend() ? 'Enter' : 'Ctrl+Enter'
   const newLineShortcut = shouldEnterSend() ? 'Ctrl+Enter' : 'Enter'
 
-  return `Send a message... (${sendShortcut} to send, ${newLineShortcut} for new line, paste images with Ctrl+V)`
+  return `Send a message... (${sendShortcut} to send, ${newLineShortcut} for new line, paste or attach files)`
 })
 
 // 动态生成发送按钮的提示文本
@@ -38,7 +38,8 @@ const sendButtonTitle = computed(() => {
   return `Send message (${sendShortcut})`
 })
 const inputEl = ref(null)
-const pendingImages = ref([]) // [{ data: base64, media_type: 'image/png', preview: dataUrl }]
+const fileInputEl = ref(null)
+const pendingAttachments = ref([])
 
 function autoResize() {
   const el = inputEl.value
@@ -53,19 +54,24 @@ watch(input, () => {
 
 function handleSend() {
   const text = input.value.trim()
-  if ((!text && pendingImages.value.length === 0) || props.disabled) return
+  if ((!text && pendingAttachments.value.length === 0) || props.disabled) return
 
-  if (pendingImages.value.length > 0) {
+  if (pendingAttachments.value.length > 0) {
     emit('send', {
-      text: text || 'Please look at the attached image(s).',
-      images: pendingImages.value.map(img => ({ data: img.data, media_type: img.media_type })),
+      text: text || 'Please review the attached files.',
+      attachments: pendingAttachments.value.map(item => ({
+        name: item.name,
+        mime_type: item.mime_type,
+        size: item.size,
+        data: item.data,
+      })),
     })
   } else {
     emit('send', text)
   }
 
   input.value = ''
-  pendingImages.value = []
+  pendingAttachments.value = []
   nextTick(() => {
     autoResize()
     inputEl.value?.focus()
@@ -129,11 +135,13 @@ function handlePaste(e) {
   if (!items) return
 
   for (const item of items) {
-    if (item.type.startsWith('image/')) {
-      e.preventDefault()
+    if (item.kind === 'file') {
       const file = item.getAsFile()
-      if (file) addImageFile(file)
-      return
+      if (file) {
+        e.preventDefault()
+        addAttachmentFile(file)
+        return
+      }
     }
   }
 }
@@ -143,9 +151,7 @@ function handleDrop(e) {
   const files = e.dataTransfer?.files
   if (!files) return
   for (const file of files) {
-    if (file.type.startsWith('image/')) {
-      addImageFile(file)
-    }
+    addAttachmentFile(file)
   }
 }
 
@@ -153,16 +159,26 @@ function handleDragover(e) {
   e.preventDefault()
 }
 
-function addImageFile(file) {
+function handleFileSelect(e) {
+  const files = e.target.files
+  if (!files) return
+  for (const file of files) {
+    addAttachmentFile(file)
+  }
+  e.target.value = ''
+}
+
+function addAttachmentFile(file) {
   const reader = new FileReader()
   reader.onload = () => {
     const dataUrl = reader.result
-    // Extract base64 data after the comma
     const base64 = dataUrl.split(',')[1]
-    pendingImages.value.push({
+    pendingAttachments.value.push({
+      name: file.name || 'attachment',
       data: base64,
-      media_type: file.type || 'image/png',
-      preview: dataUrl,
+      mime_type: file.type || 'application/octet-stream',
+      size: file.size || 0,
+      preview: file.type?.startsWith('image/') ? dataUrl : '',
     })
   }
   reader.readAsDataURL(file)
@@ -170,11 +186,24 @@ function addImageFile(file) {
 
 function addImage(base64, mediaType) {
   const preview = `data:${mediaType};base64,${base64}`
-  pendingImages.value.push({ data: base64, media_type: mediaType, preview })
+  pendingAttachments.value.push({
+    name: `image-${Date.now()}.png`,
+    data: base64,
+    mime_type: mediaType,
+    size: 0,
+    preview,
+  })
 }
 
-function removeImage(index) {
-  pendingImages.value.splice(index, 1)
+function removeAttachment(index) {
+  pendingAttachments.value.splice(index, 1)
+}
+
+function formatSize(size) {
+  const n = Number(size) || 0
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${n} B`
 }
 
 function setInput(text) {
@@ -194,13 +223,16 @@ function appendText(text) {
 }
 
 function handleAreaClick(e) {
-  // If clicking on the input area (but not on the send button or image remove buttons), focus the input
-  const isSendBtn = e.target.closest('.send-btn')
-  const isRemoveBtn = e.target.closest('.image-remove')
+  // If clicking on the input area (but not on controls), focus the input
+  const isControl = e.target.closest('.send-btn, .attach-btn, .attachment-remove, .attachment-thumb, .attachment-file, input[type="file"]')
 
-  if (!isSendBtn && !isRemoveBtn && !props.disabled) {
+  if (!isControl && !props.disabled) {
     inputEl.value?.focus()
   }
+}
+
+function openFilePicker() {
+  fileInputEl.value?.click()
 }
 
 defineExpose({ setInput, addImage, appendText })
@@ -208,11 +240,19 @@ defineExpose({ setInput, addImage, appendText })
 
 <template>
   <div class="input-area" @drop="handleDrop" @dragover="handleDragover" @click="handleAreaClick">
-    <!-- Image previews -->
-    <div v-if="pendingImages.length > 0" class="image-previews">
-      <div v-for="(img, i) in pendingImages" :key="i" class="image-thumb">
-        <img :src="img.preview" alt="Pending image" />
-        <button class="image-remove" @click="removeImage(i)" title="Remove image">
+    <div v-if="pendingAttachments.length > 0" class="attachment-previews">
+      <div
+        v-for="(item, i) in pendingAttachments"
+        :key="i"
+        :class="item.preview ? 'attachment-thumb' : 'attachment-file'"
+      >
+        <img v-if="item.preview" :src="item.preview" :alt="item.name" />
+        <div v-else class="attachment-file-main">
+          <span class="attachment-icon">FILE</span>
+          <span class="attachment-name">{{ item.name }}</span>
+          <span class="attachment-size">{{ formatSize(item.size) }}</span>
+        </div>
+        <button class="attachment-remove" @click="removeAttachment(i)" title="Remove attachment">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
@@ -235,17 +275,34 @@ defineExpose({ setInput, addImage, appendText })
       autocapitalize="off"
       spellcheck="false"
     ></textarea>
-    <button
-      class="send-btn"
-      :disabled="(!input.trim() && pendingImages.length === 0) || disabled"
-      :title="sendButtonTitle"
-      @click="handleSend"
-    >
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="22" y1="2" x2="11" y2="13"/>
-        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-      </svg>
-    </button>
+    <div class="input-actions">
+      <input
+        ref="fileInputEl"
+        type="file"
+        multiple
+        class="file-input"
+        @change="handleFileSelect"
+      />
+      <button
+        class="attach-btn"
+        :disabled="disabled"
+        title="Attach files"
+        @click.stop="openFilePicker"
+      >
+        +
+      </button>
+      <button
+        class="send-btn"
+        :disabled="(!input.trim() && pendingAttachments.length === 0) || disabled"
+        :title="sendButtonTitle"
+        @click="handleSend"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -271,14 +328,14 @@ defineExpose({ setInput, addImage, appendText })
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-.image-previews {
+.attachment-previews {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   padding-bottom: 8px;
 }
 
-.image-thumb {
+.attachment-thumb {
   position: relative;
   width: 60px;
   height: 60px;
@@ -288,13 +345,51 @@ defineExpose({ setInput, addImage, appendText })
   cursor: default;
 }
 
-.image-thumb img {
+.attachment-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.image-remove {
+.attachment-file {
+  position: relative;
+  max-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  padding: 8px 26px 8px 8px;
+  cursor: default;
+}
+
+.attachment-file-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.attachment-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.attachment-size {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.attachment-remove {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -312,7 +407,8 @@ defineExpose({ setInput, addImage, appendText })
   transition: opacity var(--transition-fast);
 }
 
-.image-thumb:hover .image-remove {
+.attachment-thumb:hover .attachment-remove,
+.attachment-file:hover .attachment-remove {
   opacity: 1;
 }
 
@@ -346,6 +442,43 @@ defineExpose({ setInput, addImage, appendText })
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+}
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.file-input {
+  display: none;
+}
+
+.attach-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.attach-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .send-btn {

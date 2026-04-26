@@ -47,3 +47,24 @@ export function listSessionArtifacts(sessionId) {
 export function compactSession(sessionId) {
   return post(`/sessions/${sessionId}/compact`)
 }
+
+export function createSessionBranch(sessionId, messageIndex, name = '', branchCount = 1, worktreeEnabled = false) {
+  return post(`/sessions/${sessionId}/branches`, {
+    message_index: messageIndex,
+    name,
+    branch_count: branchCount,
+    worktree_enabled: worktreeEnabled,
+  })
+}
+
+export function listSessionBranches(sessionId) {
+  return get(`/sessions/${sessionId}/branches`)
+}
+
+export function compareSessions(sessionId, rightSessionId) {
+  return get(`/sessions/${sessionId}/compare?right=${encodeURIComponent(rightSessionId)}`)
+}
+
+export function convergeSessionBranches(sessionId, targetSessionId) {
+  return post(`/sessions/${sessionId}/branches/converge`, { target_session_id: targetSessionId })
+}

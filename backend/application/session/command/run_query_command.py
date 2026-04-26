@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -7,3 +9,4 @@ class RunQueryCommand(BaseModel):
     session_id: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
     image_paths: list[str] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
