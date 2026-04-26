@@ -1,27 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-import os
-import tempfile
 import uuid
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from typing import Annotated
 
+from application.message.attachment_application_service import AttachmentApplicationService
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_application_service import SessionApplicationService
 from domain.shared.async_utils import safe_create_task
 from infr.client.connection_manager import ConnectionManager
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from ohs.assembler.session_assembler import SessionAssembler
-from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_project_application_service
-from application.project.project_application_service import ProjectApplicationService
+from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_attachment_application_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["WebSocket"])
+
 
 ServiceDep = Annotated[
     SessionApplicationService,
@@ -35,10 +33,23 @@ GatewayDep = Annotated[
     ClaudeAgentGatewayImpl,
     Depends(get_claude_agent_gateway),
 ]
-ProjectServiceDep = Annotated[
-    ProjectApplicationService,
-    Depends(get_project_application_service),
+AttachmentServiceDep = Annotated[
+    AttachmentApplicationService,
+    Depends(get_attachment_application_service),
 ]
+
+
+@router.websocket("/ws/events")
+async def global_events_endpoint(
+    websocket: WebSocket,
+    manager: ConnectionManagerDep,
+) -> None:
+    await manager.connect_global(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_global(websocket)
 
 
 @router.websocket("/ws/{session_id}")
@@ -48,7 +59,7 @@ async def websocket_endpoint(
     service: ServiceDep,
     manager: ConnectionManagerDep,
     gateway: GatewayDep,
-    project_service: ProjectServiceDep,
+    attachment_service: AttachmentServiceDep,
 ) -> None:
     from domain.shared.business_exception import BusinessException
 
@@ -89,15 +100,8 @@ async def websocket_endpoint(
             session_id, len(all_messages), result_count,
         )
 
-        session_summary = SessionAssembler.to_summary(session)
-
-        # Auto-load git branch for the session's project
-        if session.project_id:
-            try:
-                branch_info = await project_service.list_git_branches(session.project_id)
-                session_summary["git_branch"] = branch_info.get("current", "")
-            except Exception:
-                pass
+        git_branch = await service.get_current_git_branch(session.project_dir)
+        session_summary = SessionAssembler.to_summary(session, git_branch=git_branch)
 
         # Include effective permission mode so frontend can sync
         session_summary["permission_mode"] = gateway.get_permission_mode(session_id)
@@ -128,7 +132,19 @@ async def websocket_endpoint(
 
         # Pre-warm SDK connection in background so first query is faster
         if session.sdk_session_id and not service.is_agent_connected(session_id):
-            safe_create_task(service.prewarm_connection(session_id))
+            async def _prewarm_loaded_session() -> None:
+                try:
+                    await gateway.open_connection(
+                        session_id=session_id,
+                        model=session.model,
+                        cwd=session.project_dir,
+                        sdk_session_id=session.sdk_session_id,
+                    )
+                    logger.info("[session=%s] SDK 连接预热完成", session_id)
+                except Exception as e:
+                    logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
+
+            safe_create_task(_prewarm_loaded_session())
 
         while True:
             data = await websocket.receive_json()
@@ -137,6 +153,13 @@ async def websocket_endpoint(
             if action == "send_prompt":
                 prompt = data.get("prompt", "")
                 images = data.get("images", [])
+                incoming_attachments = list(data.get("attachments") or [])
+                for img in images:
+                    incoming_attachments.append({
+                        "name": img.get("name") or f"image-{uuid.uuid4().hex[:8]}.png",
+                        "mime_type": img.get("media_type", "image/png"),
+                        "data": img.get("data", ""),
+                    })
                 current_session = await service.get_session(session_id)
 
                 # Protect listener sessions from manual input
@@ -145,29 +168,35 @@ async def websocket_endpoint(
                         "event": "error",
                         "message": "Cannot send prompts to listener session",
                     })
-                elif prompt:
-                    # Save images to temp files if present (before running check)
+                elif prompt or incoming_attachments:
+                    saved_attachments = []
                     image_paths = []
-                    for img in images:
+                    for item in incoming_attachments:
                         try:
-                            img_data = base64.b64decode(img.get("data", ""))
-                            media_type = img.get("media_type", "image/png")
-                            ext = ".png" if "png" in media_type else ".jpg" if "jpeg" in media_type or "jpg" in media_type else ".webp" if "webp" in media_type else ".png"
-                            # Save to project dir's .claude/images/ for better access
-                            img_dir = os.path.join(current_session.project_dir, ".claude", "images") if current_session.project_dir else tempfile.gettempdir()
-                            os.makedirs(img_dir, exist_ok=True)
-                            img_filename = f"vp-img-{uuid.uuid4().hex[:8]}{ext}"
-                            img_path = os.path.join(img_dir, img_filename)
-                            with open(img_path, "wb") as f:
-                                f.write(img_data)
-                            image_paths.append(img_path)
-                        except Exception as img_err:
-                            logger.warning("Failed to save image: %s", img_err)
+                            raw_data = item.get("data", "")
+                            if "," in raw_data and raw_data.startswith("data:"):
+                                raw_data = raw_data.split(",", 1)[1]
+                            mime_type = item.get("mime_type") or item.get("media_type") or "application/octet-stream"
+                            attachment = await attachment_service.save_base64_attachment(
+                                project_id=current_session.project_id,
+                                session_id=session_id,
+                                project_dir=current_session.project_dir,
+                                filename=item.get("name") or item.get("filename") or "attachment.bin",
+                                mime_type=mime_type,
+                                data_base64=raw_data,
+                            )
+                            ref = attachment.to_message_ref()
+                            saved_attachments.append(ref)
+                            if mime_type.startswith("image/"):
+                                image_paths.append(ref["path"])
+                        except Exception as attachment_err:
+                            logger.warning("Failed to save attachment: %s", attachment_err)
 
                     command = RunQueryCommand(
                         session_id=session_id,
-                        prompt=prompt,
+                        prompt=prompt or "Please review the attached files.",
                         image_paths=image_paths,
+                        attachments=saved_attachments,
                     )
 
                     if not current_session.is_running:
@@ -202,13 +231,10 @@ async def websocket_endpoint(
 
             elif action == "get_status":
                 current_session = await service.get_session(session_id)
-                summary = SessionAssembler.to_summary(current_session)
-                if current_session.project_id:
-                    try:
-                        branch_info = await project_service.list_git_branches(current_session.project_id)
-                        summary["git_branch"] = branch_info.get("current", "")
-                    except Exception:
-                        pass
+                summary = SessionAssembler.to_summary(
+                    current_session,
+                    git_branch=await service.get_current_git_branch(current_session.project_dir),
+                )
                 summary["waiting_for_slot"] = service.is_waiting_for_slot(session_id)
                 await websocket.send_json({
                     "event": "status",
@@ -221,14 +247,10 @@ async def websocket_endpoint(
                     try:
                         await service.set_model(session_id, model)
                         current_session = await service.get_session(session_id)
-                        summary = SessionAssembler.to_summary(current_session)
-                        # Preserve git_branch — it comes from the project repo, not the session
-                        if current_session.project_id:
-                            try:
-                                branch_info = await project_service.list_git_branches(current_session.project_id)
-                                summary["git_branch"] = branch_info.get("current", "")
-                            except Exception:
-                                pass
+                        summary = SessionAssembler.to_summary(
+                            current_session,
+                            git_branch=await service.get_current_git_branch(current_session.project_dir),
+                        )
                         summary["waiting_for_slot"] = service.is_waiting_for_slot(session_id)
                         await websocket.send_json({
                             "event": "status",

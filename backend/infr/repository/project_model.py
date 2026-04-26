@@ -29,6 +29,12 @@ class ProjectModel(Base):
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",
     )
+    active_claude_md_revision_id: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="", server_default="",
+    )
+    claude_md_file_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default="",
+    )
     created_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now,
     )

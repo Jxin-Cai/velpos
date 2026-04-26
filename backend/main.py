@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,16 +17,23 @@ from fastapi.responses import JSONResponse
 from domain.shared.business_exception import BusinessException
 from ohs.http.api_response import ApiResponse
 from ohs.http.agent_router import router as agent_router
+from ohs.http.attachment_router import router as attachment_router
 from ohs.http.channel_profile_router import router as channel_profile_router
 from ohs.http.claude_session_router import router as claude_session_router
+from ohs.http.command_policy_router import router as command_policy_router
 from ohs.http.command_router import router as command_router
+from ohs.http.evolution_router import router as evolution_router
 from ohs.http.git_router import router as git_router
 from ohs.http.im_router import router as im_router
 from ohs.http.plugin_router import router as plugin_router
+from ohs.http.project_memory_router import router as project_memory_router
 from ohs.http.project_router import router as project_router
+from ohs.http.scheduler_router import router as scheduler_router
 from ohs.http.session_router import router as session_router
+from ohs.http.session_timeline_router import router as session_timeline_router
 from ohs.http.settings_router import router as settings_router
 from ohs.http.terminal_router import router as terminal_router
+from ohs.http.usage_router import router as usage_router
 from ohs.http.memory_router import router as memory_router
 from ohs.ws.session_ws import router as ws_router
 
@@ -51,11 +60,22 @@ async def _run_alembic_upgrade() -> None:
 
     from infr.config.base import DATABASE_URL
 
-    alembic_cfg = Config("alembic.ini")
+    backend_dir = Path(__file__).resolve().parent
+    alembic_cfg = Config(str(backend_dir / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(backend_dir / "infr/repository/migrations"))
     alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
 
+    import infr.repository.evolution_proposal_model  # noqa: F401
+    import infr.repository.attachment_model  # noqa: F401
     import infr.repository.session_model  # noqa: F401
+    import infr.repository.scheduled_task_model  # noqa: F401
     import infr.repository.session_audit_event_model  # noqa: F401
+    import infr.repository.session_branch_model  # noqa: F401
+    import infr.repository.session_run_step_model  # noqa: F401
+    import infr.repository.usage_governance_model  # noqa: F401
+    import infr.repository.project_command_policy_model  # noqa: F401
+    import infr.repository.project_memory_entry_model  # noqa: F401
+    import infr.repository.claude_md_revision_model  # noqa: F401
     from infr.config.base import Base
 
     connectable = async_engine_from_config(
@@ -78,7 +98,7 @@ async def _run_alembic_upgrade() -> None:
                 row = connection.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar()
                 if row is not None:
                     from alembic.script import ScriptDirectory
-                    script = ScriptDirectory.from_config(alembic_cfg)
+                    script = ScriptDirectory(str(backend_dir / "infr/repository/migrations"))
                     try:
                         script.get_revision(row)
                         needs_baseline = False
@@ -226,7 +246,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to resume IM listeners: %s", e)
 
+    scheduler_runner = None
+    try:
+        from infr.scheduler.scheduler_runner import SchedulerRunner
+        scheduler_runner = SchedulerRunner()
+        scheduler_runner.start()
+        logger.info("Scheduler runner started")
+    except Exception:
+        logger.error("Failed to start scheduler runner", exc_info=True)
+
     yield
+
+    if scheduler_runner is not None:
+        try:
+            await scheduler_runner.stop()
+        except Exception:
+            logger.error("Failed to stop scheduler runner", exc_info=True)
 
     from ohs.dependencies import (
         get_im_api_gateway,
@@ -290,10 +325,16 @@ app.add_middleware(
 )
 
 app.include_router(project_router)
+app.include_router(project_memory_router)
 app.include_router(session_router)
+app.include_router(attachment_router)
+app.include_router(evolution_router)
+app.include_router(scheduler_router)
+app.include_router(session_timeline_router)
 app.include_router(agent_router)
 app.include_router(plugin_router)
 app.include_router(command_router)
+app.include_router(command_policy_router)
 app.include_router(claude_session_router)
 app.include_router(git_router)
 app.include_router(im_router)
@@ -301,6 +342,7 @@ app.include_router(ws_router)
 app.include_router(settings_router)
 app.include_router(channel_profile_router)
 app.include_router(terminal_router)
+app.include_router(usage_router)
 app.include_router(memory_router)
 
 

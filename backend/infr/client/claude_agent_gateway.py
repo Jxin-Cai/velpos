@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, AsyncIterator
 
@@ -704,27 +705,8 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 except Exception:
                     pass
 
-        # Enrich with context_window: use known sizes first, then parse from text
-        import re
         for model in raw_models:
-            model_id = model.get("value", "")
-            # Use known actual context size if available
-            known = self._KNOWN_CONTEXT_WINDOWS.get(model_id)
-            if known:
-                model["context_window"] = known
-                continue
-            # Fallback: parse from displayName/description
-            text = f"{model.get('displayName', '')} {model.get('description', '')}"
-            match = re.search(r'(\d+(?:\.\d+)?)\s*[Mm]\s*context', text)
-            if match:
-                parsed = int(float(match.group(1)) * 1_000_000)
-                model["context_window"] = parsed
-            else:
-                match_k = re.search(r'(\d+)\s*[Kk]\s*context', text)
-                if match_k:
-                    model["context_window"] = int(match_k.group(1)) * 1000
-                else:
-                    model["context_window"] = 200_000
+            model["context_window"] = self._context_window_for_model(model)
 
         return raw_models
 
@@ -766,7 +748,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     model_id = m.get("id", "")
                     display_name = m.get("display_name", model_id)
                     # Use context_window from API if available, otherwise default
-                    ctx_window = m.get("context_window") or self._KNOWN_CONTEXT_WINDOWS.get(model_id, 200_000)
+                    ctx_window = self._context_window_for_model(m)
                     models.append({
                         "value": model_id,
                         "displayName": display_name,
@@ -782,9 +764,58 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     _IGNORED_SYSTEM_SUBTYPES: set[str] = {"init", "greeting"}
 
     # Known actual context window sizes for Claude models.
-    # Values from Anthropic API model metadata.
-    # Models not listed here will have context parsed from SDK description text.
-    _KNOWN_CONTEXT_WINDOWS: dict[str, int] = {}
+    _ANTHROPIC_DEFAULT_CONTEXT_WINDOW = 200_000
+    _KNOWN_CONTEXT_WINDOWS: dict[str, int] = {
+        "claude-opus-4-7": 200_000,
+        "claude-opus-4-6": 200_000,
+        "claude-sonnet-4-6": 200_000,
+        "claude-haiku-4-5-20251001": 200_000,
+        "claude-opus-4-1": 200_000,
+        "claude-opus-4-0": 200_000,
+        "claude-sonnet-4-5": 200_000,
+        "claude-sonnet-4-0": 200_000,
+        "claude-3-7-sonnet": 200_000,
+        "claude-3-5-sonnet": 200_000,
+        "claude-3-5-haiku": 200_000,
+        "claude-3-opus": 200_000,
+        "claude-3-sonnet": 200_000,
+        "claude-3-haiku": 200_000,
+    }
+
+    @classmethod
+    def _context_window_for_model(cls, model: dict[str, Any]) -> int:
+        model_id = str(model.get("value") or model.get("id") or model.get("name") or "")
+        model_text = f"{model_id} {model.get('displayName', '')} {model.get('display_name', '')}"
+        is_claude = any(part in model_text.lower() for part in ("claude", "opus", "sonnet", "haiku"))
+        for key, value in cls._KNOWN_CONTEXT_WINDOWS.items():
+            if model_id.startswith(key):
+                return value
+        explicit = (
+            model.get("context_window")
+            or model.get("contextWindow")
+            or model.get("max_input_tokens")
+            or model.get("maxInputTokens")
+            or model.get("max_tokens")
+            or model.get("maxTokens")
+        )
+        if explicit:
+            try:
+                parsed = int(explicit)
+                if parsed > 0:
+                    return min(parsed, cls._ANTHROPIC_DEFAULT_CONTEXT_WINDOW) if is_claude else parsed
+            except (TypeError, ValueError):
+                pass
+        if is_claude:
+            return cls._ANTHROPIC_DEFAULT_CONTEXT_WINDOW
+        text = f"{model.get('displayName', '')} {model.get('description', '')}"
+        match = re.search(r'(\d+(?:\.\d+)?)\s*[Mm]\s*context', text)
+        if match:
+            parsed = int(float(match.group(1)) * 1_000_000)
+            return parsed if parsed <= 1_000_000 else cls._ANTHROPIC_DEFAULT_CONTEXT_WINDOW
+        match_k = re.search(r'(\d+)\s*[Kk]\s*context', text)
+        if match_k:
+            return int(match_k.group(1)) * 1000
+        return cls._ANTHROPIC_DEFAULT_CONTEXT_WINDOW
 
     @staticmethod
     def _extract_message_info(msg: Any) -> dict[str, Any] | None:

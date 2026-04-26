@@ -73,8 +73,24 @@ This is especially useful for teams where the operators are **product owners, su
 - **Memory management** — edit `CLAUDE.md` and memory files from the UI
 - **Git management** — configure identity and SSH keys
 - **IM integrations** — connect Lark, WeChat, QQ, and OpenIM for two-way sync
+- **Project Clock** — schedule recurring project work, bind each run to a selected IM channel instance, auto-disconnect after completion, and optionally delete successful one-shot execution sessions
+- **Parallel sessions** — branch a conversation into multiple sessions, optionally isolate each branch in a Git worktree, compare message/code differences, and ask Claude to analyze the trade-offs
+- **Branch convergence** — keep one target session, delete the alternatives, and merge committed worktree changes back into the base branch with safety checks
 - **Channel profiles** — manage multiple API keys, hosts, and model mappings
 - **Settings center** — manage Claude Code core settings in one place
+
+### Current Release: v0.2.0
+
+v0.2.0 is the first formal release focused on project operations and branch governance:
+
+- Packaged-agent workflow console on top of Claude Code Agent SDK
+- Project/session management with streaming chat, attachments, model switching, permissions, and context tools
+- IM channel instances for Lark, WeChat, QQ, and OpenIM with bidirectional session sync
+- Scheduled project tasks with selected IM delivery channel, automatic unbind, and optional one-shot session cleanup
+- Parallel session branching with optional worktree isolation and session-aware branch display
+- Session comparison with message diff, Git diff summary, and Claude-ready analysis prompts
+- Target-session convergence that deletes alternatives and safely merges committed worktree branches back to the base branch
+
 
 <br/>
 
@@ -255,6 +271,8 @@ The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http:
 | **Memory** | Edit `CLAUDE.md` and memory files directly in the UI |
 | **Git** | Manage global Git identity and SSH keys |
 | **IM Integration** | Bind sessions to **Lark**, **WeChat**, **QQ**, or **OpenIM** for two-way sync |
+| **Scheduled tasks** | Run recurring project work, route notifications through a selected IM channel instance, and optionally clean up successful one-shot sessions |
+| **Parallel branches** | Create multiple session branches, isolate them with worktrees, compare message/code diffs, and converge on one target session |
 
 <br/>
 

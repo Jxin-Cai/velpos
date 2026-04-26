@@ -16,6 +16,8 @@ class Project:
     _agents: dict[str, dict] = field(default_factory=dict)
     _plugins: dict[str, dict] = field(default_factory=dict)
     _sort_order: int = 0
+    _active_claude_md_revision_id: str = ""
+    _claude_md_file_hash: str = ""
     _created_at: datetime = field(default_factory=datetime.now)
     _updated_at: datetime | None = None
 
@@ -59,6 +61,14 @@ class Project:
         return self._sort_order
 
     @property
+    def active_claude_md_revision_id(self) -> str:
+        return self._active_claude_md_revision_id
+
+    @property
+    def claude_md_file_hash(self) -> str:
+        return self._claude_md_file_hash
+
+    @property
     def created_at(self) -> datetime:
         return self._created_at
 
@@ -97,6 +107,8 @@ class Project:
             _agents={},
             _plugins={},
             _sort_order=0,
+            _active_claude_md_revision_id="",
+            _claude_md_file_hash="",
             _created_at=now,
             _updated_at=now,
         )
@@ -110,6 +122,8 @@ class Project:
         agents: dict[str, dict],
         plugins: dict[str, dict] | None = None,
         sort_order: int = 0,
+        active_claude_md_revision_id: str = "",
+        claude_md_file_hash: str = "",
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> Project:
@@ -120,6 +134,8 @@ class Project:
             _agents=agents,
             _plugins=plugins or {},
             _sort_order=sort_order,
+            _active_claude_md_revision_id=active_claude_md_revision_id,
+            _claude_md_file_hash=claude_md_file_hash,
             _created_at=created_at or datetime.now(),
             _updated_at=updated_at,
         )
@@ -134,6 +150,11 @@ class Project:
 
     def update_sort_order(self, sort_order: int) -> None:
         self._sort_order = sort_order
+        self._updated_at = datetime.now()
+
+    def update_claude_md_revision(self, revision_id: str, file_hash: str) -> None:
+        self._active_claude_md_revision_id = revision_id
+        self._claude_md_file_hash = file_hash
         self._updated_at = datetime.now()
 
     # ------------------------------------------------------------------

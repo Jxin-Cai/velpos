@@ -9,18 +9,20 @@ export function useSendMessage(wsConnection) {
       return
     }
 
-    // Support both string and { text, images } format
+    // Support string and { text, images, attachments } formats
     let text = ''
     let images = null
+    let attachments = null
 
     if (typeof promptOrData === 'string') {
       text = promptOrData.trim()
     } else if (promptOrData && typeof promptOrData === 'object') {
       text = (promptOrData.text || '').trim()
       images = promptOrData.images || null
+      attachments = promptOrData.attachments || null
     }
 
-    if (!text && (!images || images.length === 0)) {
+    if (!text && (!images || images.length === 0) && (!attachments || attachments.length === 0)) {
       return
     }
 
@@ -29,6 +31,9 @@ export function useSendMessage(wsConnection) {
     const payload = { action: 'send_prompt', prompt: text }
     if (images && images.length > 0) {
       payload.images = images
+    }
+    if (attachments && attachments.length > 0) {
+      payload.attachments = attachments
     }
     const sent = wsConnection.send(payload)
     if (!sent) {
@@ -41,6 +46,11 @@ export function useSendMessage(wsConnection) {
       content: {
         text,
         ...(images && images.length > 0 ? { image_count: images.length } : {}),
+        ...(attachments && attachments.length > 0 ? { attachments: attachments.map(item => ({
+          filename: item.name,
+          mime_type: item.mime_type,
+          size_bytes: item.size || 0,
+        })) } : {}),
       },
     })
   }

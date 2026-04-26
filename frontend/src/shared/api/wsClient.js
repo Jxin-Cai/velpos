@@ -3,6 +3,55 @@ import {
   WS_CLOSE_NOT_FOUND,
 } from '@shared/lib/constants'
 
+export function createGlobalEventConnection() {
+  let ws = null
+  let reconnectTimer = null
+  let eventHandler = null
+  let reconnectAttempt = 0
+  let destroyed = false
+
+  function buildUrl() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}/ws/events`
+  }
+
+  function reconnectDelay() {
+    return Math.min(1000 * Math.pow(2, reconnectAttempt), 30000)
+  }
+
+  function connect() {
+    ws = new WebSocket(buildUrl())
+    ws.onopen = () => { reconnectAttempt = 0 }
+    ws.onmessage = (event) => {
+      if (!eventHandler) return
+      try {
+        eventHandler(JSON.parse(event.data))
+      } catch {
+        // Ignore malformed messages
+      }
+    }
+    ws.onclose = () => {
+      if (destroyed) return
+      const delay = reconnectDelay()
+      reconnectAttempt++
+      reconnectTimer = setTimeout(connect, delay)
+    }
+  }
+
+  function onEvent(handler) {
+    eventHandler = handler
+  }
+
+  function close() {
+    destroyed = true
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    if (ws) ws.close(WS_CLOSE_NORMAL)
+  }
+
+  connect()
+  return { onEvent, close }
+}
+
 export function createWsConnection(sessionId) {
   let ws = null
   let reconnectTimer = null

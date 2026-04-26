@@ -168,8 +168,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
         <div class="dialog-footer">
           <span class="footer-hint">
             {{ language === 'zh'
-              ? '选择 Agent 后，其提示词将写入项目 CLAUDE.md'
-              : 'Agent prompt will be written to project CLAUDE.md'
+              ? '选择 Agent 后，其提示词将通过 CLAUDE.md 版本自动应用'
+              : 'Agent prompt will be applied through CLAUDE.md versions'
             }}
           </span>
         </div>

@@ -23,11 +23,20 @@ load_dotenv()
 from infr.config.base import DATABASE_URL, Base
 
 # --- 确保所有 ORM 模型被导入以支持 autogenerate ---
+import infr.repository.evolution_proposal_model  # noqa: F401
+import infr.repository.attachment_model  # noqa: F401
 import infr.repository.session_model  # noqa: F401
+import infr.repository.scheduled_task_model  # noqa: F401
 import infr.repository.session_audit_event_model  # noqa: F401
+import infr.repository.session_branch_model  # noqa: F401
+import infr.repository.session_run_step_model  # noqa: F401
 import infr.repository.im_binding_model  # noqa: F401
 import infr.repository.channel_profile_model  # noqa: F401
 import infr.repository.project_model  # noqa: F401
+import infr.repository.usage_governance_model  # noqa: F401
+import infr.repository.project_command_policy_model  # noqa: F401
+import infr.repository.project_memory_entry_model  # noqa: F401
+import infr.repository.claude_md_revision_model  # noqa: F401
 import infr.repository.channel_init_model  # noqa: F401
 # ------------------------------------------------
 

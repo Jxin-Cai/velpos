@@ -3,14 +3,17 @@ import { ref, reactive, computed, watch, provide, onMounted, onUnmounted, nextTi
 import { useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
-import { createWsConnection } from '@shared/api/wsClient'
+import { createWsConnection, createGlobalEventConnection } from '@shared/api/wsClient'
+import { listSchedules } from '@features/scheduler/api/schedulerApi'
 import { ChatPanelPage } from '@pages/chat-panel'
 import { SessionSidebar, useSessionList } from '@features/session-list'
 import { NotificationBell, useNotifications } from '@features/notification-center'
 import { WorkingSessionsButton, useWorkingSessions } from '@features/working-sessions'
+import { fetchSessionRunSteps } from '@features/task-progress'
 import { SettingsButton, SettingsDialog } from '@features/settings-manager'
 import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
+import { SchedulerDialog } from '@features/scheduler'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
 import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
@@ -25,6 +28,8 @@ const {
   updateSessionFor,
   addMessageTo,
   setMessagesFor,
+  setRunStepsFor,
+  upsertRunStepFor,
   setStatusFor,
   setQueuedFor,
   setErrorFor,
@@ -60,6 +65,10 @@ const initError = ref(null)
 const settingsDialogVisible = ref(false)
 const gitManagerVisible = ref(false)
 const terminalDrawerVisible = ref(false)
+const schedulerVisible = ref(false)
+const schedulerProjectId = ref('')
+const scheduleCounts = ref({})
+let globalEventConnection = null
 const sidebarRef = ref(null)
 
 const isMobileSidebarOpen = ref(false)
@@ -96,6 +105,44 @@ function handleLocateSession() {
   sidebarRef.value?.scrollToSession(currentSessionId.value)
 }
 
+function closeProjectScheduler() {
+  schedulerVisible.value = false
+  loadScheduleCounts()
+}
+
+function openProjectScheduler(projectId) {
+  schedulerProjectId.value = projectId
+  schedulerVisible.value = true
+}
+
+async function loadScheduleCounts() {
+  try {
+    const data = await listSchedules()
+    const counts = {}
+    for (const task of data.tasks || []) {
+      if (!task.project_id) continue
+      counts[task.project_id] = (counts[task.project_id] || 0) + 1
+    }
+    scheduleCounts.value = counts
+  } catch {
+    scheduleCounts.value = {}
+  }
+}
+
+async function handleGlobalEvent(data) {
+  if (data?.event === 'scheduled_session_created') {
+    await loadSessions()
+    if (data.session_id) {
+      ensureConnection(data.session_id)
+      addNotification({
+        sessionId: data.session_id,
+        sessionName: 'Scheduled task',
+        type: 'info',
+      })
+    }
+  }
+}
+
 // ── Unified connection pool ──
 // All session connections live here; no more foreground/background split.
 const _connections = reactive(new Map())
@@ -111,6 +158,15 @@ function syncRecoveryState(sessionId, sessionData) {
   const hasQueued = Boolean(sessionData?.recovery?.queued_command)
   const status = sessionData?.status || 'idle'
   setQueuedFor(sessionId, hasQueued && status === 'running')
+}
+
+async function loadLatestRunSteps(sessionId) {
+  try {
+    const data = await fetchSessionRunSteps(sessionId)
+    setRunStepsFor(sessionId, data?.steps || [])
+  } catch (e) {
+    console.debug('[VP] load run steps failed:', e?.message || e)
+  }
 }
 
 function setupUnifiedHandler(connection, sessionId) {
@@ -138,6 +194,7 @@ function setupUnifiedHandler(connection, sessionId) {
         } else {
           markDone(sessionId)
         }
+        loadLatestRunSteps(sessionId)
         break
 
       case 'message':
@@ -183,6 +240,19 @@ function setupUnifiedHandler(connection, sessionId) {
 
       case 'resource_waiting':
         updateSessionFor(sessionId, { waiting_for_slot: true })
+        break
+
+      case 'stream_waiting':
+        setStatusFor(sessionId, 'running')
+        updateSessionInList(sessionId, { status: 'running' })
+        markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
+        break
+
+      case 'run_step_started':
+      case 'run_step_progress':
+      case 'run_step_completed':
+      case 'run_step_failed':
+        upsertRunStepFor(sessionId, data.step)
         break
 
       case 'user_choice_request':
@@ -323,6 +393,10 @@ watch(currentSessionId, (newId, oldId) => {
 onMounted(async () => {
   try {
     await loadSessions()
+    await loadScheduleCounts()
+    globalEventConnection = createGlobalEventConnection()
+    globalEventConnection.onEvent(handleGlobalEvent)
+    window.addEventListener('vp-schedules-changed', loadScheduleCounts)
     restoreLastSession()
     ready.value = true
   } catch (e) {
@@ -339,6 +413,12 @@ onMounted(async () => {
 onUnmounted(() => {
   // Clean up event listener
   window.removeEventListener('vp-session-imported', handleSessionImported)
+  window.removeEventListener('vp-schedules-changed', loadScheduleCounts)
+
+  if (globalEventConnection) {
+    globalEventConnection.close()
+    globalEventConnection = null
+  }
 
   for (const conn of _connections.values()) {
     conn.close()
@@ -480,6 +560,7 @@ useGlobalHotkeys({
           :sessions="sessions"
           :current-session-id="currentSessionId"
           :loading="loading"
+          :schedule-counts="scheduleCounts"
           @create="handleCreate"
           @select="handleSessionSelect"
           @delete="onDeleteSession"
@@ -487,6 +568,7 @@ useGlobalHotkeys({
           @rename="handleRename"
           @create-in-project="handleCreateInProject"
           @delete-project="onDeleteProject"
+          @open-scheduler="openProjectScheduler"
           @reorder-projects="handleReorderProjects"
         />
         <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }">
@@ -550,6 +632,12 @@ useGlobalHotkeys({
         :project-dir="session?.project_dir || ''"
         :git-branch="session?.git_branch || ''"
         @close="terminalDrawerVisible = false"
+      />
+      <SchedulerDialog
+        :visible="schedulerVisible"
+        :project-id="schedulerProjectId"
+        session-id=""
+        @close="closeProjectScheduler"
       />
     </template>
   </div>

@@ -18,6 +18,7 @@ class ConnectionManager(ConnectionManagerPort):
 
     def __init__(self) -> None:
         self._connections: dict[str, list[WebSocket]] = {}
+        self._global_connections: list[WebSocket] = []
         self._broadcast_hooks: list[Callable[[str, dict[str, Any]], Awaitable[None]]] = []
 
     def register_broadcast_hook(
@@ -39,6 +40,31 @@ class ConnectionManager(ConnectionManagerPort):
         ]
         if not self._connections[session_id]:
             del self._connections[session_id]
+
+    async def connect_global(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._global_connections.append(websocket)
+
+    def disconnect_global(self, websocket: WebSocket) -> None:
+        self._global_connections = [ws for ws in self._global_connections if ws != websocket]
+
+    async def broadcast_global(self, data: dict[str, Any]) -> None:
+        connections = list(self._global_connections)
+        if not connections:
+            return
+
+        async def _safe_send(ws: WebSocket) -> WebSocket | None:
+            try:
+                await ws.send_json(data)
+                return None
+            except Exception:
+                return ws
+
+        results = await asyncio.gather(*(_safe_send(ws) for ws in connections))
+        dead = [ws for ws in results if ws is not None]
+        for ws in dead:
+            if ws in self._global_connections:
+                self._global_connections.remove(ws)
 
     async def broadcast(self, session_id: str, data: dict[str, Any]) -> None:
         if session_id not in self._connections:

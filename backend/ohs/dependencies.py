@@ -18,12 +18,21 @@ from application.claude_session.claude_session_application_service import (
     ClaudeSessionApplicationService,
 )
 from application.command.command_application_service import CommandApplicationService
+from application.command_policy.command_policy_application_service import CommandPolicyApplicationService
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
+from application.message.attachment_application_service import AttachmentApplicationService
+from application.evolution.evolution_application_service import EvolutionApplicationService
+from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
+from application.memory.project_memory_application_service import ProjectMemoryApplicationService
 from application.plugin.plugin_application_service import PluginApplicationService
 from application.project.project_application_service import ProjectApplicationService
+from application.scheduler.scheduler_application_service import SchedulerApplicationService
 from application.session.session_application_service import SessionApplicationService
+from application.session.session_branch_application_service import SessionBranchApplicationService
+from application.session.session_run_timeline_service import SessionRunTimelineService
 from application.settings.settings_application_service import SettingsApplicationService
 from application.terminal.terminal_application_service import TerminalApplicationService
+from application.usage.usage_governance_application_service import UsageGovernanceApplicationService
 from infr.client.claude_agent_gateway import ClaudeAgentGateway
 from infr.client.claude_command_gateway import ClaudeCommandGateway
 from infr.client.claude_plugin_manager import ClaudePluginManager
@@ -41,12 +50,23 @@ from infr.im.qq.qq_adapter import QQ_CHANNEL_SPEC, QqAdapter
 from infr.im.qq.qq_api import QqApiClient
 from infr.im.qq.qq_ws_client import QqWsClient
 from infr.im.weixin.weixin_adapter import WEIXIN_CHANNEL_SPEC, WeixinAdapter
+from infr.repository.attachment_repository_impl import AttachmentRepositoryImpl
 from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
 from infr.repository.channel_profile_repository_impl import ChannelProfileRepositoryImpl
+from infr.repository.claude_md_revision_repository_impl import ClaudeMdRevisionRepositoryImpl
+from infr.repository.evolution_proposal_repository_impl import EvolutionProposalRepositoryImpl
 from infr.repository.im_binding_repository_impl import ImBindingRepositoryImpl
+from infr.repository.project_command_policy_repository_impl import ProjectCommandPolicyRepositoryImpl
+from infr.repository.project_memory_repository_impl import ProjectMemoryRepositoryImpl
 from infr.repository.project_repository_impl import ProjectRepositoryImpl
+from infr.repository.scheduled_task_repository_impl import ScheduledTaskRepositoryImpl
 from infr.repository.session_audit_event_repository_impl import SessionAuditEventRepositoryImpl
+from infr.repository.session_branch_repository_impl import SessionBranchRepositoryImpl
 from infr.repository.session_repository_impl import SessionRepositoryImpl
+from infr.repository.session_run_step_repository_impl import SessionRunStepRepositoryImpl
+from infr.repository.session_snapshot_repository_impl import SessionSnapshotRepositoryImpl
+from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
+from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.im_binding.model.binding_status import BindingStatus
 
@@ -231,6 +251,22 @@ async def _on_user_message(session_id: str, content: str) -> None:
     })
 
 
+async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        svc = ImChannelApplicationService(
+            registry=_im_channel_registry,
+            binding_repo=ImBindingRepositoryImpl(db_session),
+            init_repo=ChannelInitRepositoryImpl(db_session),
+            session_service_factory=_create_session_service,
+            connection_manager=_connection_manager,
+        )
+        result = await svc.bind(session_id, channel_id, {})
+        await db_session.commit()
+        return result
+
+
 async def _im_unbind_for_session(session_id: str) -> None:
     """Best-effort IM unbind before session deletion."""
     from infr.config.database import async_session_factory
@@ -250,6 +286,23 @@ async def _im_unbind_for_session(session_id: str) -> None:
         )
 
 
+async def _save_scheduled_task_run(run) -> None:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        repo = ScheduledTaskRepositoryImpl(db_session)
+        await repo.save_run(run)
+        await db_session.commit()
+
+
+async def _delete_session_for_branch(session_id: str) -> bool:
+    service = await _create_session_service()
+    try:
+        return await service.delete_session(session_id)
+    finally:
+        await service.close()
+
+
 async def _record_session_audit_event(event) -> None:
     from infr.config.database import async_session_factory
 
@@ -259,12 +312,43 @@ async def _record_session_audit_event(event) -> None:
         await db_session.commit()
 
 
+async def _record_usage_ledger(
+    session_id: str,
+    project_id: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> None:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        svc = UsageGovernanceApplicationService(
+            repository=UsageGovernanceRepositoryImpl(db_session),
+        )
+        await svc.record_usage(
+            session_id=session_id,
+            project_id=project_id,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+        )
+        await db_session.commit()
+
+
 async def get_session_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> SessionApplicationService:
     repository = SessionRepositoryImpl(db_session)
     project_repo = ProjectRepositoryImpl(db_session)
     audit_repo = SessionAuditEventRepositoryImpl(db_session)
+    timeline_service = SessionRunTimelineService(
+        repository=SessionRunStepRepositoryImpl(db_session),
+        connection_manager=_connection_manager,
+    )
     return SessionApplicationService(
         session_repository=repository,
         claude_agent_gateway=_claude_agent_gateway,
@@ -276,6 +360,43 @@ async def get_session_application_service(
         im_unbind_fn=_im_unbind_for_session,
         audit_event_repository=audit_repo,
         audit_event_recorder=_record_session_audit_event,
+        usage_recorder=_record_usage_ledger,
+        timeline_service=timeline_service,
+    )
+
+
+async def get_session_branch_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> SessionBranchApplicationService:
+    return SessionBranchApplicationService(
+        session_repository=SessionRepositoryImpl(db_session),
+        branch_repository=SessionBranchRepositoryImpl(db_session),
+        snapshot_repository=SessionSnapshotRepositoryImpl(db_session),
+        delete_session_fn=_delete_session_for_branch,
+    )
+
+
+async def get_usage_governance_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> UsageGovernanceApplicationService:
+    return UsageGovernanceApplicationService(
+        repository=UsageGovernanceRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+    )
+
+
+async def get_scheduler_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> SchedulerApplicationService:
+    return SchedulerApplicationService(
+        repository=ScheduledTaskRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+        session_service_factory=_create_session_service,
+        connection_manager=_connection_manager,
+        notify_im_fn=_on_assistant_response,
+        bind_im_fn=_im_bind_for_session,
+        unbind_im_fn=_im_unbind_for_session,
+        save_run_fn=_save_scheduled_task_run,
     )
 
 
@@ -289,6 +410,15 @@ def get_plugin_application_service() -> PluginApplicationService:
 
 def get_command_application_service() -> CommandApplicationService:
     return CommandApplicationService(command_gateway=_claude_command_gateway)
+
+
+async def get_command_policy_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> CommandPolicyApplicationService:
+    return CommandPolicyApplicationService(
+        policy_repository=ProjectCommandPolicyRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+    )
 
 
 def get_claude_session_application_service() -> ClaudeSessionApplicationService:
@@ -388,8 +518,66 @@ async def _create_session_service(
         claude_agent_gateway=_claude_agent_gateway,
         connection_manager=_connection_manager,
         claude_session_manager=_claude_session_manager,
+        on_assistant_response=_on_assistant_response,
+        on_user_message=_on_user_message,
         project_repository=ProjectRepositoryImpl(db_session),
         im_unbind_fn=_im_unbind_for_session,
+        timeline_service=SessionRunTimelineService(
+            repository=SessionRunStepRepositoryImpl(db_session),
+            connection_manager=_connection_manager,
+        ),
+    )
+
+
+async def get_session_run_timeline_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> SessionRunTimelineService:
+    return SessionRunTimelineService(
+        repository=SessionRunStepRepositoryImpl(db_session),
+        connection_manager=_connection_manager,
+    )
+
+
+async def get_evolution_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> EvolutionApplicationService:
+    revision_service = ClaudeMdRevisionApplicationService(
+        revision_repository=ClaudeMdRevisionRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+    )
+    return EvolutionApplicationService(
+        proposal_repository=EvolutionProposalRepositoryImpl(db_session),
+        session_repository=SessionRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+        claude_md_revision_service=revision_service,
+    )
+
+
+async def get_attachment_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> AttachmentApplicationService:
+    return AttachmentApplicationService(
+        attachment_repository=AttachmentRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+        storage_gateway=AttachmentStorageGateway(),
+    )
+
+
+async def get_project_memory_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> ProjectMemoryApplicationService:
+    return ProjectMemoryApplicationService(
+        memory_repository=ProjectMemoryRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+    )
+
+
+async def get_claude_md_revision_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> ClaudeMdRevisionApplicationService:
+    return ClaudeMdRevisionApplicationService(
+        revision_repository=ClaudeMdRevisionRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
     )
 
 
@@ -413,8 +601,17 @@ def get_git_application_service() -> GitApplicationService:
     return _git_application_service
 
 
-def get_agent_application_service() -> AgentApplicationService:
-    return AgentApplicationService(plugin_manager=_claude_plugin_manager)
+async def get_agent_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> AgentApplicationService:
+    revision_service = ClaudeMdRevisionApplicationService(
+        revision_repository=ClaudeMdRevisionRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+    )
+    return AgentApplicationService(
+        plugin_manager=_claude_plugin_manager,
+        claude_md_revision_service=revision_service,
+    )
 
 
 async def get_project_repository(

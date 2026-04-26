@@ -16,6 +16,11 @@ class ConnectionManager(ABC):
         ...
 
     @abstractmethod
+    async def broadcast_global(self, data: dict[str, Any]) -> None:
+        """Broadcast a message to global WebSocket event subscribers."""
+        ...
+
+    @abstractmethod
     def has_connections(self, session_id: str) -> bool:
         """Check if a session has any active WebSocket connections."""
         ...

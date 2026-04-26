@@ -1,8 +1,8 @@
 <script setup>
-import { ref, computed, inject, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, inject, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useDialogManager } from '@shared/lib/useDialogManager'
-import { useSession, listModels, listSessionArtifacts } from '@entities/session'
+import { useSession, listModels, listSessionArtifacts, createSessionBranch, listSessionBranches, compareSessions, convergeSessionBranches } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, useSendMessage } from '@features/send-message'
 import { CancelButton, useCancelQuery } from '@features/cancel-query'
@@ -12,14 +12,18 @@ import { CommandPaletteButton, CommandPalettePopover, useCommandPalette } from '
 import { PluginManagerDialog } from '@features/plugin-manager'
 import { AgentDialog } from '@features/agent-manager'
 import { MemoryButton, MemoryDialog } from '@features/memory-manager'
-import { VoiceInputButton, VideoInputButton } from '@features/media-input'
+import { useVoiceInput, useVideoInput } from '@features/media-input'
 import { ImButton, ImDialog, useImBinding } from '@features/im-binding'
 import { openPath } from '@features/terminal'
 import { useCompactContext } from '@features/compact-context'
 import { useSessionStats } from '@features/send-message/model/useSessionStats'
+import { EvolutionDialog } from '@features/evolution'
 import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 
-const { session, messages, status, queued, waitingForSlot, recovery, currentSessionId, queryHistory, setCurrentSessionId, updateSession, setError } = useSession()
+const {
+  session, messages, status, queued, waitingForSlot, recovery, currentSessionId,
+  queryHistory, setCurrentSessionId, updateSession, setError, addSession,
+} = useSession()
 const { projects, updateProjectInList } = useProject()
 
 const wsConnection = inject('wsConnection')
@@ -77,9 +81,39 @@ const projectDirName = computed(() => {
 })
 
 const { clearing, clearContext } = useClearContext()
-const { commands, loading: cmdLoading, visible: cmdVisible, searchQuery, loadCommands, togglePanel, closePanel, invalidateCache: invalidateCmdCache } = useCommandPalette()
+
+const {
+  commands,
+  policyRows,
+  loading: cmdLoading,
+  visible: cmdVisible,
+  searchQuery,
+  loadCommands,
+  updateCommandPolicy,
+  togglePanel,
+  closePanel,
+  invalidateCache: invalidateCmdCache,
+} = useCommandPalette()
 
 const messageInputRef = ref(null)
+const showMediaMenu = ref(false)
+const videoEl = ref(null)
+const showVideoPreview = ref(false)
+const videoPreviewPosition = ref({ x: 0, y: 0 })
+const videoDragState = ref(null)
+const {
+  isRecording: isVoiceRecording,
+  supported: voiceSupported,
+  stopRecording: stopVoiceRecording,
+  toggle: toggleVoiceInput,
+} = useVoiceInput()
+const {
+  isCapturing: isVideoCapturing,
+  supported: videoSupported,
+  startCapture,
+  stopCapture,
+  captureFrame,
+} = useVideoInput()
 
 // Plugin dialog
 const pluginDialogVisible = ref(false)
@@ -90,6 +124,9 @@ const currentAgentInfo = computed(() => currentProject.value?.agents?.current ||
 
 // Memory dialog
 const memoryDialogVisible = ref(false)
+
+// Evolution dialog
+const evolutionDialogVisible = ref(false)
 
 // IM dialog
 const imDialogVisible = ref(false)
@@ -102,6 +139,7 @@ const { useDialog } = useDialogManager()
 useDialog('plugin-manager', pluginDialogVisible)
 useDialog('agent-manager', agentDialogVisible)
 useDialog('memory-manager', memoryDialogVisible)
+useDialog('evolution', evolutionDialogVisible)
 useDialog('im-binding', imDialogVisible)
 useDialog('command-palette', cmdVisible)
 
@@ -130,6 +168,10 @@ onUnmounted(() => {
   window.removeEventListener('vp-voice-toggle', handleVoiceToggle)
   window.removeEventListener('vp-camera-toggle', handleCameraToggle)
   window.removeEventListener('vp-clear-context', handleClearContext)
+  window.removeEventListener('pointermove', handleVideoDragMove)
+  window.removeEventListener('pointerup', stopVideoDrag)
+  stopVoiceRecording()
+  stopCapture()
 })
 
 // 监听全局快捷键触发的弹窗打开事件
@@ -144,6 +186,9 @@ function handleDialogOpen(e) {
       break
     case 'memory-manager':
       memoryDialogVisible.value = true
+      break
+    case 'evolution':
+      evolutionDialogVisible.value = true
       break
     case 'command-palette':
       cmdVisible.value = true
@@ -162,14 +207,13 @@ function handleDebugToggle(e) {
   debugMode.value = e.detail?.enabled ?? false
 }
 
-// 监听 voice 切换（需要让 VoiceInputButton 组件处理）
+// 监听 voice 切换
 function handleVoiceToggle() {
-  window.dispatchEvent(new CustomEvent('vp-voice-toggle-global'))
+  handleMediaVoice()
 }
 
-// 监听 camera 切换（需要让 VideoInputButton 组件处理）
-function handleCameraToggle() {
-  window.dispatchEvent(new CustomEvent('vp-camera-toggle-global'))
+async function handleCameraToggle() {
+  await handleMediaVideo()
 }
 
 // 监听 clear context
@@ -480,6 +524,195 @@ function handleCommandSelect(cmd) {
   }
 }
 
+function handleCommandPolicyChange(row, patch) {
+  updateCommandPolicy(projectDir.value, row, patch)
+}
+
+const showMultiSessionDialog = ref(false)
+const multiSessionIndex = ref(0)
+const multiSessionName = ref('')
+const multiSessionCount = ref(2)
+const multiSessionWorktree = ref(false)
+const parallelBranches = ref([])
+const parallelBranchLoading = ref(false)
+const compareResult = ref(null)
+const showCompareResult = ref(false)
+const convergingBranchId = ref('')
+
+const multiSessionCandidates = computed(() => messages.value.map((message, index) => ({
+  index,
+  type: message.type || 'message',
+  preview: messagePreview(message),
+})))
+
+function messagePreview(message) {
+  const raw = typeof message.content === 'string'
+    ? message.content
+    : JSON.stringify(message.content || '')
+  return raw.replace(/\s+/g, ' ').slice(0, 120) || '(empty message)'
+}
+
+async function loadParallelBranches() {
+  if (!currentSessionId.value) return
+  parallelBranchLoading.value = true
+  try {
+    const data = await listSessionBranches(currentSessionId.value)
+    parallelBranches.value = data.branches || []
+  } catch {
+    parallelBranches.value = []
+  } finally {
+    parallelBranchLoading.value = false
+  }
+}
+
+function branchDisplayName(branch) {
+  return branch.name || branch.branch_session_id
+}
+
+async function handleKeepBranch(branch) {
+  if (!branch?.branch_session_id || !currentSessionId.value) return
+  const message = branch.worktree_enabled
+    ? '保留该 worktree 会话会把已提交内容 merge 回主干；若有未提交变更会失败并保留现场。继续？'
+    : '保留该会话会删除其他并行会话。继续？'
+  if (!window.confirm(message)) return
+  convergingBranchId.value = branch.branch_session_id
+  try {
+    await convergeSessionBranches(currentSessionId.value, branch.branch_session_id)
+    await loadParallelBranches()
+    setCurrentSessionId(branch.branch_session_id)
+    showMultiSessionDialog.value = false
+  } catch (e) {
+    setError(e.message || 'Failed to converge sessions')
+  } finally {
+    convergingBranchId.value = ''
+  }
+}
+
+async function compareWithBranch(branch) {
+  if (!branch?.branch_session_id || branch.branch_session_id === currentSessionId.value) return
+  try {
+    compareResult.value = await compareSessions(currentSessionId.value, branch.branch_session_id)
+    showCompareResult.value = true
+  } catch (e) {
+    setError(e.message || 'Failed to compare sessions')
+  }
+}
+
+async function openMultiSessionDialog() {
+  if (!currentSessionId.value || messages.value.length === 0) return
+  multiSessionIndex.value = messages.value.length - 1
+  multiSessionName.value = session.value?.name || currentSessionId.value
+  multiSessionCount.value = 2
+  multiSessionWorktree.value = false
+  await loadParallelBranches()
+  showMultiSessionDialog.value = true
+}
+
+async function handleBranchSession() {
+  if (!currentSessionId.value || messages.value.length === 0) return
+  try {
+    const data = await createSessionBranch(
+      currentSessionId.value,
+      multiSessionIndex.value,
+      multiSessionName.value,
+      multiSessionCount.value,
+      multiSessionWorktree.value,
+    )
+    const createdSessions = data.sessions || (data.session ? [data.session] : [])
+    for (const item of createdSessions) {
+      addSession(item)
+    }
+    if (createdSessions.length > 0) {
+      setCurrentSessionId(createdSessions[0].session_id)
+      showMultiSessionDialog.value = false
+    }
+  } catch (e) {
+    setError(e.message || 'Failed to create multi-session')
+  }
+}
+
+function closeCompareResult() {
+  showCompareResult.value = false
+  compareResult.value = null
+}
+
+function handleAnalyzeCompare() {
+  if (!compareResult.value?.analysis_prompt) return
+  handleSend(compareResult.value.analysis_prompt)
+  closeCompareResult()
+}
+
+function handleMediaVoice() {
+  showMediaMenu.value = false
+  toggleVoiceInput((text) => messageInputRef.value?.appendText(text))
+}
+
+function resetVideoPreviewPosition() {
+  videoPreviewPosition.value = {
+    x: Math.max(window.innerWidth - 284, 16),
+    y: Math.max(window.innerHeight - 260, 16),
+  }
+}
+
+function startVideoDrag(event) {
+  videoDragState.value = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: videoPreviewPosition.value.x,
+    originY: videoPreviewPosition.value.y,
+  }
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+  window.addEventListener('pointermove', handleVideoDragMove)
+  window.addEventListener('pointerup', stopVideoDrag)
+}
+
+function handleVideoDragMove(event) {
+  const state = videoDragState.value
+  if (!state) return
+  const nextX = state.originX + event.clientX - state.startX
+  const nextY = state.originY + event.clientY - state.startY
+  videoPreviewPosition.value = {
+    x: Math.min(Math.max(nextX, 8), window.innerWidth - 260),
+    y: Math.min(Math.max(nextY, 8), window.innerHeight - 230),
+  }
+}
+
+function stopVideoDrag() {
+  videoDragState.value = null
+  window.removeEventListener('pointermove', handleVideoDragMove)
+  window.removeEventListener('pointerup', stopVideoDrag)
+}
+
+async function handleMediaVideo() {
+  showMediaMenu.value = false
+  if (isVideoCapturing.value) {
+    stopCapture()
+    showVideoPreview.value = false
+    return
+  }
+  const stream = await startCapture()
+  if (stream) {
+    resetVideoPreviewPosition()
+    showVideoPreview.value = true
+    await nextTick()
+    if (videoEl.value) videoEl.value.srcObject = stream
+  }
+}
+
+function handleVideoCapture() {
+  const frame = captureFrame(videoEl.value)
+  if (frame) {
+    messageInputRef.value?.addImage(frame.data, frame.media_type)
+  }
+}
+
+function handleEvolutionDraftCreated() {
+  evolutionDialogVisible.value = false
+  memoryDialogVisible.value = true
+  window.dispatchEvent(new CustomEvent('vp-memory-refresh'))
+}
+
 // Project copy menu
 const showProjectCopyMenu = ref(false)
 const copiedChip = ref('')  // 'session' or 'project-path' or 'project-name'
@@ -519,6 +752,7 @@ function handleClickOutside() {
   showHistory.value = false
   showProjectCopyMenu.value = false
   showBranchMenu.value = false
+  showMediaMenu.value = false
   showTaskPanel.value = false
   showArtifacts.value = false
 }
@@ -526,7 +760,7 @@ function handleClickOutside() {
 // Plugin management
 
 // Session stats for bottom status bar
-const { gitBranch, lastQueryDuration, contextUsage, toolStats, activeSubagents } = useSessionStats()
+const { gitBranch, lastQueryDuration, contextUsage, toolStats, activeSubagents, usageSummary, projectUsageSummary } = useSessionStats()
 const { allTasks, taskCounts, hasActiveTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
 const showTaskPanel = ref(false)
 
@@ -557,6 +791,12 @@ function formatMaxTokens(n) {
   return `${Math.round(n / 1000)}k`
 }
 
+function formatCost(value) {
+  const n = Number(value || 0)
+  if (n < 0.01) return `$${n.toFixed(4)}`
+  return `$${n.toFixed(2)}`
+}
+
 </script>
 
 <template>
@@ -583,10 +823,12 @@ function formatMaxTokens(n) {
       <CommandPalettePopover
         :visible="cmdVisible"
         :commands="commands"
+        :policy-rows="policyRows"
         :loading="cmdLoading"
         :search-query="searchQuery"
         @update:search-query="searchQuery = $event"
         @select="handleCommandSelect"
+        @policy-change="handleCommandPolicyChange"
         @close="closePanel"
       />
       <!-- Toolbar above input -->
@@ -652,11 +894,73 @@ function formatMaxTokens(n) {
           :disabled="!currentSessionId || !projectDir"
           @click="memoryDialogVisible = true"
         />
+        <button
+          class="toolbar-btn"
+          :disabled="isRunning || !currentSessionId || messages.length === 0"
+          @click="openMultiSessionDialog"
+          title="Create a new session from selected context"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="6" r="3"/>
+            <circle cx="18" cy="6" r="3"/>
+            <circle cx="12" cy="18" r="3"/>
+            <path d="M8.5 8.5 11 15"/>
+            <path d="M15.5 8.5 13 15"/>
+          </svg>
+          <span class="toolbar-btn-label">Multi-session</span>
+        </button>
         </div>
         <!-- Group 3: Actions -->
         <div class="toolbar-group">
-        <VoiceInputButton :disabled="isRunning" @text="(t) => messageInputRef?.appendText(t)" />
-        <VideoInputButton :disabled="isRunning" @capture="(f) => messageInputRef?.addImage(f.data, f.media_type)" />
+        <div class="dropdown-wrapper" @click.stop>
+          <button
+            class="toolbar-btn"
+            :class="{ 'toolbar-btn--active': isVoiceRecording || isVideoCapturing }"
+            :disabled="isRunning || (!voiceSupported && !videoSupported)"
+            @click="showMediaMenu = !showMediaMenu"
+            title="Media input"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+              <path d="M21 8l-5 4 5 4V8z"/>
+            </svg>
+            <span class="toolbar-btn-label">Media</span>
+          </button>
+          <Transition name="dropdown-fade">
+          <div v-if="showMediaMenu" class="dropdown-menu media-menu">
+            <button class="dropdown-item media-item" :disabled="!voiceSupported" @click="handleMediaVoice">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+              </svg>
+              <span>{{ isVoiceRecording ? 'Stop voice' : 'Voice' }}</span>
+            </button>
+            <button class="dropdown-item media-item" :disabled="!videoSupported" @click="handleMediaVideo">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7"/>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              </svg>
+              <span>{{ isVideoCapturing ? 'Close video' : 'Video' }}</span>
+            </button>
+          </div>
+          </Transition>
+          <div
+            v-if="showVideoPreview && isVideoCapturing"
+            class="video-preview-popup"
+            :style="{ left: videoPreviewPosition.x + 'px', top: videoPreviewPosition.y + 'px' }"
+          >
+            <div class="video-preview-header" @pointerdown="startVideoDrag">
+              <span>Video</span>
+              <button @click.stop="handleMediaVideo" title="Close video">×</button>
+            </div>
+            <video ref="videoEl" autoplay muted playsinline class="video-preview"></video>
+            <button class="capture-btn" @click="handleVideoCapture" title="Capture frame">
+              Capture
+            </button>
+          </div>
+        </div>
         <CommandPaletteButton
           :disabled="isRunning || !currentSessionId"
           @click="handleCommandsClick"
@@ -684,10 +988,16 @@ function formatMaxTokens(n) {
           <Transition name="dropdown-fade">
           <div v-if="showHistory" class="history-panel">
             <div class="history-header">
+            <div class="history-header-main">
               <span class="history-title">Query History</span>
               <span class="history-total">
                 Context: {{ formatTokens(totalUsage.context) }} / Output: {{ formatTokens(totalUsage.output) }}
               </span>
+            </div>
+            <div v-if="usageSummary || projectUsageSummary" class="history-usage-row">
+              <span v-if="usageSummary" class="history-usage-chip">Session {{ (usageSummary.total_tokens || 0).toLocaleString() }} tok</span>
+              <span v-if="projectUsageSummary" class="history-usage-chip">Today {{ formatCost(projectUsageSummary.estimated_cost_usd) }}</span>
+            </div>
             </div>
             <div class="history-list">
               <div v-if="queryHistory.length === 0" class="history-empty">No queries yet</div>
@@ -751,13 +1061,6 @@ function formatMaxTokens(n) {
           </span>
         </button>
         <div class="dash-row">
-          <span class="dash-chip" v-if="lastQueryDuration" :title="'Last query: ' + formatDurationShort(lastQueryDuration)">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <polyline points="12 6 12 12 16 14"/>
-            </svg>
-            {{ formatDurationShort(lastQueryDuration) }}
-          </span>
           <div class="dropdown-wrapper" v-if="projectDir" @click.stop>
             <button
               class="dash-chip dash-project"
@@ -886,17 +1189,25 @@ function formatMaxTokens(n) {
             </div>
             </Transition>
           </div>
-          <span class="dash-chip dash-tools" v-if="totalToolCalls > 0" :title="toolStats.map(t => t.name + ': ' + t.count).join(', ')">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-            </svg>
-            <template v-for="(tool, i) in topTools" :key="tool.name">
-              <span v-if="i > 0" class="tool-sep">/</span>
-              <span class="tool-name">{{ tool.name }}</span>
-              <span class="tool-count">{{ tool.count }}</span>
-            </template>
-            <span v-if="toolStats.length > 5" class="tool-more">+{{ toolStats.length - 5 }}</span>
-          </span>
+          <div class="dropdown-wrapper" @click.stop>
+            <button
+              class="dash-chip dash-agent"
+              @click="showTaskPanel = !showTaskPanel"
+              :title="`Plan: ${planTaskCounts.completed}/${planTaskCounts.total} | Tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
+            >
+              <span v-if="hasActiveTasks || planTaskCounts.in_progress > 0" class="agent-dot"></span>
+              <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              <template v-if="hasPlanTasks">Plan {{ planTaskCounts.completed }}/{{ planTaskCounts.total }}</template>
+              <template v-else-if="taskCounts.total > 0">Tasks {{ taskCounts.running > 0 ? taskCounts.running : taskCounts.total }}</template>
+              <template v-else>Plan</template>
+            </button>
+            <TaskProgressPanel
+              v-if="showTaskPanel"
+              @close="showTaskPanel = false"
+            />
+          </div>
           <div class="dropdown-wrapper" @click.stop>
             <button
               class="dash-chip dash-artifacts"
@@ -935,29 +1246,147 @@ function formatMaxTokens(n) {
             </div>
             </Transition>
           </div>
-          <template v-if="taskCounts.total > 0 || hasPlanTasks">
-            <div class="dropdown-wrapper" @click.stop>
-              <button
-                class="dash-chip dash-agent"
-                @click="showTaskPanel = !showTaskPanel"
-                :title="`Plan: ${planTaskCounts.completed}/${planTaskCounts.total} | Tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
-              >
-                <span v-if="hasActiveTasks || planTaskCounts.in_progress > 0" class="agent-dot"></span>
-                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <template v-if="hasPlanTasks">Plan {{ planTaskCounts.completed }}/{{ planTaskCounts.total }}</template>
-                <template v-else>Tasks {{ taskCounts.running > 0 ? taskCounts.running : taskCounts.total }}</template>
-              </button>
-              <TaskProgressPanel
-                v-if="showTaskPanel"
-                @close="showTaskPanel = false"
-              />
-            </div>
-          </template>
+        </div>
+        <div v-if="lastQueryDuration || totalToolCalls > 0 || (projectUsageSummary?.budget_status?.state && projectUsageSummary.budget_status.state !== 'none')" class="dash-row tool-summary-row">
+          <span class="dash-chip dash-last-query" v-if="lastQueryDuration" :title="'Last query: ' + formatDurationShort(lastQueryDuration)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            Last {{ formatDurationShort(lastQueryDuration) }}
+          </span>
+          <span class="dash-chip dash-budget" v-if="projectUsageSummary?.budget_status?.state && projectUsageSummary.budget_status.state !== 'none'" :class="'budget-' + projectUsageSummary.budget_status.state">
+            Budget {{ projectUsageSummary.budget_status.state }}
+          </span>
+          <span class="dash-chip dash-tools" v-if="totalToolCalls > 0" :title="toolStats.map(t => t.name + ': ' + t.count).join(', ')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+            <template v-for="(tool, i) in topTools" :key="tool.name">
+              <span v-if="i > 0" class="tool-sep">/</span>
+              <span class="tool-name">{{ tool.name }}</span>
+              <span class="tool-count">{{ tool.count }}</span>
+            </template>
+            <span v-if="toolStats.length > 5" class="tool-more">+{{ toolStats.length - 5 }}</span>
+          </span>
         </div>
       </div>
     </div>
+
+    <Teleport to="body">
+      <Transition name="dialog-fade">
+        <div v-if="showMultiSessionDialog" class="multi-session-overlay" @click.self="showMultiSessionDialog = false">
+          <div class="multi-session-dialog">
+            <div class="multi-session-header">
+              <div>
+                <h3>多会话</h3>
+                <p>复制当前会话开头到所选消息（包含该消息）的上下文，并在当前项目创建一个新会话。</p>
+              </div>
+              <button class="close-btn" @click="showMultiSessionDialog = false">×</button>
+            </div>
+            <div class="multi-session-body">
+              <label class="field-label">Session name prefix</label>
+              <input v-model="multiSessionName" class="multi-session-input" placeholder="Session name prefix" />
+              <div class="multi-session-options">
+                <label>
+                  <span>Parallel sessions</span>
+                  <input v-model.number="multiSessionCount" type="number" min="1" max="8" />
+                </label>
+                <label class="checkbox-field">
+                  <input v-model="multiSessionWorktree" type="checkbox" />
+                  <span>Use worktree isolation</span>
+                </label>
+              </div>
+              <label class="field-label">Copy context through message</label>
+              <div class="message-choice-list">
+                <button
+                  v-for="candidate in multiSessionCandidates"
+                  :key="candidate.index"
+                  class="message-choice"
+                  :class="{ active: multiSessionIndex === candidate.index }"
+                  @click="multiSessionIndex = candidate.index"
+                >
+                  <span class="message-choice-index">#{{ candidate.index + 1 }}</span>
+                  <span class="message-choice-type">{{ candidate.type }}</span>
+                  <span class="message-choice-preview">{{ candidate.preview }}</span>
+                </button>
+              </div>
+              <label class="field-label">Parallel branches</label>
+              <div class="parallel-branch-list">
+                <div v-if="parallelBranchLoading" class="parallel-empty">Loading branches...</div>
+                <div v-else-if="parallelBranches.length === 0" class="parallel-empty">No parallel branches yet</div>
+                <template v-else>
+                  <div
+                    v-for="branch in parallelBranches"
+                    :key="branch.id"
+                    class="parallel-branch-item"
+                    :class="{ active: branch.branch_session_id === currentSessionId }"
+                  >
+                    <button
+                      class="parallel-branch-main"
+                      :disabled="branch.branch_session_id === currentSessionId"
+                      @click="compareWithBranch(branch)"
+                    >
+                      <span>{{ branchDisplayName(branch) }}</span>
+                      <small>{{ branch.worktree_enabled ? 'worktree' : 'shared dir' }}</small>
+                    </button>
+                    <button
+                      class="parallel-keep-btn"
+                      :disabled="!!convergingBranchId"
+                      @click="handleKeepBranch(branch)"
+                    >
+                      {{ convergingBranchId === branch.branch_session_id ? 'Keeping...' : 'Keep' }}
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div class="multi-session-footer">
+              <button class="secondary-btn" @click="showMultiSessionDialog = false">Cancel</button>
+              <button class="primary-btn" :disabled="isRunning" @click="handleBranchSession">Create session</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <Teleport to="body">
+      <Transition name="dialog-fade">
+        <div v-if="showCompareResult" class="multi-session-overlay" @click.self="closeCompareResult">
+          <div class="compare-dialog">
+            <div class="multi-session-header">
+              <div>
+                <h3>Compare Sessions</h3>
+                <p>Common prefix and diverged message counts.</p>
+              </div>
+              <button class="close-btn" @click="closeCompareResult">×</button>
+            </div>
+            <div v-if="compareResult" class="compare-grid">
+              <div><strong>{{ compareResult.common_prefix_count }}</strong><span>Common</span></div>
+              <div><strong>{{ compareResult.left_only_count }}</strong><span>Current only</span></div>
+              <div><strong>{{ compareResult.right_only_count }}</strong><span>Other only</span></div>
+            </div>
+            <div v-if="compareResult?.code_diff" class="compare-code-diff">
+              <div class="compare-section-title">Code diff</div>
+              <div class="compare-branches">
+                <span>{{ compareResult.code_diff.left_branch || 'left' }}</span>
+                <span>→</span>
+                <span>{{ compareResult.code_diff.right_branch || 'right' }}</span>
+              </div>
+              <div v-if="compareResult.code_diff.changed_files?.length" class="compare-files">
+                <span v-for="path in compareResult.code_diff.changed_files" :key="path">{{ path }}</span>
+              </div>
+              <pre v-if="compareResult.code_diff.diff_stat" class="compare-stat">{{ compareResult.code_diff.diff_stat }}</pre>
+              <pre v-if="compareResult.code_diff.patch_excerpt" class="compare-patch">{{ compareResult.code_diff.patch_excerpt }}</pre>
+              <div v-if="compareResult.code_diff.truncated" class="compare-truncated">Patch truncated</div>
+            </div>
+            <div class="compare-actions">
+              <button class="secondary-btn" @click="handleAnalyzeCompare">Ask Claude to analyze</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <PluginManagerDialog
       :visible="pluginDialogVisible"
@@ -978,6 +1407,16 @@ function formatMaxTokens(n) {
       :visible="memoryDialogVisible"
       :project-dir="currentProject?.dir_path || ''"
       @close="memoryDialogVisible = false"
+      @evolve="evolutionDialogVisible = true"
+    />
+
+    <EvolutionDialog
+      :visible="evolutionDialogVisible"
+      :project-id="currentProject?.id || ''"
+      :project-dir="currentProject?.dir_path || projectDir || ''"
+      :session-id="currentSessionId || ''"
+      @close="evolutionDialogVisible = false"
+      @draft-created="handleEvolutionDraftCreated"
     />
 
     <ImDialog
@@ -1194,6 +1633,395 @@ function formatMaxTokens(n) {
   font-size: 12px;
 }
 
+.dropdown-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.media-menu {
+  min-width: 150px;
+}
+
+.media-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-preview-popup {
+  position: fixed;
+  z-index: 120;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xl);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.video-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: move;
+  color: var(--text-muted);
+  font-size: 11px;
+  user-select: none;
+}
+
+.video-preview-header button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.video-preview {
+  width: 240px;
+  height: 180px;
+  border-radius: var(--radius-sm);
+  background: black;
+  object-fit: cover;
+}
+
+.capture-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.multi-session-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-overlay);
+}
+
+.multi-session-dialog,
+.compare-dialog {
+  width: 720px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.compare-dialog {
+  width: 420px;
+}
+
+.multi-session-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.multi-session-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.multi-session-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.multi-session-body {
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.field-label {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.multi-session-input {
+  width: 100%;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: 8px 10px;
+}
+
+.message-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.message-choice {
+  display: grid;
+  grid-template-columns: 52px 80px 1fr;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-choice.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.message-choice-index,
+.message-choice-type {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.message-choice-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.multi-session-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.multi-session-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.multi-session-options input[type="number"] {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: 7px 8px;
+}
+
+.multi-session-options .checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.parallel-branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.parallel-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.parallel-branch-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: 7px 9px;
+}
+
+.parallel-branch-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.parallel-branch-main:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.parallel-keep-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.parallel-keep-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.parallel-branch-item.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.parallel-branch-item:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.parallel-branch-item small {
+  color: var(--text-muted);
+}
+
+.multi-session-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.primary-btn,
+.secondary-btn {
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.primary-btn {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.secondary-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.compare-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin: 14px 0 8px;
+}
+.compare-code-diff {
+  padding: 0 18px 16px;
+}
+.compare-branches {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.compare-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.compare-files span {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.compare-stat,
+.compare-patch {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: 10px;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.compare-truncated {
+  color: var(--warning, #f59e0b);
+  font-size: 12px;
+  margin-top: 6px;
+}
+.compare-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 18px 18px;
+}
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 18px;
+}
+
+.compare-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 10px;
+}
+
+.compare-grid strong {
+  color: var(--text-primary);
+  font-size: 22px;
+}
+
+.compare-grid span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .input-section {
   position: relative;
   border-top: 1px solid var(--border);
@@ -1225,10 +2053,34 @@ function formatMaxTokens(n) {
 
 .history-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.history-header-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-usage-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.history-usage-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
 .history-title {
@@ -1376,6 +2228,23 @@ function formatMaxTokens(n) {
   white-space: nowrap;
 }
 
+.dash-usage,
+.dash-cost,
+.dash-budget,
+.dash-last-query {
+  color: var(--text-secondary);
+}
+
+.budget-warning {
+  color: #d97706;
+  border-color: color-mix(in srgb, #d97706 45%, var(--border));
+}
+
+.budget-exceeded {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+
 .dash-artifacts {
   color: var(--purple);
   background: var(--purple-dim);
@@ -1478,6 +2347,10 @@ function formatMaxTokens(n) {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.tool-summary-row {
+  padding-top: 2px;
 }
 
 .dash-chip {

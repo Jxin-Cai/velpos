@@ -4,7 +4,10 @@ import { useTaskProgress } from '../model/useTaskProgress'
 
 const emit = defineEmits(['close'])
 
-const { allTasks, taskCounts, planTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
+const {
+  allTasks, taskCounts, planTasks, planTaskCounts, hasPlanTasks,
+  timelineSteps, timelineCounts, hasTimelineSteps,
+} = useTaskProgress()
 
 // Tick every second to update elapsed time for running tasks
 const now = ref(Date.now())
@@ -20,7 +23,11 @@ onBeforeUnmount(() => {
 
 function formatElapsed(startTime) {
   const diff = Math.max(0, now.value - startTime)
-  const secs = Math.floor(diff / 1000)
+  return formatDuration(diff)
+}
+
+function formatDuration(ms) {
+  const secs = Math.floor(Math.max(0, ms) / 1000)
   if (secs < 60) return `${secs}s`
   const mins = Math.floor(secs / 60)
   const remainSecs = secs % 60
@@ -32,6 +39,21 @@ function formatElapsed(startTime) {
 function truncate(text, max = 80) {
   if (!text || text.length <= max) return text
   return text.slice(0, max) + '...'
+}
+
+function stepMeta(step) {
+  if (step.status === 'running') return formatElapsed(step.startedAt)
+  if (step.duration_ms) return formatDuration(step.duration_ms)
+  return ''
+}
+
+function stepDetail(step) {
+  const payload = step.payload || {}
+  if (payload.error) return payload.error
+  const tools = Array.isArray(payload.last_tool_names) ? payload.last_tool_names.filter(Boolean) : []
+  if (tools.length > 0) return tools.join(', ')
+  if (payload.last_message_type) return payload.last_message_type
+  return ''
 }
 
 // Segmented progress: percentage for completed and in_progress
@@ -47,9 +69,47 @@ const planProgressActive = computed(() => {
 
 <template>
   <div class="task-panel" @click.stop>
+    <!-- Run timeline section -->
+    <template v-if="hasTimelineSteps">
+      <div class="panel-header">
+        <span class="panel-title">Run Timeline</span>
+        <span class="panel-counts">
+          <span v-if="timelineCounts.running > 0" class="count-badge count-running">{{ timelineCounts.running }} running</span>
+          <span v-if="timelineCounts.completed > 0" class="count-badge count-done">{{ timelineCounts.completed }} done</span>
+          <span v-if="timelineCounts.failed > 0" class="count-badge count-failed">{{ timelineCounts.failed }} failed</span>
+        </span>
+      </div>
+      <div class="panel-body timeline-body">
+        <div
+          v-for="step in timelineSteps"
+          :key="step.id"
+          class="task-item"
+          :class="'task-' + step.status"
+        >
+          <div class="task-icon">
+            <span v-if="step.status === 'running'" class="task-spinner"></span>
+            <svg v-else-if="step.status === 'completed'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </div>
+          <div class="task-content">
+            <div class="task-desc">{{ step.title }}</div>
+            <div class="task-meta">
+              <span v-if="stepDetail(step)" class="task-tool">{{ truncate(stepDetail(step), 70) }}</span>
+              <span v-if="stepMeta(step)" class="task-elapsed">{{ stepMeta(step) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- Plan tasks section -->
     <template v-if="hasPlanTasks">
-      <div class="panel-header">
+      <div class="panel-header" :class="{ 'panel-header--border': hasTimelineSteps }">
         <span class="panel-title">Plan</span>
         <span class="plan-summary">
           <span class="plan-fraction">{{ planTaskCounts.completed }}<span class="plan-sep">/</span>{{ planTaskCounts.total }}</span>
@@ -96,7 +156,7 @@ const planProgressActive = computed(() => {
     </template>
 
     <!-- Agent tasks section -->
-    <div class="panel-header" :class="{ 'panel-header--border': hasPlanTasks }">
+    <div class="panel-header" :class="{ 'panel-header--border': hasPlanTasks || hasTimelineSteps }">
       <span class="panel-title">Tasks</span>
       <span class="panel-counts">
         <span v-if="taskCounts.running > 0" class="count-badge count-running">{{ taskCounts.running }} running</span>
@@ -252,6 +312,10 @@ const planProgressActive = computed(() => {
   overflow-y: auto;
   max-height: 360px;
   padding: 6px 0;
+}
+
+.timeline-body {
+  max-height: 180px;
 }
 
 .plan-body {

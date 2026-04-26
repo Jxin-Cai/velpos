@@ -1,7 +1,7 @@
 import { ref, computed, reactive } from 'vue'
 
 // ── Per-session state map ──
-// key: sessionId → { session, messages, status, error, queryHistory, queued, _nextMsgId }
+// key: sessionId → { session, messages, status, error, queryHistory, runSteps, queued, _nextMsgId }
 const _stateMap = reactive(new Map())
 
 // ── Global state (not per-session) ──
@@ -19,6 +19,7 @@ function _ensureState(sessionId) {
       status: 'disconnected',
       error: null,
       queryHistory: [],
+      runSteps: [],
       queued: false,
       _nextMsgId: 0,
     })
@@ -58,6 +59,11 @@ const error = computed(() => {
 const queryHistory = computed(() => {
   const state = _stateMap.get(currentSessionId.value)
   return state ? state.queryHistory : []
+})
+
+const runSteps = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state ? state.runSteps : []
 })
 
 const queued = computed(() => {
@@ -140,6 +146,28 @@ function setMessagesFor(sessionId, msgs, sessionData) {
   console.debug(
     `[VP] setMessagesFor(${sessionId}): total=${msgs.length}, results=${resultMsgs.length}, queryHistory=${state.queryHistory.length}`
   )
+}
+
+function setRunStepsFor(sessionId, steps = []) {
+  const state = _ensureState(sessionId)
+  if (!state) return
+  state.runSteps.length = 0
+  state.runSteps.push(...steps)
+}
+
+function upsertRunStepFor(sessionId, step) {
+  const state = _ensureState(sessionId)
+  if (!state || !step?.id) return
+  if (step.step_type === 'run' && !state.runSteps.some(s => s.run_id === step.run_id)) {
+    state.runSteps.length = 0
+  }
+  const index = state.runSteps.findIndex(s => s.id === step.id)
+  if (index >= 0) {
+    state.runSteps[index] = { ...state.runSteps[index], ...step }
+  } else {
+    state.runSteps.push(step)
+  }
+  state.runSteps.sort((a, b) => String(a.started_time || '').localeCompare(String(b.started_time || '')))
 }
 
 function setStatusFor(sessionId, s) {
@@ -240,6 +268,7 @@ export function useSession() {
     waitingForSlot,
     recovery,
     queryHistory,
+    runSteps,
     // Global state
     sessions,
     currentSessionId,
@@ -261,6 +290,8 @@ export function useSession() {
     updateSessionFor,
     addMessageTo,
     setMessagesFor,
+    setRunStepsFor,
+    upsertRunStepFor,
     setStatusFor,
     setQueuedFor,
     setErrorFor,
