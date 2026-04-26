@@ -544,6 +544,10 @@ const multiSessionCandidates = computed(() => messages.value.map((message, index
   type: message.type || 'message',
   preview: messagePreview(message),
 })))
+const selectedMultiSessionCandidate = computed(() => {
+  return multiSessionCandidates.value.find(item => item.index === multiSessionIndex.value) || null
+})
+const parallelBranchCount = computed(() => parallelBranches.value.length)
 
 function messagePreview(message) {
   const raw = typeof message.content === 'string'
@@ -895,7 +899,7 @@ function formatCost(value) {
           @click="memoryDialogVisible = true"
         />
         <button
-          class="toolbar-btn"
+          class="toolbar-btn multi-session-trigger"
           :disabled="isRunning || !currentSessionId || messages.length === 0"
           @click="openMultiSessionDialog"
           title="Create a new session from selected context"
@@ -908,6 +912,7 @@ function formatCost(value) {
             <path d="M15.5 8.5 13 15"/>
           </svg>
           <span class="toolbar-btn-label">Multi-session</span>
+          <span v-if="parallelBranchCount" class="toolbar-badge multi-session-badge">{{ parallelBranchCount }}</span>
         </button>
         </div>
         <!-- Group 3: Actions -->
@@ -1276,74 +1281,110 @@ function formatCost(value) {
     <Teleport to="body">
       <Transition name="dialog-fade">
         <div v-if="showMultiSessionDialog" class="multi-session-overlay" @click.self="showMultiSessionDialog = false">
-          <div class="multi-session-dialog">
+          <div class="multi-session-dialog" role="dialog" aria-modal="true" aria-labelledby="multi-session-title">
             <div class="multi-session-header">
               <div>
-                <h3>多会话</h3>
-                <p>复制当前会话开头到所选消息（包含该消息）的上下文，并在当前项目创建一个新会话。</p>
+                <span class="multi-session-kicker">Parallel exploration</span>
+                <h3 id="multi-session-title">多会话分支</h3>
+                <p>从指定消息复制上下文，快速创建并行会话用于方案探索、对比和收敛。</p>
               </div>
-              <button class="close-btn" @click="showMultiSessionDialog = false">×</button>
+              <button class="close-btn" type="button" aria-label="Close multi-session dialog" @click="showMultiSessionDialog = false">×</button>
             </div>
             <div class="multi-session-body">
-              <label class="field-label">Session name prefix</label>
-              <input v-model="multiSessionName" class="multi-session-input" placeholder="Session name prefix" />
-              <div class="multi-session-options">
-                <label>
-                  <span>Parallel sessions</span>
-                  <input v-model.number="multiSessionCount" type="number" min="1" max="8" />
-                </label>
-                <label class="checkbox-field">
-                  <input v-model="multiSessionWorktree" type="checkbox" />
-                  <span>Use worktree isolation</span>
-                </label>
-              </div>
-              <label class="field-label">Copy context through message</label>
-              <div class="message-choice-list">
-                <button
-                  v-for="candidate in multiSessionCandidates"
-                  :key="candidate.index"
-                  class="message-choice"
-                  :class="{ active: multiSessionIndex === candidate.index }"
-                  @click="multiSessionIndex = candidate.index"
-                >
-                  <span class="message-choice-index">#{{ candidate.index + 1 }}</span>
-                  <span class="message-choice-type">{{ candidate.type }}</span>
-                  <span class="message-choice-preview">{{ candidate.preview }}</span>
-                </button>
-              </div>
-              <label class="field-label">Parallel branches</label>
-              <div class="parallel-branch-list">
-                <div v-if="parallelBranchLoading" class="parallel-empty">Loading branches...</div>
-                <div v-else-if="parallelBranches.length === 0" class="parallel-empty">No parallel branches yet</div>
-                <template v-else>
-                  <div
-                    v-for="branch in parallelBranches"
-                    :key="branch.id"
-                    class="parallel-branch-item"
-                    :class="{ active: branch.branch_session_id === currentSessionId }"
-                  >
-                    <button
-                      class="parallel-branch-main"
-                      :disabled="branch.branch_session_id === currentSessionId"
-                      @click="compareWithBranch(branch)"
-                    >
-                      <span>{{ branchDisplayName(branch) }}</span>
-                      <small>{{ branch.worktree_enabled ? 'worktree' : 'shared dir' }}</small>
-                    </button>
-                    <button
-                      class="parallel-keep-btn"
-                      :disabled="!!convergingBranchId"
-                      @click="handleKeepBranch(branch)"
-                    >
-                      {{ convergingBranchId === branch.branch_session_id ? 'Keeping...' : 'Keep' }}
-                    </button>
+              <section class="multi-session-card multi-session-card--setup">
+                <div class="multi-session-card-title">
+                  <span>01</span>
+                  <div>
+                    <strong>创建策略</strong>
+                    <small>{{ multiSessionWorktree ? '每个会话使用独立 worktree' : '复用当前项目目录' }}</small>
                   </div>
-                </template>
-              </div>
+                </div>
+                <label class="field-label" for="multi-session-name">Session name prefix</label>
+                <input id="multi-session-name" v-model="multiSessionName" class="multi-session-input" placeholder="Session name prefix" />
+                <div class="multi-session-options">
+                  <label>
+                    <span>Parallel sessions</span>
+                    <input v-model.number="multiSessionCount" type="number" min="1" max="8" />
+                  </label>
+                  <label class="checkbox-field multi-session-toggle">
+                    <input v-model="multiSessionWorktree" type="checkbox" />
+                    <span>Use worktree isolation</span>
+                  </label>
+                </div>
+              </section>
+
+              <section class="multi-session-card multi-session-card--context">
+                <div class="multi-session-card-title">
+                  <span>02</span>
+                  <div>
+                    <strong>上下文截点</strong>
+                    <small v-if="selectedMultiSessionCandidate">复制到 #{{ selectedMultiSessionCandidate.index + 1 }} · {{ selectedMultiSessionCandidate.type }}</small>
+                    <small v-else>请选择一个消息截点</small>
+                  </div>
+                </div>
+                <div v-if="selectedMultiSessionCandidate" class="selected-context-preview">
+                  {{ selectedMultiSessionCandidate.preview }}
+                </div>
+                <div class="message-choice-list">
+                  <button
+                    v-for="candidate in multiSessionCandidates"
+                    :key="candidate.index"
+                    type="button"
+                    class="message-choice"
+                    :class="{ active: multiSessionIndex === candidate.index }"
+                    :aria-pressed="multiSessionIndex === candidate.index"
+                    @click="multiSessionIndex = candidate.index"
+                  >
+                    <span class="message-choice-index">#{{ candidate.index + 1 }}</span>
+                    <span class="message-choice-type">{{ candidate.type }}</span>
+                    <span class="message-choice-preview">{{ candidate.preview }}</span>
+                  </button>
+                </div>
+              </section>
+
+              <section class="multi-session-card multi-session-card--branches">
+                <div class="multi-session-card-title">
+                  <span>03</span>
+                  <div>
+                    <strong>并行分支</strong>
+                    <small>{{ parallelBranchCount }} branch{{ parallelBranchCount === 1 ? '' : 'es' }} available</small>
+                  </div>
+                </div>
+                <div class="parallel-branch-list">
+                  <div v-if="parallelBranchLoading" class="parallel-empty">Loading branches...</div>
+                  <div v-else-if="parallelBranches.length === 0" class="parallel-empty">No parallel branches yet</div>
+                  <template v-else>
+                    <div
+                      v-for="branch in parallelBranches"
+                      :key="branch.id"
+                      class="parallel-branch-item"
+                      :class="{ active: branch.branch_session_id === currentSessionId }"
+                    >
+                      <button
+                        class="parallel-branch-main"
+                        type="button"
+                        :disabled="branch.branch_session_id === currentSessionId"
+                        @click="compareWithBranch(branch)"
+                      >
+                        <span>{{ branchDisplayName(branch) }}</span>
+                        <small>{{ branch.worktree_enabled ? 'worktree isolation' : 'shared directory' }}</small>
+                      </button>
+                      <button
+                        class="parallel-keep-btn"
+                        type="button"
+                        :disabled="!!convergingBranchId"
+                        @click="handleKeepBranch(branch)"
+                      >
+                        {{ convergingBranchId === branch.branch_session_id ? 'Keeping...' : 'Keep' }}
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </section>
             </div>
             <div class="multi-session-footer">
-              <button class="secondary-btn" @click="showMultiSessionDialog = false">Cancel</button>
-              <button class="primary-btn" :disabled="isRunning" @click="handleBranchSession">Create session</button>
+              <button class="secondary-btn" type="button" @click="showMultiSessionDialog = false">Cancel</button>
+              <button class="primary-btn" type="button" :disabled="isRunning" @click="handleBranchSession">Create {{ multiSessionCount }} session{{ multiSessionCount === 1 ? '' : 's' }}</button>
             </div>
           </div>
         </div>
@@ -2522,6 +2563,264 @@ button.dash-chip[disabled] {
   }
   .context-pct {
     font-size: 12px;
+  }
+}
+
+
+.multi-session-trigger {
+  position: relative;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
+}
+
+.multi-session-trigger::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
+  transform: translateX(-120%);
+  transition: transform 420ms ease;
+}
+
+.multi-session-trigger:hover:not(:disabled)::before {
+  transform: translateX(120%);
+}
+
+.multi-session-trigger > * {
+  position: relative;
+}
+
+.multi-session-badge {
+  min-width: 18px;
+}
+
+.multi-session-dialog {
+  width: min(920px, calc(100vw - 32px));
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 32%),
+    var(--bg-secondary);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+}
+
+.multi-session-header {
+  align-items: flex-start;
+  padding: 18px 20px;
+}
+
+.multi-session-kicker {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.multi-session-header h3 {
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.multi-session-body {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 12px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--bg-primary) 52%, transparent);
+}
+
+.multi-session-card {
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  padding: 12px;
+  transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+}
+
+.multi-session-card:focus-within,
+.multi-session-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  box-shadow: 0 12px 34px color-mix(in srgb, #000 14%, transparent);
+}
+
+.multi-session-card--context {
+  grid-row: span 2;
+}
+
+.multi-session-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.multi-session-card-title > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.multi-session-card-title strong,
+.multi-session-card-title small {
+  display: block;
+}
+
+.multi-session-card-title strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.multi-session-card-title small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.multi-session-input,
+.multi-session-options input[type="number"] {
+  border-radius: 12px;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.multi-session-input:focus,
+.multi-session-options input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.multi-session-toggle {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-primary);
+}
+
+.selected-context-preview {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.message-choice-list {
+  max-height: 330px;
+  padding-right: 3px;
+}
+
+.message-choice {
+  border-radius: 12px;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.message-choice:hover:not(.active) {
+  transform: translateX(3px);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: var(--bg-secondary);
+}
+
+.message-choice.active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.parallel-branch-list {
+  max-height: 230px;
+}
+
+.parallel-branch-item {
+  border-radius: 12px;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.parallel-branch-item:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.parallel-branch-item.active {
+  background: var(--accent-dim);
+}
+
+.parallel-keep-btn {
+  border-radius: 999px;
+  font-weight: 700;
+  transition: transform 180ms ease, color 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.parallel-keep-btn:hover:not(:disabled) {
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+
+.multi-session-footer {
+  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+}
+
+.dialog-fade-enter-active .multi-session-dialog,
+.dialog-fade-leave-active .multi-session-dialog,
+.dialog-fade-enter-active .compare-dialog,
+.dialog-fade-leave-active .compare-dialog {
+  transition: transform 220ms ease, opacity 220ms ease;
+}
+
+.dialog-fade-enter-from .multi-session-dialog,
+.dialog-fade-leave-to .multi-session-dialog,
+.dialog-fade-enter-from .compare-dialog,
+.dialog-fade-leave-to .compare-dialog {
+  opacity: 0;
+  transform: translateY(18px) scale(0.98);
+}
+
+@media (max-width: 780px) {
+  .multi-session-body {
+    grid-template-columns: 1fr;
+  }
+
+  .multi-session-card--context {
+    grid-row: auto;
+  }
+
+  .message-choice {
+    grid-template-columns: 48px 72px 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .multi-session-trigger::before,
+  .multi-session-card,
+  .message-choice,
+  .parallel-branch-item,
+  .parallel-keep-btn,
+  .multi-session-dialog,
+  .compare-dialog {
+    transition: none;
+  }
+
+  .message-choice:hover:not(.active),
+  .parallel-branch-item:hover,
+  .parallel-keep-btn:hover:not(:disabled),
+  .dialog-fade-enter-from .multi-session-dialog,
+  .dialog-fade-leave-to .multi-session-dialog,
+  .dialog-fade-enter-from .compare-dialog,
+  .dialog-fade-leave-to .compare-dialog {
+    transform: none;
   }
 }
 </style>

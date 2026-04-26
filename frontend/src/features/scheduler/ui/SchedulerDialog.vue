@@ -177,25 +177,26 @@ function taskAnchorLabel(task) {
   <teleport to="body">
     <Transition name="dialog-fade">
       <div v-if="visible" class="scheduler-overlay" @click.self="emit('close')">
-        <div class="scheduler-dialog">
+        <div class="scheduler-dialog" role="dialog" aria-modal="true" aria-labelledby="scheduler-title">
           <div class="scheduler-header">
             <div>
-              <h3>Project Clock</h3>
-              <p>Create sessions in this project and run scheduled work automatically</p>
+              <span class="scheduler-eyebrow">Automation timeline</span>
+              <h3 id="scheduler-title">Project Clock</h3>
+              <p>Create sessions in this project and run scheduled work automatically.</p>
             </div>
-            <button class="close-btn" @click="emit('close')">×</button>
+            <button class="close-btn" type="button" aria-label="Close scheduler" @click="emit('close')">×</button>
           </div>
 
           <div v-if="error" class="notice">{{ error }}</div>
 
           <div class="scheduler-body">
-            <section class="schedule-form">
-              <input v-model="form.name" placeholder="Name" />
+            <section class="schedule-form" aria-label="Create schedule">
+              <input v-model="form.name" placeholder="Name" aria-label="Schedule name" />
               <div class="schedule-type-grid">
-                <button :class="{ active: form.schedule_type === 'minutes' }" @click="form.schedule_type = 'minutes'">Every N minutes</button>
-                <button :class="{ active: form.schedule_type === 'hourly' }" @click="form.schedule_type = 'hourly'">Every N hours</button>
-                <button :class="{ active: form.schedule_type === 'daily' }" @click="form.schedule_type = 'daily'">Daily</button>
-                <button :class="{ active: form.schedule_type === 'weekly' }" @click="form.schedule_type = 'weekly'">Weekly</button>
+                <button type="button" :class="{ active: form.schedule_type === 'minutes' }" @click="form.schedule_type = 'minutes'">Every N minutes</button>
+                <button type="button" :class="{ active: form.schedule_type === 'hourly' }" @click="form.schedule_type = 'hourly'">Every N hours</button>
+                <button type="button" :class="{ active: form.schedule_type === 'daily' }" @click="form.schedule_type = 'daily'">Daily</button>
+                <button type="button" :class="{ active: form.schedule_type === 'weekly' }" @click="form.schedule_type = 'weekly'">Weekly</button>
               </div>
               <input
                 v-if="form.schedule_type === 'minutes'"
@@ -241,15 +242,21 @@ function taskAnchorLabel(task) {
                 <input v-model="form.delete_session_on_success" type="checkbox" />
                 <span>Delete successful execution session</span>
               </label>
-              <button class="primary-btn" :disabled="saving || !form.prompt || !props.projectId" @click="submit">
+              <button class="primary-btn" type="button" :disabled="saving || !form.prompt || !props.projectId" @click="submit">
                 {{ saving ? 'Saving...' : 'Create Project Clock' }}
               </button>
             </section>
 
             <section class="schedule-list">
+              <div class="schedule-list-header">
+                <div>
+                  <span class="scheduler-eyebrow">Scheduled runs</span>
+                  <strong>{{ tasks.length }} timeline{{ tasks.length === 1 ? '' : 's' }}</strong>
+                </div>
+              </div>
               <div v-if="loading" class="empty">Loading...</div>
               <div v-else-if="tasks.length === 0" class="empty">No schedules</div>
-              <div v-for="task in tasks" :key="task.id" class="schedule-item">
+              <div v-for="task in tasks" :key="task.id" class="schedule-item" :class="{ 'schedule-item--disabled': !task.enabled }">
                 <div class="schedule-main">
                   <div class="schedule-title-row">
                     <div class="schedule-title">{{ task.name }}</div>
@@ -266,9 +273,9 @@ function taskAnchorLabel(task) {
                   </div>
                 </div>
                 <div class="schedule-actions">
-                  <button @click="runNow(task.id)" :disabled="saving">Run now</button>
-                  <button @click="toggleSchedule(task)" :disabled="saving">{{ task.enabled ? 'Disable' : 'Enable' }}</button>
-                  <button class="danger" @click="removeSchedule(task.id)" :disabled="saving">Delete</button>
+                  <button type="button" @click="runNow(task.id)" :disabled="saving">Run now</button>
+                  <button type="button" @click="toggleSchedule(task)" :disabled="saving">{{ task.enabled ? 'Disable' : 'Enable' }}</button>
+                  <button type="button" class="danger" @click="removeSchedule(task.id)" :disabled="saving">Delete</button>
                 </div>
               </div>
             </section>
@@ -280,42 +287,58 @@ function taskAnchorLabel(task) {
 </template>
 
 <style scoped>
-.scheduler-overlay { position: fixed; inset: 0; z-index: 100; background: var(--bg-overlay); display: flex; align-items: center; justify-content: center; }
-.scheduler-dialog { width: 920px; max-width: 94vw; max-height: 84vh; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); overflow: hidden; display: flex; flex-direction: column; }
-.scheduler-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-.scheduler-header h3 { margin: 0; font-size: 15px; color: var(--text-primary); }
-.scheduler-header p { margin: 3px 0 0; font-size: 12px; color: var(--text-muted); }
-.close-btn { border: none; background: transparent; color: var(--text-muted); font-size: 24px; cursor: pointer; }
-.notice { padding: 8px 18px; color: var(--danger, #ef4444); background: var(--bg-tertiary); border-bottom: 1px solid var(--border); font-size: 12px; }
-.scheduler-body { display: grid; grid-template-columns: 320px 1fr; min-height: 460px; overflow: hidden; }
-.schedule-form { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-right: 1px solid var(--border); background: var(--bg-primary); }
-.schedule-form input, .schedule-form textarea, .schedule-form select { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-primary); padding: 8px 10px; font-family: var(--font-sans); }
-.schedule-type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.schedule-type-grid button { border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: 7px 8px; cursor: pointer; font-size: 11px; }
-.schedule-type-grid button.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
-.schedule-summary { color: var(--text-muted); font-size: 12px; padding: 6px 8px; border: 1px dashed var(--border); border-radius: var(--radius-sm); }
-.schedule-form textarea { min-height: 140px; resize: vertical; }
+.scheduler-overlay { position: fixed; inset: 0; z-index: 100; background: color-mix(in srgb, var(--bg-overlay) 88%, transparent); backdrop-filter: blur(14px); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.scheduler-dialog { width: min(1060px, 96vw); max-height: min(860px, 88vh); background: radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 30%), var(--bg-secondary); border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: calc(var(--radius-lg) + 6px); box-shadow: var(--shadow-xl), 0 24px 80px color-mix(in srgb, var(--accent) 12%, transparent); overflow: hidden; display: flex; flex-direction: column; }
+.scheduler-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding: 20px 22px 18px; border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent); }
+.scheduler-eyebrow { display: inline-flex; margin-bottom: 6px; color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+.scheduler-header h3 { margin: 0; font-size: 20px; color: var(--text-primary); letter-spacing: -0.02em; }
+.scheduler-header p { margin: 6px 0 0; font-size: 13px; color: var(--text-muted); }
+.close-btn { width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--bg-primary) 80%, transparent); color: var(--text-muted); font-size: 22px; line-height: 1; cursor: pointer; transition: transform 180ms ease, color 180ms ease, border-color 180ms ease, background 180ms ease; }
+.close-btn:hover { color: var(--text-primary); border-color: var(--accent); background: var(--bg-hover); transform: rotate(90deg); }
+.notice { padding: 10px 22px; color: var(--danger, #ef4444); background: color-mix(in srgb, var(--danger, #ef4444) 10%, var(--bg-tertiary)); border-bottom: 1px solid var(--border); font-size: 12px; }
+.scheduler-body { display: grid; grid-template-columns: minmax(320px, 360px) 1fr; min-height: 520px; overflow: hidden; }
+.schedule-form { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--bg-primary) 86%, transparent); overflow-y: auto; }
+.schedule-form input, .schedule-form textarea, .schedule-form select { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary); color: var(--text-primary); padding: 9px 10px; font-family: var(--font-sans); transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease; }
+.schedule-form input:focus, .schedule-form textarea:focus, .schedule-form select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.schedule-type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.schedule-type-grid button { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary); color: var(--text-secondary); padding: 9px 10px; cursor: pointer; font-size: 11px; font-weight: 700; transition: transform 180ms ease, color 180ms ease, background 180ms ease, border-color 180ms ease; }
+.schedule-type-grid button:hover:not(.active) { color: var(--text-primary); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); transform: translateY(-1px); }
+.schedule-type-grid button.active { border-color: var(--accent); background: linear-gradient(135deg, var(--accent-dim), color-mix(in srgb, var(--accent) 14%, transparent)); color: var(--accent); }
+.schedule-summary { color: var(--accent); font-size: 12px; padding: 8px 10px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.schedule-form textarea { min-height: 140px; resize: vertical; line-height: 1.5; }
 .anchor-field { display: flex; flex-direction: column; gap: 6px; }
-.anchor-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
-.anchor-hint { font-size: 11px; line-height: 1.45; color: var(--text-muted); }
+.anchor-label { font-size: 12px; color: var(--text-secondary); font-weight: 700; }
+.anchor-hint { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 .schedule-option { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 .schedule-option input { width: auto; }
-.primary-btn { background: var(--accent); border: 1px solid var(--accent); color: var(--text-on-accent); border-radius: var(--radius-sm); padding: 8px 12px; cursor: pointer; }
+.primary-btn { min-height: 38px; background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 78%, #ffffff)); border: 1px solid var(--accent); color: var(--text-on-accent); border-radius: 12px; padding: 9px 12px; cursor: pointer; font-weight: 800; transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease; }
+.primary-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 28%, transparent); }
 .primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.schedule-list { overflow-y: auto; padding: 10px; }
-.empty { color: var(--text-muted); text-align: center; padding: 30px; font-size: 13px; }
-.schedule-item { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 8px; }
+.schedule-list { overflow-y: auto; padding: 16px; }
+.schedule-list-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.schedule-list-header strong { display: block; color: var(--text-primary); font-size: 15px; }
+.empty { color: var(--text-muted); text-align: center; padding: 48px 20px; font-size: 13px; border: 1px dashed var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--bg-primary) 72%, transparent); }
+.schedule-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; padding: 14px; border: 1px solid color-mix(in srgb, var(--border) 84%, transparent); border-radius: var(--radius-md); margin-bottom: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--bg-primary) 92%, transparent), color-mix(in srgb, var(--bg-tertiary) 42%, transparent)); transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease; }
+.schedule-item:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); box-shadow: 0 14px 36px color-mix(in srgb, #000 16%, transparent); }
+.schedule-item--disabled { opacity: 0.72; }
 .schedule-main { min-width: 0; }
-.schedule-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.schedule-title { font-weight: 600; color: var(--text-primary); font-size: 13px; }
-.schedule-anchor { flex-shrink: 0; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; }
+.schedule-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.schedule-title { font-weight: 800; color: var(--text-primary); font-size: 14px; }
+.status-pill, .schedule-anchor { display: inline-flex; align-items: center; border-radius: 999px; font-family: var(--font-mono); }
+.status-pill { padding: 3px 8px; color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 42%, var(--border)); background: var(--green-dim); font-size: 10px; font-weight: 800; }
+.status-pill--paused { color: var(--text-muted); border-color: var(--border); background: var(--bg-tertiary); }
+.schedule-anchor { max-width: 100%; margin-top: 9px; font-size: 10px; color: var(--text-muted); border: 1px solid var(--border); padding: 3px 8px; }
 .schedule-anchor--active { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); background: var(--green-dim); }
 .schedule-meta { color: var(--text-muted); font-size: 11px; margin-top: 4px; }
-.schedule-prompt { color: var(--text-secondary); font-size: 12px; margin-top: 6px; white-space: pre-wrap; max-height: 80px; overflow: hidden; }
-.schedule-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-.schedule-actions button { border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: 5px 9px; cursor: pointer; }
-.schedule-actions button:hover:not(:disabled) { background: var(--bg-hover); }
+.schedule-prompt { color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin-top: 9px; white-space: pre-wrap; max-height: 92px; overflow: hidden; }
+.schedule-actions { display: flex; flex-direction: column; gap: 7px; flex-shrink: 0; }
+.schedule-actions button { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); color: var(--text-secondary); padding: 7px 10px; cursor: pointer; transition: transform 180ms ease, color 180ms ease, background 180ms ease, border-color 180ms ease; }
+.schedule-actions button:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); border-color: var(--accent); transform: translateY(-1px); }
 .schedule-actions .danger { color: var(--danger, #ef4444); }
-.dialog-fade-enter-active, .dialog-fade-leave-active { transition: opacity 0.15s ease; }
+.dialog-fade-enter-active, .dialog-fade-leave-active { transition: opacity 180ms ease; }
+.dialog-fade-enter-active .scheduler-dialog, .dialog-fade-leave-active .scheduler-dialog { transition: transform 220ms ease, opacity 220ms ease; }
 .dialog-fade-enter-from, .dialog-fade-leave-to { opacity: 0; }
+.dialog-fade-enter-from .scheduler-dialog, .dialog-fade-leave-to .scheduler-dialog { opacity: 0; transform: translateY(16px) scale(0.98); }
+@media (max-width: 860px) { .scheduler-overlay { align-items: stretch; padding: 12px; } .scheduler-body { grid-template-columns: 1fr; overflow-y: auto; } .schedule-form { border-right: none; border-bottom: 1px solid var(--border); } .schedule-list { overflow: visible; } }
+@media (prefers-reduced-motion: reduce) { .scheduler-dialog, .schedule-item, .schedule-type-grid button, .primary-btn, .schedule-actions button, .close-btn { transition: none; } .schedule-item:hover, .primary-btn:hover:not(:disabled), .schedule-actions button:hover:not(:disabled), .schedule-type-grid button:hover:not(.active), .close-btn:hover { transform: none; } }
 </style>
