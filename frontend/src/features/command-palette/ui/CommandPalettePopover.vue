@@ -190,16 +190,18 @@ function onSearchInput(e) {
   bottom: 100%;
   left: 0;
   right: 0;
-  margin-bottom: 4px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xl);
+  margin-bottom: 6px;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass);
   max-height: 320px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   z-index: 100;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .cmd-search-wrapper {
@@ -207,7 +209,8 @@ function onSearchInput(e) {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--layer-glass);
 }
 
 .cmd-search-icon {
@@ -226,18 +229,21 @@ function onSearchInput(e) {
 }
 
 .cmd-manage-btn {
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: color-mix(in srgb, var(--glass-bg) 42%, transparent);
   color: var(--text-secondary);
   font-size: 11px;
   padding: 3px 8px;
   cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .cmd-manage-btn:hover {
-  color: var(--text-primary);
+  color: var(--accent);
+  background: var(--layer-active);
   border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .cmd-search::placeholder {
@@ -261,7 +267,7 @@ function onSearchInput(e) {
 
 .cmd-item:hover,
 .cmd-item--active {
-  background: var(--bg-hover);
+  background: var(--layer-active);
 }
 
 .cmd-name {
@@ -287,7 +293,8 @@ function onSearchInput(e) {
 
 .cmd-tag--local {
   color: var(--text-muted);
-  background: var(--bg-tertiary);
+  background: var(--layer-glass);
+  border: 1px solid var(--glass-border);
 }
 
 .cmd-desc {
@@ -307,7 +314,7 @@ function onSearchInput(e) {
 }
 
 .cmd-policy-item:hover {
-  background: var(--bg-hover);
+  background: var(--layer-active);
 }
 
 .cmd-policy-main {
@@ -324,9 +331,9 @@ function onSearchInput(e) {
 }
 
 .cmd-policy-btn {
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
   color: var(--text-muted);
   font-size: 11px;
   padding: 2px 7px;

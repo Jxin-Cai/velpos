@@ -28,24 +28,34 @@ const emit = defineEmits(['click'])
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  width: 36px;
   height: 32px;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
   transition:
     color var(--transition-fast),
     background var(--transition-fast),
-    border-color var(--transition-fast);
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .terminal-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  color: var(--accent);
   border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.terminal-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 100ms;
 }
 
 .terminal-btn:disabled {

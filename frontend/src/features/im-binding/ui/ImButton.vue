@@ -52,40 +52,58 @@ function getLabel(bound, channelType, instanceName) {
 
 <style scoped>
 .im-btn {
+  position: relative;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  gap: 5px;
+  padding: 4px 9px;
+  min-height: 32px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
   transition:
     color var(--transition-fast),
     background var(--transition-fast),
     border-color var(--transition-fast),
-    transform 0.12s var(--ease-spring),
+    transform var(--transition-fast),
     box-shadow var(--transition-fast);
   font-family: var(--font-sans);
   white-space: nowrap;
+}
+
+.im-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
+  transform: translateX(-120%);
+  transition: transform 420ms ease;
+}
+
+.im-btn:hover:not(:disabled)::before {
+  transform: translateX(120%);
+}
+
+.im-btn > * {
   position: relative;
 }
 
 .im-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  color: var(--accent);
   border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .im-btn:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
-  box-shadow: var(--shadow-xs);
-  transition-duration: 60ms;
+  transform: scale(0.96);
+  transition-duration: 100ms;
 }
 
 .im-btn:disabled {
@@ -95,23 +113,18 @@ function getLabel(bound, channelType, instanceName) {
 
 .im-btn--bound {
   color: var(--green);
-  border-color: var(--green);
-  background: var(--green-dim);
-  box-shadow: 0 0 0 1px var(--green-dim);
 }
 
 .im-btn--bound:hover:not(:disabled) {
-  border-color: var(--green);
   color: var(--green);
-  background: var(--green-dim);
-  box-shadow: var(--shadow-md), 0 0 12px var(--green-dim);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
+  box-shadow: var(--shadow-sm);
 }
 
 .im-btn--bound:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
-  box-shadow: 0 0 0 1px var(--green-dim);
-  transition-duration: 60ms;
+  transform: scale(0.96);
+  transition-duration: 100ms;
 }
 
 .im-btn-label {

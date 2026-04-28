@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import hljs from 'highlight.js/lib/common'
 import { useGlobalHotkeys } from '../../../shared/lib/useGlobalHotkeys'
 import { useWorkspace } from '../model/useWorkspace'
@@ -365,7 +365,20 @@ function startHistoryTransition(previousContent, nextContent, anchor) {
   }, 820)
 }
 
-onBeforeUnmount(clearHistoryTransition)
+function handleKeydown(event) {
+  if (event.key === 'Escape' && props.visible) {
+    emit('close')
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleKeydown)
+  clearHistoryTransition()
+})
 
 function formatVersionTitle(node, fallback) {
   if (!node) return fallback
@@ -763,9 +776,11 @@ function nextDifference() {
   width: 360px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
-  background: var(--bg-secondary);
-  box-shadow: var(--shadow-xl);
+  border-left: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .file-content-panel {
@@ -777,9 +792,11 @@ function nextDifference() {
   width: 540px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
-  background: var(--bg-secondary);
-  box-shadow: var(--shadow-xl);
+  border-left: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .file-content-panel.fullscreen {
@@ -802,7 +819,8 @@ function nextDifference() {
 .workspace-header,
 .viewer-header {
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--layer-glass);
   flex-shrink: 0;
 }
 
@@ -838,25 +856,29 @@ function nextDifference() {
 .icon-btn {
   width: 32px;
   height: 32px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
   color: var(--text-secondary);
   font-size: 22px;
   cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .icon-btn:hover,
 .secondary-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .workspace-filters {
   display: grid;
   gap: 8px;
   padding: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--glass-bg) 44%, transparent);
   flex-shrink: 0;
 }
 
@@ -902,7 +924,7 @@ function nextDifference() {
 
 .tree-row:hover,
 .tree-row.active {
-  background: var(--bg-hover);
+  background: var(--layer-active);
   color: var(--text-primary);
 }
 

@@ -202,18 +202,20 @@ const planProgressActive = computed(() => {
 <style scoped>
 .task-panel {
   position: absolute;
-  bottom: calc(100% + 4px);
+  bottom: calc(100% + 8px);
   left: 0;
   width: 380px;
   max-height: 460px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-glass);
   z-index: 200;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 /* ── Header ── */
@@ -222,12 +224,13 @@ const planProgressActive = computed(() => {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--layer-glass);
   flex-shrink: 0;
 }
 
 .panel-header--border {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--glass-border);
 }
 
 .panel-title {
@@ -284,7 +287,7 @@ const planProgressActive = computed(() => {
 /* ── Segmented progress bar ── */
 .plan-progress-bar {
   height: 3px;
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
   flex-shrink: 0;
   display: flex;
 }
@@ -341,7 +344,7 @@ const planProgressActive = computed(() => {
 }
 
 .plan-item:hover {
-  background: var(--bg-hover);
+  background: var(--layer-active);
 }
 
 /* Timeline rail: connector + node */
@@ -474,7 +477,7 @@ const planProgressActive = computed(() => {
 }
 
 .task-item:hover {
-  background: var(--bg-hover);
+  background: var(--layer-active);
 }
 
 .task-icon {

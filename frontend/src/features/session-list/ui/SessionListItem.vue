@@ -265,14 +265,17 @@ onBeforeUnmount(() => {
 <style scoped>
 .session-item {
   padding: 10px 12px;
+  margin: 2px 8px;
   cursor: pointer;
   border-left: 3px solid transparent;
-  min-height: 48px;
+  border-radius: var(--radius-md);
+  min-height: 50px;
   box-sizing: border-box;
   transition:
-    background 200ms cubic-bezier(0.4, 0, 0.2, 1),
-    border-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow var(--transition-fast);
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
   position: relative;
 }
 
@@ -290,7 +293,7 @@ onBeforeUnmount(() => {
 }
 
 .session-item:hover {
-  background: var(--bg-hover);
+  background: var(--layer-glass);
 }
 
 .session-item:active {
@@ -300,7 +303,8 @@ onBeforeUnmount(() => {
 }
 
 .session-item.active {
-  background: var(--accent-dim);
+  background: linear-gradient(90deg, var(--layer-active), transparent 92%);
+  box-shadow: inset 0 0 0 1px var(--glass-border), var(--shadow-sm);
 }
 
 .session-item.active::after {
@@ -331,6 +335,7 @@ onBeforeUnmount(() => {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
 }
 
 .status-idle {
@@ -338,8 +343,9 @@ onBeforeUnmount(() => {
 }
 
 .status-running {
-  background: var(--yellow, #f59e0b);
-  animation: pulse 1.5s ease-in-out infinite;
+  background: var(--status-warning);
+  box-shadow: 0 0 0 3px var(--status-warning-bg), 0 0 16px var(--status-warning-bg);
+  animation: pulse 1.8s ease-in-out infinite;
 }
 
 .status-error {
@@ -644,5 +650,14 @@ onBeforeUnmount(() => {
 .confirm-swap-enter-from,
 .confirm-swap-leave-to {
   opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-running {
+    animation: none;
+  }
+
+  .session-item:active {
+    transform: none;
+  }
 }
 </style>

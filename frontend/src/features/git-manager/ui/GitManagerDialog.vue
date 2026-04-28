@@ -283,7 +283,9 @@ onBeforeUnmount(() => {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-glass);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -291,15 +293,17 @@ onBeforeUnmount(() => {
 }
 
 .dialog {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg, 12px);
   width: 560px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .dialog-header {
@@ -307,7 +311,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--layer-glass);
   flex-shrink: 0;
 }
 
@@ -333,8 +338,8 @@ onBeforeUnmount(() => {
 }
 
 .close-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  color: var(--accent);
 }
 
 .error-bar {

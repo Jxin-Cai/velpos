@@ -602,18 +602,28 @@ defineExpose({ scrollToSession })
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  background: var(--glass-bg);
+  border-right: 1px solid var(--glass-border);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   flex-shrink: 0;
-  transition: background var(--transition-base), border-color var(--transition-base);
+  transition: background var(--transition-base), border-color var(--transition-base), box-shadow var(--transition-base);
 }
 
 .sidebar-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   display: flex;
   gap: 8px;
   align-items: center;
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-xs);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .new-session-btn {
@@ -622,10 +632,11 @@ defineExpose({ scrollToSession })
   justify-content: center;
   gap: 6px;
   flex: 1;
+  min-height: 38px;
   padding: 8px 12px;
-  border: 1px dashed var(--border-active);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--layer-glass);
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
@@ -634,7 +645,7 @@ defineExpose({ scrollToSession })
     color var(--transition-fast),
     background var(--transition-fast),
     box-shadow var(--transition-fast),
-    transform var(--transition-spring);
+    transform var(--transition-fast);
 }
 
 .new-session-btn:hover {
@@ -676,12 +687,12 @@ defineExpose({ scrollToSession })
 
 .sidebar-list-fade--top {
   top: 0;
-  background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+  background: linear-gradient(to bottom, var(--glass-bg), transparent);
 }
 
 .sidebar-list-fade--bottom {
   bottom: 0;
-  background: linear-gradient(to top, var(--bg-secondary), transparent);
+  background: linear-gradient(to top, var(--glass-bg), transparent);
 }
 
 /* Project group */
@@ -723,7 +734,8 @@ defineExpose({ scrollToSession })
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 12px 6px;
+  margin: 4px 8px 2px;
+  padding: 8px 8px 6px;
   font-size: 12px;
   color: var(--text-secondary);
   letter-spacing: 0.2px;
@@ -731,6 +743,8 @@ defineExpose({ scrollToSession })
   overflow: hidden;
   cursor: pointer;
   user-select: none;
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .collapse-arrow {
@@ -740,6 +754,11 @@ defineExpose({ scrollToSession })
 
 .collapse-arrow.collapsed {
   transform: rotate(-90deg);
+}
+
+.project-header:hover {
+  background: var(--layer-glass);
+  color: var(--text-primary);
 }
 
 .project-name {
@@ -752,10 +771,11 @@ defineExpose({ scrollToSession })
 
 .project-count {
   font-size: 10px;
-  background: var(--bg-tertiary);
+  background: var(--layer-glass);
+  border: 1px solid var(--glass-border);
   color: var(--text-muted);
-  padding: 1px 6px;
-  border-radius: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
   flex-shrink: 0;
   font-weight: 600;
 }
@@ -972,8 +992,16 @@ defineExpose({ scrollToSession })
 }
 
 .empty-icon {
-  color: var(--text-muted);
-  opacity: 0.5;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--layer-active);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  opacity: 0.86;
   margin-bottom: 12px;
 }
 
@@ -993,15 +1021,15 @@ defineExpose({ scrollToSession })
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--layer-glass);
   color: var(--text-muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.15s;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .select-mode-btn:hover {
@@ -1022,8 +1050,11 @@ defineExpose({ scrollToSession })
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .batch-count {

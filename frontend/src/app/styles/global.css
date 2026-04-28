@@ -41,6 +41,30 @@
   --yellow: #e5c07b;
   --yellow-dim: rgba(229, 192, 123, 0.12);
   --orange: #d19a66;
+  --layer-base: #090d14;
+  --layer-workspace: rgba(16, 23, 34, 0.92);
+  --layer-glass: rgba(24, 32, 45, 0.72);
+  --layer-active: rgba(97, 175, 239, 0.16);
+  --layer-critical: rgba(224, 108, 117, 0.14);
+  --glass-bg: rgba(29, 35, 48, 0.72);
+  --glass-bg-strong: rgba(33, 39, 53, 0.88);
+  --glass-border: rgba(166, 206, 255, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
+  --glass-blur: 18px;
+  --glass-saturate: 140%;
+  --status-success: var(--green);
+  --status-success-bg: var(--green-dim);
+  --status-warning: var(--yellow);
+  --status-warning-bg: var(--yellow-dim);
+  --status-danger: var(--red);
+  --status-danger-bg: var(--red-dim);
+  --status-running: var(--accent);
+  --status-running-bg: var(--accent-dim);
+  --status-waiting: var(--orange);
+  --status-waiting-bg: rgba(209, 154, 102, 0.14);
+  --overlay-glass: rgba(3, 7, 18, 0.62);
+  --shadow-glass: 0 18px 48px rgba(0, 0, 0, 0.42), inset 0 1px 0 var(--glass-highlight);
+  --shadow-active: 0 0 0 1px var(--glass-border), 0 0 24px rgba(97, 175, 239, 0.18);
   /* Shadows — multi-layer for physical depth */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -87,6 +111,30 @@
   --yellow: #a16207;
   --yellow-dim: rgba(161, 98, 7, 0.1);
   --orange: #c2410c;
+  --layer-base: #f6f8fb;
+  --layer-workspace: rgba(255, 255, 255, 0.92);
+  --layer-glass: rgba(255, 255, 255, 0.78);
+  --layer-active: rgba(224, 104, 0, 0.12);
+  --layer-critical: rgba(220, 38, 38, 0.1);
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-bg-strong: rgba(255, 255, 255, 0.92);
+  --glass-border: rgba(15, 23, 42, 0.12);
+  --glass-highlight: rgba(255, 255, 255, 0.72);
+  --glass-blur: 18px;
+  --glass-saturate: 135%;
+  --status-success: var(--green);
+  --status-success-bg: var(--green-dim);
+  --status-warning: var(--yellow);
+  --status-warning-bg: var(--yellow-dim);
+  --status-danger: var(--red);
+  --status-danger-bg: var(--red-dim);
+  --status-running: var(--accent);
+  --status-running-bg: var(--accent-dim);
+  --status-waiting: var(--orange);
+  --status-waiting-bg: rgba(194, 65, 12, 0.1);
+  --overlay-glass: rgba(15, 23, 42, 0.28);
+  --shadow-glass: 0 18px 42px rgba(15, 23, 42, 0.12), inset 0 1px 0 var(--glass-highlight);
+  --shadow-active: 0 0 0 1px var(--glass-border), 0 0 22px rgba(224, 104, 0, 0.12);
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
@@ -129,6 +177,30 @@
   --yellow: #96780A;
   --yellow-dim: rgba(150, 120, 10, 0.1);
   --orange: #8C6520;
+  --layer-base: #f7f1e5;
+  --layer-workspace: rgba(253, 251, 247, 0.92);
+  --layer-glass: rgba(255, 253, 249, 0.78);
+  --layer-active: rgba(139, 105, 20, 0.12);
+  --layer-critical: rgba(181, 69, 58, 0.1);
+  --glass-bg: rgba(255, 253, 249, 0.78);
+  --glass-bg-strong: rgba(255, 253, 249, 0.92);
+  --glass-border: rgba(92, 75, 50, 0.13);
+  --glass-highlight: rgba(255, 255, 255, 0.68);
+  --glass-blur: 18px;
+  --glass-saturate: 130%;
+  --status-success: var(--green);
+  --status-success-bg: var(--green-dim);
+  --status-warning: var(--yellow);
+  --status-warning-bg: var(--yellow-dim);
+  --status-danger: var(--red);
+  --status-danger-bg: var(--red-dim);
+  --status-running: var(--accent);
+  --status-running-bg: var(--accent-dim);
+  --status-waiting: var(--orange);
+  --status-waiting-bg: rgba(140, 101, 32, 0.1);
+  --overlay-glass: rgba(44, 36, 22, 0.28);
+  --shadow-glass: 0 18px 42px rgba(44, 36, 22, 0.12), inset 0 1px 0 var(--glass-highlight);
+  --shadow-active: 0 0 0 1px var(--glass-border), 0 0 22px rgba(139, 105, 20, 0.12);
   --shadow-xs: 0 1px 2px rgba(44, 36, 22, 0.06);
   --shadow-sm: 0 1px 3px rgba(44, 36, 22, 0.08), 0 1px 2px rgba(44, 36, 22, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(44, 36, 22, 0.1), 0 2px 4px -2px rgba(44, 36, 22, 0.06);
@@ -153,15 +225,25 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
 
   /* Spring-based transition curves */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
 
-  --transition-fast: 150ms var(--ease-smooth);
-  --transition-base: 200ms var(--ease-smooth);
-  --transition-spring: 300ms var(--ease-spring);
+  --motion-fast: 150ms;
+  --motion-medium: 220ms;
+  --motion-emphasis: 280ms;
+  --transition-fast: var(--motion-fast) var(--ease-smooth);
+  --transition-base: var(--motion-medium) var(--ease-smooth);
+  --transition-spring: var(--motion-emphasis) var(--ease-spring);
+  --transition-enter: var(--motion-medium) var(--ease-out);
+  --transition-exit: var(--motion-fast) var(--ease-in);
+
+  --touch-target: 44px;
 
   font-family: var(--font-sans);
   font-size: 14px;
@@ -175,7 +257,10 @@
 body {
   min-height: 100vh;
   overflow: hidden;
-  background: var(--bg-primary);
+  background:
+    radial-gradient(circle at 16% 8%, var(--accent-dim), transparent 32%),
+    radial-gradient(circle at 82% 0%, var(--purple-dim), transparent 28%),
+    var(--layer-base);
   color: var(--text-primary);
   transition: background var(--transition-base), color var(--transition-base);
   user-select: none;
@@ -423,6 +508,83 @@ code {
 ::selection {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+/* ===================================================================
+   GLASS WORKSPACE PRIMITIVES
+   =================================================================== */
+.glass-surface {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.glass-surface-strong {
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.glass-overlay,
+.dialog-overlay,
+.memory-overlay,
+.evolution-overlay,
+.scheduler-overlay,
+.multi-session-overlay,
+.mobile-sidebar-overlay {
+  background: var(--overlay-glass);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+}
+
+.glass-sticky-bar {
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-sm);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.glass-dialog-surface,
+.dialog,
+.memory-dialog,
+.plugin-dialog,
+.settings-dialog,
+.multi-session-dialog,
+.compare-dialog,
+.scheduler-dialog,
+.evolution-dialog {
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--layer-glass);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.icon-control {
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ===================================================================

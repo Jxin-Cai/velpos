@@ -141,10 +141,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 2px;
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
   border-radius: var(--radius-md);
   padding: 2px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 70%, transparent);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
 }
 
 .theme-btn {
@@ -166,31 +168,33 @@ onUnmounted(() => {
 }
 
 .theme-btn:hover:not(.active) {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
+  color: var(--accent);
+  background: var(--layer-active);
 }
 
 .theme-btn.active {
   color: var(--accent);
-  background: var(--bg-secondary);
+  background: var(--layer-active);
   box-shadow: var(--shadow-sm);
 }
 
 /* Eye-care panel */
 .eyecare-panel {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
   width: 200px;
   padding: 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass);
   display: flex;
   flex-direction: column;
   gap: 10px;
   z-index: 60;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .panel-row {
@@ -260,21 +264,23 @@ onUnmounted(() => {
   align-self: center;
   font-size: 11px;
   color: var(--text-muted);
-  background: transparent;
-  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   padding: 3px 14px;
   cursor: pointer;
   transition:
     color var(--transition-fast),
     border-color var(--transition-fast),
-    background var(--transition-fast);
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .reset-btn:hover {
-  color: var(--text-secondary);
-  border-color: var(--border);
-  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--layer-active);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Panel transition */

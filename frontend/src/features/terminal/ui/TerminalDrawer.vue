@@ -216,12 +216,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   max-height: 75vh;
   min-height: 220px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
   border-bottom: none;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  box-shadow: var(--shadow-xl);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--shadow-glass);
   overflow: hidden;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .resize-handle {
@@ -242,7 +244,7 @@ onBeforeUnmount(() => {
 
 .terminal-dock-enter-active,
 .terminal-dock-leave-active {
-  transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
+  transition: transform var(--transition-enter), opacity var(--transition-enter);
 }
 
 .terminal-dock-enter-from,
@@ -256,7 +258,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   flex-shrink: 0;
 }
 
@@ -264,12 +268,12 @@ onBeforeUnmount(() => {
 .tab-add,
 .btn-clear,
 .btn-close {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--layer-glass);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .terminal-tab {
@@ -286,17 +290,19 @@ onBeforeUnmount(() => {
 .tab-add:hover,
 .btn-clear:hover:not(:disabled),
 .btn-close:hover {
-  background: var(--accent-dim);
+  background: var(--layer-active);
   border-color: var(--accent);
   color: var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .tab-running {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--yellow);
-  animation: pulse 1.2s ease-in-out infinite;
+  background: var(--status-warning);
+  box-shadow: 0 0 12px var(--status-warning-bg);
+  animation: pulse 1.6s ease-in-out infinite;
 }
 
 .tab-close {
@@ -334,8 +340,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   padding: 6px 16px;
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border);
+  background: var(--layer-glass);
+  border-bottom: 1px solid var(--glass-border);
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
@@ -350,7 +356,7 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   padding: 12px 16px;
-  background: var(--bg-primary);
+  background: #090d14;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
@@ -372,9 +378,9 @@ onBeforeUnmount(() => {
 .terminal-input-area {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  padding: 9px 16px;
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   flex-shrink: 0;
   gap: 8px;
 }
@@ -412,6 +418,11 @@ onBeforeUnmount(() => {
     border-left: none;
     border-right: none;
     border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-running {
+    animation: none;
   }
 }
 </style>

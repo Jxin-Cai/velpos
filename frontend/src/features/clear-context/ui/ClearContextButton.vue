@@ -75,31 +75,59 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .clear-ctx-btn {
+  position: relative;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: transparent;
+  gap: 5px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
   color: var(--text-secondary);
-  border: 1px solid var(--border);
-  padding: 3px 8px;
-  height: 28px;
-  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  padding: 4px 9px;
+  min-height: 32px;
+  border-radius: var(--radius-md);
   font-size: 11px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
   font-family: var(--font-sans);
   white-space: nowrap;
 }
 
+.clear-ctx-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
+  transform: translateX(-120%);
+  transition: transform 420ms ease;
+}
+
+.clear-ctx-btn:hover:not(:disabled)::before {
+  transform: translateX(120%);
+}
+
+.clear-ctx-btn > * {
+  position: relative;
+}
+
 .clear-ctx-btn:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: var(--bg-hover);
+  color: var(--accent);
+  background: var(--layer-active);
   border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .clear-ctx-btn--confirming {
   color: var(--red);
   background: var(--red-dim);
+  border-color: var(--red);
   animation: confirm-pulse 1.5s ease-in-out infinite;
 }
 

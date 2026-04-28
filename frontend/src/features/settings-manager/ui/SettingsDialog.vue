@@ -642,7 +642,9 @@ async function copyJsonPreview() {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: var(--bg-overlay);
+  background: var(--overlay-glass);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -653,12 +655,14 @@ async function copyJsonPreview() {
   width: 720px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-glass);
   display: flex;
   flex-direction: column;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .dialog-header {
@@ -666,7 +670,8 @@ async function copyJsonPreview() {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--layer-glass);
   flex-shrink: 0;
 }
 
@@ -693,8 +698,8 @@ async function copyJsonPreview() {
 }
 
 .close-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  color: var(--accent);
 }
 
 .error-banner {

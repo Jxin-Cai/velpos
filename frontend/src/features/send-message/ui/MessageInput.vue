@@ -252,7 +252,7 @@ defineExpose({ setInput, addImage, appendText })
           <span class="attachment-name">{{ item.name }}</span>
           <span class="attachment-size">{{ formatSize(item.size) }}</span>
         </div>
-        <button class="attachment-remove" @click="removeAttachment(i)" title="Remove attachment">
+        <button class="attachment-remove" @click="removeAttachment(i)" title="Remove attachment" aria-label="Remove attachment">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
@@ -287,6 +287,7 @@ defineExpose({ setInput, addImage, appendText })
         class="attach-btn"
         :disabled="disabled"
         title="Attach files"
+        aria-label="Attach files"
         @click.stop="openFilePicker"
       >
         +
@@ -295,6 +296,7 @@ defineExpose({ setInput, addImage, appendText })
         class="send-btn"
         :disabled="(!input.trim() && pendingAttachments.length === 0) || disabled"
         :title="sendButtonTitle"
+        aria-label="Send message"
         @click="handleSend"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -308,24 +310,31 @@ defineExpose({ setInput, addImage, appendText })
 
 <style scoped>
 .input-area {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 10px 14px;
-  margin: 0 16px;
+  background: color-mix(in srgb, var(--glass-bg) 46%, transparent);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 72%, transparent);
+  border-radius: var(--radius-lg);
+  padding: 9px 86px 9px 14px;
+  margin: 0;
+  min-height: 46px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.13), inset 0 1px 0 var(--glass-highlight);
+  backdrop-filter: blur(calc(var(--glass-blur) * 1.05)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.05)) saturate(var(--glass-saturate));
   transition:
     border-color var(--transition-fast),
     background var(--transition-base),
-    box-shadow var(--transition-fast);
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
   cursor: text;
 }
 
 .input-area:focus-within {
+  background: color-mix(in srgb, var(--glass-bg) 64%, transparent);
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  box-shadow: var(--shadow-active), 0 14px 34px rgba(0, 0, 0, 0.16), inset 0 1px 0 var(--glass-highlight);
 }
 
 .attachment-previews {
@@ -337,11 +346,13 @@ defineExpose({ setInput, addImage, appendText })
 
 .attachment-thumb {
   position: relative;
-  width: 60px;
-  height: 60px;
-  border-radius: var(--radius-sm);
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--glass-border);
+  background: var(--layer-glass);
+  box-shadow: var(--shadow-sm);
   cursor: default;
 }
 
@@ -353,11 +364,12 @@ defineExpose({ setInput, addImage, appendText })
 
 .attachment-file {
   position: relative;
-  max-width: 220px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  padding: 8px 26px 8px 8px;
+  max-width: 240px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--layer-glass);
+  padding: 9px 30px 9px 10px;
+  box-shadow: var(--shadow-xs);
   cursor: default;
 }
 
@@ -391,29 +403,32 @@ defineExpose({ setInput, addImage, appendText })
 
 .attachment-remove {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 16px;
-  height: 16px;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  border: none;
+  background: var(--glass-bg-strong);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
 
 .attachment-thumb:hover .attachment-remove,
-.attachment-file:hover .attachment-remove {
+.attachment-file:hover .attachment-remove,
+.attachment-remove:focus-visible {
   opacity: 1;
 }
 
 .input-field {
   flex: none;
+  width: 100%;
   background: none;
   border: none;
   outline: none;
@@ -421,11 +436,12 @@ defineExpose({ setInput, addImage, appendText })
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.45;
   resize: none;
   min-height: 24px;
-  max-height: 50vh;
+  max-height: 38vh;
   overflow-y: auto;
+  padding-right: 4px;
 }
 
 .input-field::placeholder {
@@ -445,11 +461,14 @@ defineExpose({ setInput, addImage, appendText })
 }
 
 .input-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 5px;
 }
 
 .file-input {
@@ -460,20 +479,23 @@ defineExpose({ setInput, addImage, appendText })
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--layer-glass);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .attach-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .attach-btn:disabled {
@@ -485,27 +507,27 @@ defineExpose({ setInput, addImage, appendText })
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--accent), var(--purple));
   color: var(--text-on-accent);
   cursor: pointer;
   transition:
     filter var(--transition-fast),
-    transform var(--transition-spring),
-    box-shadow var(--transition-fast);
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    opacity var(--transition-fast);
   flex-shrink: 0;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md), var(--shadow-glow);
   align-self: flex-end;
-  cursor: pointer;
 }
 
 .send-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
+  filter: brightness(1.08);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-md), var(--shadow-glow);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
 }
 
 .send-btn:active:not(:disabled) {

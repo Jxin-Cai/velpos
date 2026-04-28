@@ -29,20 +29,28 @@ defineEmits(['click'])
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  width: 36px;
   height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .workspace-button:hover,
 .workspace-button.active {
-  background: var(--accent-dim);
+  background: var(--layer-active);
   border-color: var(--accent);
   color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.workspace-button:active {
+  transform: scale(0.96);
+  transition-duration: 100ms;
 }
 </style>

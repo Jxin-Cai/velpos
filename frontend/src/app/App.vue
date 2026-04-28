@@ -722,21 +722,28 @@ useGlobalHotkeys({
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
+  background:
+    linear-gradient(135deg, rgba(97, 175, 239, 0.08), transparent 34%),
+    radial-gradient(circle at 82% 14%, rgba(198, 120, 221, 0.1), transparent 30%),
+    var(--layer-base);
   transition: background var(--transition-base);
 }
 
 .app-header {
+  position: relative;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
   height: 48px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   flex-shrink: 0;
-  box-shadow: var(--shadow-xs);
-  transition: background var(--transition-base), border-color var(--transition-base);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-sm);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition: background var(--transition-base), border-color var(--transition-base), box-shadow var(--transition-base);
 }
 
 .header-left {
@@ -748,7 +755,7 @@ useGlobalHotkeys({
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .header-divider {
@@ -772,7 +779,7 @@ useGlobalHotkeys({
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   letter-spacing: 1px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-active);
 }
 
 .logo-text {
@@ -787,37 +794,48 @@ useGlobalHotkeys({
   display: flex;
   overflow: hidden;
   position: relative;
+  background: var(--layer-workspace);
+  border-top: 1px solid rgba(255, 255, 255, 0.02);
   transition:
-    padding-bottom 360ms cubic-bezier(0.22, 1, 0.36, 1),
-    padding-right 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    padding-bottom var(--motion-emphasis) var(--ease-out),
+    padding-right var(--motion-medium) var(--ease-out),
+    background var(--transition-base);
 }
 
 .mobile-menu-btn {
   display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: var(--text-secondary);
   cursor: pointer;
   padding: 4px;
   margin-right: 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
 .mobile-menu-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  border-color: var(--glass-border);
+  color: var(--accent);
 }
 
 .mobile-sidebar-overlay {
   display: none;
   position: absolute;
   inset: 0;
-  background: var(--bg-overlay);
+  background: var(--overlay-glass);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
   z-index: 40;
 }
 
 .main-sidebar {
-  transition: transform var(--transition-base), width var(--transition-base), min-width var(--transition-base), opacity var(--transition-base);
+  transition: transform var(--transition-base), width var(--transition-base), min-width var(--transition-base), opacity var(--transition-base), filter var(--transition-base);
   overflow: hidden;
 }
 
@@ -863,28 +881,32 @@ useGlobalHotkeys({
   left: 260px;
   transform: translateY(-50%);
   z-index: 30;
-  width: 20px;
-  height: 40px;
+  width: 24px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
   border-left: none;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity 0.2s, color var(--transition-fast), background var(--transition-fast), left var(--transition-base);
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), left var(--transition-base), box-shadow var(--transition-fast);
   padding: 0;
   pointer-events: auto;
   opacity: 0;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .sidebar-hover-zone:hover + .sidebar-collapse-btn,
 .sidebar-collapse-btn:hover {
   opacity: 1;
-  color: var(--text-primary);
-  background: var(--bg-hover);
+  color: var(--accent);
+  background: var(--glass-bg-strong);
+  box-shadow: var(--shadow-active);
 }
 
 .sidebar-collapse-btn.collapsed {
@@ -947,7 +969,9 @@ useGlobalHotkeys({
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 22%),
+    var(--layer-workspace);
   transition: background var(--transition-base);
 }
 
@@ -1091,12 +1115,15 @@ useGlobalHotkeys({
 .skel-sidebar {
   width: 260px;
   min-width: 260px;
-  border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
+  border-right: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: background var(--transition-base);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition: background var(--transition-base), border-color var(--transition-base);
 }
 
 .skel-sidebar-header {

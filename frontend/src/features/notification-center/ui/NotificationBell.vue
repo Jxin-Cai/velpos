@@ -67,19 +67,28 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  width: 36px;
   height: 32px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--glass-bg) 36%, transparent);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 70%, transparent);
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .notification-bell:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--layer-active);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.notification-bell:active {
+  transform: scale(0.96);
+  transition-duration: 100ms;
 }
 
 .badge {
