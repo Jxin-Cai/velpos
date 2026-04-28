@@ -16,6 +16,7 @@ export {
   listSessionBranches,
   compareSessions,
   convergeSessionBranches,
+  applyVbReviews,
 } from './api/sessionApi'
 export {
   getSessionUsage,

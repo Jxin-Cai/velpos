@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from domain.shared.async_utils import safe_create_task
@@ -290,6 +291,189 @@ class ProjectApplicationService:
         )
         stdout, _ = await proc.communicate()
         return stdout.decode().strip() if proc.returncode == 0 else branch
+
+    async def list_workspace_files(
+        self,
+        project_id: str,
+        changed_only: bool = False,
+        keyword: str = "",
+    ) -> list[dict[str, Any]]:
+        project = await self.get_project(project_id)
+        root = Path(project.dir_path).resolve()
+        statuses = await self._workspace_git_status(root)
+        keyword = keyword.strip().lower()
+        files: list[dict[str, Any]] = []
+
+        paths = [root / p for p in statuses] if changed_only else [p for p in root.rglob("*") if p.is_file()]
+        for path in paths:
+            resolved = path.resolve()
+            if not self._is_inside_project(root, resolved):
+                continue
+            if any(part in {".git", "node_modules", "__pycache__", ".venv", "dist"} for part in resolved.relative_to(root).parts):
+                continue
+            rel_path = resolved.relative_to(root).as_posix()
+            if keyword and keyword not in rel_path.lower():
+                continue
+            try:
+                stat = resolved.stat()
+            except FileNotFoundError:
+                continue
+            files.append({
+                "path": rel_path,
+                "type": "file",
+                "size": stat.st_size,
+                "git_status": statuses.get(rel_path, ""),
+                "is_changed": rel_path in statuses,
+            })
+
+        files.sort(key=lambda item: (not item["is_changed"], item["path"]))
+        return files[:500]
+
+    async def read_workspace_file(self, project_id: str, path: str) -> dict[str, Any]:
+        project = await self.get_project(project_id)
+        root = Path(project.dir_path).resolve()
+        file_path = self._resolve_workspace_path(root, path)
+        if not file_path.is_file():
+            raise BusinessException("File not found", "FILE_NOT_FOUND")
+
+        raw = await asyncio.to_thread(file_path.read_bytes)
+        rel_path = file_path.relative_to(root).as_posix()
+        return self._workspace_content_response(rel_path, raw)
+
+    async def get_workspace_diff(self, project_id: str, path: str) -> dict[str, Any]:
+        project = await self.get_project(project_id)
+        root = Path(project.dir_path).resolve()
+        file_path = self._resolve_workspace_path(root, path)
+        rel_path = file_path.relative_to(root).as_posix()
+        if not os.path.isdir(root / ".git"):
+            return {"path": rel_path, "patch": "", "truncated": False}
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(root), "diff", "--", rel_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        patch = stdout.decode(errors="replace") if proc.returncode == 0 else ""
+        max_patch_len = 12000
+        return {
+            "path": rel_path,
+            "patch": patch[:max_patch_len],
+            "truncated": len(patch) > max_patch_len,
+        }
+
+    async def list_workspace_file_history(
+        self,
+        project_id: str,
+        path: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        project = await self.get_project(project_id)
+        root = Path(project.dir_path).resolve()
+        file_path = self._resolve_workspace_path(root, path)
+        rel_path = file_path.relative_to(root).as_posix()
+        if not os.path.isdir(root / ".git"):
+            return []
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(root), "log", "--follow", f"--max-count={limit}",
+            "--format=%H%x1f%h%x1f%ct%x1f%an%x1f%s", "--", rel_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return []
+        commits: list[dict[str, Any]] = []
+        for line in stdout.decode(errors="replace").splitlines():
+            parts = line.split("\x1f", 4)
+            if len(parts) != 5:
+                continue
+            full_hash, short_hash, commit_time, author_name, message = parts
+            commits.append({
+                "ref": full_hash,
+                "hash": full_hash,
+                "short_hash": short_hash,
+                "commit_time": int(commit_time or 0),
+                "author_name": author_name,
+                "message": message,
+            })
+        return commits
+
+    async def read_workspace_file_at_ref(
+        self,
+        project_id: str,
+        path: str,
+        ref: str,
+    ) -> dict[str, Any]:
+        project = await self.get_project(project_id)
+        root = Path(project.dir_path).resolve()
+        file_path = self._resolve_workspace_path(root, path)
+        rel_path = file_path.relative_to(root).as_posix()
+        if not os.path.isdir(root / ".git"):
+            raise BusinessException("Not a git repository", "NOT_GIT_REPO")
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(root), "show", f"{ref}:{rel_path}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return {
+                "path": rel_path,
+                "content": "",
+                "encoding": "utf-8",
+                "size": 0,
+                "truncated": False,
+                "is_binary": False,
+                "missing": True,
+            }
+        return self._workspace_content_response(rel_path, stdout)
+
+    def _workspace_content_response(self, rel_path: str, raw: bytes) -> dict[str, Any]:
+        max_size = 200_000
+        is_binary = b"\0" in raw[:4096]
+        content = "" if is_binary else raw[:max_size].decode("utf-8", errors="replace")
+        return {
+            "path": rel_path,
+            "content": content,
+            "encoding": "binary" if is_binary else "utf-8",
+            "size": len(raw),
+            "truncated": len(raw) > max_size,
+            "is_binary": is_binary,
+        }
+
+    async def _workspace_git_status(self, root: Path) -> dict[str, str]:
+        if not os.path.isdir(root / ".git"):
+            return {}
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(root), "status", "--porcelain",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return {}
+        statuses: dict[str, str] = {}
+        for line in stdout.decode(errors="replace").splitlines():
+            if len(line) < 4:
+                continue
+            status = line[:2].strip()
+            path = line[3:]
+            if " -> " in path:
+                path = path.split(" -> ", 1)[1]
+            statuses[path] = status
+        return statuses
+
+    @staticmethod
+    def _is_inside_project(root: Path, path: Path) -> bool:
+        return path == root or root in path.parents
+
+    def _resolve_workspace_path(self, root: Path, path: str) -> Path:
+        target = (root / path).resolve()
+        if not self._is_inside_project(root, target):
+            raise BusinessException("Path is outside project", "INVALID_WORKSPACE_PATH")
+        return target
 
     async def ensure_projects_for_dirs(
         self, dir_paths: list[str]

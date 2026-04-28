@@ -5,12 +5,12 @@ import {
   updateClaudeMdRevision,
   proposeClaudeMdRevision,
   approveClaudeMdRevision,
+  rejectClaudeMdRevision,
   deleteClaudeMdRevision,
   applyClaudeMdRevision,
-  listProjectMemories,
-  createProjectMemory,
-  updateProjectMemory,
-  deleteProjectMemory,
+  listRules,
+  writeRule,
+  deleteRule,
 } from '../api/memoryApi'
 
 const content = ref('')
@@ -25,16 +25,24 @@ const saving = ref(false)
 const applying = ref(false)
 const error = ref('')
 const conflictMessage = ref('')
-const projectMemories = ref([])
-const selectedMemory = ref(null)
-const memoryEditing = ref(false)
-const memoryDraft = ref({ title: '', content: '', memory_type: 'note', state: 'active' })
+const rules = ref([])
+const selectedRule = ref(null)
+const ruleEditing = ref(false)
+const ruleDraft = ref({ path: '', content: '', pathsText: '' })
 
 const selectedContent = computed(() => selectedRevision.value?.content ?? content.value)
-const canEditSelected = computed(() => {
-  const state = selectedRevision.value?.state
-  return !selectedRevision.value || state === 'draft' || state === 'conflicted'
-})
+const canEditSelected = computed(() => !loading.value)
+
+function formatRulePaths(paths = []) {
+  return paths.join('\n')
+}
+
+function parseRulePaths(text = '') {
+  return text
+    .split('\n')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
 
 export function useMemoryManager() {
   async function loadClaudeMd(projectDir) {
@@ -57,111 +65,91 @@ export function useMemoryManager() {
     }
   }
 
-  async function loadProjectMemories(projectDir) {
+  async function loadRules(projectDir) {
     if (!projectDir) return
     loading.value = true
     error.value = ''
     try {
-      const data = await listProjectMemories(projectDir)
-      projectMemories.value = data.memories || []
-      selectedMemory.value = projectMemories.value[0] || null
+      const data = await listRules(projectDir)
+      rules.value = data.rules || []
+      selectedRule.value = rules.value[0] || null
     } catch (e) {
-      projectMemories.value = []
-      selectedMemory.value = null
-      error.value = e.message || 'Failed to load project memories'
+      rules.value = []
+      selectedRule.value = null
+      error.value = e.message || 'Failed to load rules'
     } finally {
       loading.value = false
     }
   }
 
-  function selectMemory(memory) {
-    selectedMemory.value = memory
-    memoryEditing.value = false
-    memoryDraft.value = { title: '', content: '', memory_type: 'note', state: 'active' }
+  function selectRule(rule) {
+    selectedRule.value = rule
+    ruleEditing.value = false
+    ruleDraft.value = { path: '', content: '', pathsText: '' }
     error.value = ''
   }
 
-  function startMemoryEdit(memory = null) {
-    selectedMemory.value = memory || selectedMemory.value
-    memoryEditing.value = true
-    const target = memory || selectedMemory.value
-    memoryDraft.value = target
+  function startRuleEdit(rule = null) {
+    selectedRule.value = rule || selectedRule.value
+    ruleEditing.value = true
+    const target = rule || selectedRule.value
+    ruleDraft.value = target
       ? {
-          title: target.title || '',
+          path: target.path || '',
           content: target.content || '',
-          memory_type: target.memory_type || 'note',
-          state: target.state || 'active',
+          pathsText: formatRulePaths(target.paths || []),
         }
-      : { title: '', content: '', memory_type: 'note', state: 'active' }
+      : { path: '', content: '', pathsText: '' }
   }
 
-  function cancelMemoryEdit() {
-    memoryEditing.value = false
-    memoryDraft.value = { title: '', content: '', memory_type: 'note', state: 'active' }
+  function cancelRuleEdit() {
+    ruleEditing.value = false
+    ruleDraft.value = { path: '', content: '', pathsText: '' }
   }
 
-  async function saveProjectMemory(projectDir) {
+  async function saveRule(projectDir) {
     saving.value = true
     error.value = ''
     try {
       const payload = {
-        title: memoryDraft.value.title,
-        content: memoryDraft.value.content,
-        memory_type: memoryDraft.value.memory_type || 'note',
-        state: memoryDraft.value.state || 'active',
+        content: ruleDraft.value.content,
+        paths: parseRulePaths(ruleDraft.value.pathsText),
       }
-      const data = selectedMemory.value
-        ? await updateProjectMemory(selectedMemory.value.id, payload)
-        : await createProjectMemory(projectDir, payload)
-      upsertProjectMemory(data.memory)
-      selectedMemory.value = data.memory
-      memoryEditing.value = false
+      const data = await writeRule(projectDir, ruleDraft.value.path, payload)
+      upsertRule(data.rule)
+      selectedRule.value = data.rule
+      ruleEditing.value = false
     } catch (e) {
-      error.value = e.message || 'Failed to save project memory'
+      error.value = e.message || 'Failed to save rule'
     } finally {
       saving.value = false
     }
   }
 
-  async function removeProjectMemory(memoryId) {
-    if (!memoryId) return
+  async function removeRule(projectDir, rulePath) {
+    if (!rulePath) return
     saving.value = true
     error.value = ''
     try {
-      await deleteProjectMemory(memoryId)
-      projectMemories.value = projectMemories.value.filter(memory => memory.id !== memoryId)
-      selectedMemory.value = projectMemories.value[0] || null
+      await deleteRule(projectDir, rulePath)
+      rules.value = rules.value.filter(rule => rule.path !== rulePath)
+      selectedRule.value = rules.value[0] || null
     } catch (e) {
-      error.value = e.message || 'Failed to delete project memory'
+      error.value = e.message || 'Failed to delete rule'
     } finally {
       saving.value = false
     }
   }
 
-  async function toggleProjectMemory(memory) {
-    if (!memory) return
-    saving.value = true
-    error.value = ''
-    try {
-      const nextState = memory.state === 'disabled' ? 'active' : 'disabled'
-      const data = await updateProjectMemory(memory.id, { state: nextState })
-      upsertProjectMemory(data.memory)
-      selectedMemory.value = data.memory
-    } catch (e) {
-      error.value = e.message || 'Failed to update project memory'
-    } finally {
-      saving.value = false
-    }
-  }
-
-  function upsertProjectMemory(memory) {
-    if (!memory) return
-    const idx = projectMemories.value.findIndex(item => item.id === memory.id)
+  function upsertRule(rule) {
+    if (!rule) return
+    const idx = rules.value.findIndex(item => item.path === rule.path)
     if (idx >= 0) {
-      projectMemories.value.splice(idx, 1, memory)
+      rules.value.splice(idx, 1, rule)
     } else {
-      projectMemories.value.unshift(memory)
+      rules.value.unshift(rule)
     }
+    rules.value.sort((a, b) => a.path.localeCompare(b.path))
   }
 
   function selectRevision(revision) {
@@ -191,7 +179,7 @@ export function useMemoryManager() {
         const data = await updateClaudeMdRevision(selectedRevision.value.id, editContent.value)
         revision = data.revision
       } else {
-        const baseRevisionId = activeRevision.value?.id || selectedRevision.value?.id || ''
+        const baseRevisionId = selectedRevision.value?.id || activeRevision.value?.id || ''
         const data = await createClaudeMdDraft(projectDir, editContent.value, baseRevisionId)
         revision = data.revision
       }
@@ -220,14 +208,18 @@ export function useMemoryManager() {
     await transitionSelected(() => rejectClaudeMdRevision(selectedRevision.value.id, reason))
   }
 
-  async function deleteSelectedRevision() {
+  async function deleteSelectedRevision(projectDir = '') {
     if (!selectedRevision.value) return
     saving.value = true
     error.value = ''
     try {
       await deleteClaudeMdRevision(selectedRevision.value.id)
-      versions.value = versions.value.filter(v => v.id !== selectedRevision.value.id)
-      selectedRevision.value = activeRevision.value || versions.value[0] || null
+      if (projectDir) {
+        await loadClaudeMd(projectDir)
+      } else {
+        versions.value = versions.value.filter(v => v.id !== selectedRevision.value.id)
+        selectedRevision.value = activeRevision.value || versions.value[0] || null
+      }
     } catch (e) {
       error.value = e.message || 'Failed to delete revision'
     } finally {
@@ -298,10 +290,10 @@ export function useMemoryManager() {
     activeRevision.value = null
     versions.value = []
     selectedRevision.value = null
-    projectMemories.value = []
-    selectedMemory.value = null
-    memoryEditing.value = false
-    memoryDraft.value = { title: '', content: '', memory_type: 'note', state: 'active' }
+    rules.value = []
+    selectedRule.value = null
+    ruleEditing.value = false
+    ruleDraft.value = { path: '', content: '', pathsText: '' }
     editing.value = false
     editContent.value = ''
     saving.value = false
@@ -325,18 +317,17 @@ export function useMemoryManager() {
     applying,
     error,
     conflictMessage,
-    projectMemories,
-    selectedMemory,
-    memoryEditing,
-    memoryDraft,
+    rules,
+    selectedRule,
+    ruleEditing,
+    ruleDraft,
     loadClaudeMd,
-    loadProjectMemories,
-    selectMemory,
-    startMemoryEdit,
-    cancelMemoryEdit,
-    saveProjectMemory,
-    removeProjectMemory,
-    toggleProjectMemory,
+    loadRules,
+    selectRule,
+    startRuleEdit,
+    cancelRuleEdit,
+    saveRule,
+    removeRule,
     selectRevision,
     startEdit,
     cancelEdit,

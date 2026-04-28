@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,10 +16,15 @@ from domain.session.model.session_branch import SessionBranch
 from domain.session.model.session_snapshot import SessionSnapshot
 from domain.session.model.session_status import SessionStatus
 from domain.session.model.usage import Usage
+from domain.shared.async_utils import safe_create_task
+from application.session.command.run_query_command import RunQueryCommand
 from domain.session.repository.session_branch_repository import SessionBranchRepository
 from domain.session.repository.session_repository import SessionRepository
 from domain.session.repository.session_snapshot_repository import SessionSnapshotRepository
 from domain.shared.business_exception import BusinessException
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -35,11 +41,17 @@ class SessionBranchApplicationService:
         branch_repository: SessionBranchRepository,
         snapshot_repository: SessionSnapshotRepository,
         delete_session_fn: Callable[[str], Awaitable[bool]] | None = None,
+        session_service_factory: Callable[[], Awaitable[Any]] | None = None,
+        connection_manager: Any = None,
+        cleanup_branch_group_fn: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._branch_repository = branch_repository
         self._snapshot_repository = snapshot_repository
         self._delete_session_fn = delete_session_fn
+        self._session_service_factory = session_service_factory
+        self._connection_manager = connection_manager
+        self._cleanup_branch_group_fn = cleanup_branch_group_fn
 
     async def create_branch(
         self,
@@ -54,13 +66,19 @@ class SessionBranchApplicationService:
             raise BusinessException("Cannot branch a running session")
         if branch_count < 1 or branch_count > 8:
             raise BusinessException("Branch count must be between 1 and 8")
-        messages = self._messages_until(source, message_index)
+        if source.messages:
+            messages = self._messages_until(source, message_index)
+        elif source.sdk_session_id:
+            messages = []
+        else:
+            raise BusinessException("Cannot branch before the session has context")
         root_session_id = await self._root_session_id(source.session_id)
         group_id = uuid.uuid4().hex[:8]
         base_name = name.strip() or source.name or source.session_id
         base_branch = await self._current_git_branch(source.project_dir) if worktree_enabled else ""
         branches: list[SessionBranch] = []
         sessions: list[Session] = []
+        source_fork_marker = self._fork_marker(source.sdk_session_id)
         for sequence_no in range(1, branch_count + 1):
             seed = Session.create(model=source.model, project_id=source.project_id, project_dir=source.project_dir)
             branch_name = f"{base_name}-{sequence_no}"
@@ -76,11 +94,11 @@ class SessionBranchApplicationService:
                 status=SessionStatus.IDLE,
                 messages=messages,
                 usage=Usage.zero(),
-                continue_conversation=bool(messages),
+                continue_conversation=bool(messages) or bool(source_fork_marker),
                 project_id=source.project_id,
                 project_dir=project_dir,
                 name=branch_name,
-                sdk_session_id="",
+                sdk_session_id=source_fork_marker,
                 last_input_tokens=0,
             )
             branch = SessionBranch.create(
@@ -103,6 +121,108 @@ class SessionBranchApplicationService:
         await self._snapshot_repository.save(snapshot)
         await self._session_repository.commit()
         return BranchSessionResult(branches=branches, sessions=sessions)
+
+    async def apply_vb_reviews(
+        self,
+        source_session_id: str,
+        file_path: str,
+        reviews: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        source = await self._get_session(source_session_id)
+        if source.is_running or source.is_compacting:
+            raise BusinessException("Cannot apply VB while session is running")
+        if not source.messages and not source.sdk_session_id:
+            raise BusinessException("Cannot apply VB before the session has context")
+        if not reviews:
+            raise BusinessException("VB reviews are required")
+        if self._session_service_factory is None or self._connection_manager is None:
+            raise BusinessException("VB executor is not configured", "VB_NOT_CONFIGURED")
+
+        message_index = max(source.message_count - 1, 0)
+        result = await self.create_branch(source_session_id, message_index, "VB", 1, False)
+        branch = result.branches[0]
+        branch_session = result.sessions[0]
+        job_id = uuid.uuid4().hex[:8]
+        safe_create_task(self._run_vb_job(
+            job_id=job_id,
+            source_session_id=source_session_id,
+            branch_session_id=branch_session.session_id,
+            branch_group_id=branch.group_id,
+            file_path=file_path,
+            reviews=reviews,
+        ))
+        return {"job_id": job_id, "branch_session_id": branch_session.session_id}
+
+    async def _run_vb_job(
+        self,
+        job_id: str,
+        source_session_id: str,
+        branch_session_id: str,
+        branch_group_id: str,
+        file_path: str,
+        reviews: list[dict[str, Any]],
+    ) -> None:
+        await self._broadcast_vb(source_session_id, "vb_started", {
+            "job_id": job_id,
+            "branch_session_id": branch_session_id,
+            "file_path": file_path,
+        })
+        error_message = ""
+        try:
+            service = await self._session_service_factory()
+            try:
+                await service.set_permission_mode(branch_session_id, "bypassPermissions")
+                await service.run_claude_query(RunQueryCommand(
+                    session_id=branch_session_id,
+                    prompt=self._build_vb_prompt(file_path, reviews),
+                ))
+            finally:
+                await service.close()
+            await self._broadcast_vb(source_session_id, "vb_completed", {
+                "job_id": job_id,
+                "branch_session_id": branch_session_id,
+                "file_path": file_path,
+            })
+        except Exception as exc:
+            error_message = str(exc)
+            logger.warning("VB job failed: job=%s source=%s branch=%s", job_id, source_session_id, branch_session_id, exc_info=True)
+            await self._broadcast_vb(source_session_id, "vb_failed", {
+                "job_id": job_id,
+                "branch_session_id": branch_session_id,
+                "file_path": file_path,
+                "message": error_message or "VB failed",
+            })
+        finally:
+            await self._cleanup_vb_branch(branch_session_id, branch_group_id)
+
+    async def _broadcast_vb(self, source_session_id: str, event: str, payload: dict[str, Any]) -> None:
+        await self._connection_manager.broadcast(source_session_id, {"event": event, **payload})
+
+    async def _cleanup_vb_branch(self, branch_session_id: str, branch_group_id: str) -> None:
+        try:
+            await self._delete_session(branch_session_id)
+            if self._cleanup_branch_group_fn is not None and branch_group_id:
+                await self._cleanup_branch_group_fn(branch_group_id)
+        except Exception:
+            logger.warning("Failed to cleanup VB branch session %s", branch_session_id, exc_info=True)
+
+    @staticmethod
+    def _build_vb_prompt(file_path: str, reviews: list[dict[str, Any]]) -> str:
+        review_lines = []
+        for index, review in enumerate(reviews, start=1):
+            start = review.get("start_line")
+            end = review.get("end_line")
+            selected_text = review.get("selected_text", "")
+            comment = review.get("comment", "")
+            text_block = f"\n   选中文本: {selected_text}" if selected_text else ""
+            review_lines.append(f"{index}. 行 {start}-{end}:{text_block}\n   评语: {comment}")
+        return (
+            "你正在执行文件 VB 修改任务。请基于当前会话上下文和下面的行级评价，直接修改指定文件。\n"
+            "只修改目标文件，保持无关代码和格式不变；完成后不要创建提交。\n\n"
+            f"目标文件: {file_path}\n\n"
+            "评价列表:\n"
+            + "\n".join(review_lines)
+        )
 
     async def compare_sessions(self, source_session_id: str, target_session_id: str) -> dict[str, Any]:
         left = await self._get_session(source_session_id)
@@ -362,6 +482,14 @@ class SessionBranchApplicationService:
         if session is None:
             raise BusinessException("Session not found")
         return session
+
+    @staticmethod
+    def _fork_marker(sdk_session_id: str) -> str:
+        if not sdk_session_id:
+            return ""
+        if sdk_session_id.startswith("fork:"):
+            return sdk_session_id
+        return f"fork:{sdk_session_id}"
 
     @staticmethod
     def _messages_until(session: Session, message_index: int) -> list[Message]:

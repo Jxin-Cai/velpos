@@ -87,6 +87,49 @@ class PickDirectoryResponse(BaseModel):
     dir_path: str = Field(description="Selected directory path")
 
 
+class WorkspaceFileItemResponse(BaseModel):
+    path: str
+    type: str
+    size: int
+    git_status: str = ""
+    is_changed: bool = False
+
+
+class WorkspaceFileListResponse(BaseModel):
+    files: list[WorkspaceFileItemResponse]
+
+
+class WorkspaceFileContentResponse(BaseModel):
+    path: str
+    content: str
+    encoding: str
+    size: int
+    truncated: bool = False
+    is_binary: bool = False
+
+
+class WorkspaceFileDiffResponse(BaseModel):
+    path: str
+    patch: str
+    truncated: bool = False
+
+
+class WorkspaceFileHistoryItemResponse(BaseModel):
+    ref: str
+    hash: str
+    short_hash: str
+    author_name: str = ""
+    message: str
+
+
+class WorkspaceFileHistoryResponse(BaseModel):
+    commits: list[WorkspaceFileHistoryItemResponse]
+
+
+class WorkspaceFileAtRefResponse(WorkspaceFileContentResponse):
+    missing: bool = False
+
+
 class GitBranchesResponse(BaseModel):
     current: str
     branches: list[str]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from application.project.command.create_project_command import CreateProjectCommand
 from application.project.command.init_plugin_command import InitPluginCommand
@@ -26,6 +26,13 @@ from ohs.http.dto.project_dto import (
     ProjectResponse,
     ReorderProjectsRequest,
     ResetPluginRequest,
+    WorkspaceFileContentResponse,
+    WorkspaceFileDiffResponse,
+    WorkspaceFileAtRefResponse,
+    WorkspaceFileHistoryItemResponse,
+    WorkspaceFileHistoryResponse,
+    WorkspaceFileItemResponse,
+    WorkspaceFileListResponse,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["Project"])
@@ -137,6 +144,63 @@ async def reset_plugin(
 ) -> ApiResponse[ProjectResponse]:
     project = await service.reset_plugin(project_id, request.plugin_type)
     return ApiResponse.success(ProjectResponse.from_domain(project))
+
+
+@router.get("/{project_id}/workspace/files", summary="List project workspace files")
+async def list_workspace_files(
+    project_id: str,
+    service: ServiceDep,
+    changed_only: bool = Query(default=False),
+    keyword: str = Query(default="", max_length=200),
+) -> ApiResponse[WorkspaceFileListResponse]:
+    files = await service.list_workspace_files(project_id, changed_only, keyword)
+    return ApiResponse.success(WorkspaceFileListResponse(
+        files=[WorkspaceFileItemResponse(**item) for item in files],
+    ))
+
+
+@router.get("/{project_id}/workspace/file", summary="Read project workspace file")
+async def read_workspace_file(
+    project_id: str,
+    service: ServiceDep,
+    path: str = Query(..., min_length=1, max_length=1000),
+) -> ApiResponse[WorkspaceFileContentResponse]:
+    data = await service.read_workspace_file(project_id, path)
+    return ApiResponse.success(WorkspaceFileContentResponse(**data))
+
+
+@router.get("/{project_id}/workspace/diff", summary="Get project workspace file diff")
+async def get_workspace_diff(
+    project_id: str,
+    service: ServiceDep,
+    path: str = Query(..., min_length=1, max_length=1000),
+) -> ApiResponse[WorkspaceFileDiffResponse]:
+    data = await service.get_workspace_diff(project_id, path)
+    return ApiResponse.success(WorkspaceFileDiffResponse(**data))
+
+
+@router.get("/{project_id}/workspace/file-history", summary="List project workspace file history")
+async def list_workspace_file_history(
+    project_id: str,
+    service: ServiceDep,
+    path: str = Query(..., min_length=1, max_length=1000),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[WorkspaceFileHistoryResponse]:
+    commits = await service.list_workspace_file_history(project_id, path, limit)
+    return ApiResponse.success(WorkspaceFileHistoryResponse(
+        commits=[WorkspaceFileHistoryItemResponse(**item) for item in commits],
+    ))
+
+
+@router.get("/{project_id}/workspace/file-at-ref", summary="Read project workspace file at git ref")
+async def read_workspace_file_at_ref(
+    project_id: str,
+    service: ServiceDep,
+    path: str = Query(..., min_length=1, max_length=1000),
+    ref: str = Query(..., min_length=1, max_length=80),
+) -> ApiResponse[WorkspaceFileAtRefResponse]:
+    data = await service.read_workspace_file_at_ref(project_id, path, ref)
+    return ApiResponse.success(WorkspaceFileAtRefResponse(**data))
 
 
 @router.get("/{project_id}/git/branches", summary="List git branches")

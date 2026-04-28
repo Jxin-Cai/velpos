@@ -17,6 +17,8 @@ from ohs.dependencies import (
 )
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.session_dto import (
+    ApplyVbRequest,
+    ApplyVbResponse,
     BatchDeleteRequest,
     BranchSessionRequest,
     BranchSessionResponse,
@@ -180,6 +182,20 @@ async def converge_session_branches(
 ) -> ApiResponse[ConvergeBranchesResponse]:
     result = await service.converge_branches(session_id, request.target_session_id)
     return ApiResponse.success(ConvergeBranchesResponse(**result))
+
+
+@router.post("/{session_id}/vb/apply", summary="Apply VB reviews with hidden session")
+async def apply_vb_reviews(
+    session_id: str,
+    request: ApplyVbRequest,
+    service: BranchServiceDep,
+) -> ApiResponse[ApplyVbResponse]:
+    result = await service.apply_vb_reviews(
+        session_id,
+        request.file_path,
+        [review.model_dump() for review in request.reviews],
+    )
+    return ApiResponse.success(ApplyVbResponse(**result))
 
 
 @router.get("/{session_id}/artifacts", summary="List session artifacts")

@@ -43,6 +43,10 @@ class SessionAssembler:
         }
 
     @staticmethod
+    def _public_sdk_session_id(sdk_session_id: str) -> str:
+        return "" if sdk_session_id.startswith("fork:") else sdk_session_id
+
+    @staticmethod
     def to_summary(session: Session, git_branch: str = "") -> dict[str, Any]:
         return {
             "session_id": session.session_id,
@@ -57,7 +61,7 @@ class SessionAssembler:
             "last_input_tokens": session.last_input_tokens,
             "project_dir": session.project_dir,
             "name": session.name,
-            "sdk_session_id": session.sdk_session_id,
+            "sdk_session_id": SessionAssembler._public_sdk_session_id(session.sdk_session_id),
             "updated_time": session.updated_time.isoformat() if session.updated_time else None,
             "git_branch": git_branch,
             "recovery": SessionAssembler._recovery_to_dict(session),

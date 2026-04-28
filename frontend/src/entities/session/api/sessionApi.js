@@ -68,3 +68,11 @@ export function compareSessions(sessionId, rightSessionId) {
 export function convergeSessionBranches(sessionId, targetSessionId) {
   return post(`/sessions/${sessionId}/branches/converge`, { target_session_id: targetSessionId })
 }
+
+export function applyVbReviews(sessionId, { projectId = '', filePath, reviews }) {
+  return post(`/sessions/${sessionId}/vb/apply`, {
+    project_id: projectId,
+    file_path: filePath,
+    reviews,
+  })
+}

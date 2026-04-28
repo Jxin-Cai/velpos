@@ -303,6 +303,15 @@ async def _delete_session_for_branch(session_id: str) -> bool:
         await service.close()
 
 
+async def _cleanup_branch_group(group_id: str) -> None:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        repo = SessionBranchRepositoryImpl(db_session)
+        await repo.remove_by_group_id(group_id)
+        await db_session.commit()
+
+
 async def _record_session_audit_event(event) -> None:
     from infr.config.database import async_session_factory
 
@@ -373,6 +382,9 @@ async def get_session_branch_application_service(
         branch_repository=SessionBranchRepositoryImpl(db_session),
         snapshot_repository=SessionSnapshotRepositoryImpl(db_session),
         delete_session_fn=_delete_session_for_branch,
+        session_service_factory=_create_session_service,
+        connection_manager=_connection_manager,
+        cleanup_branch_group_fn=_cleanup_branch_group,
     )
 
 

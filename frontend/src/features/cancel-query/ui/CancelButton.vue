@@ -4,6 +4,10 @@ defineProps({
     type: Boolean,
     required: true,
   },
+  pending: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['cancel'])
@@ -13,13 +17,19 @@ const emit = defineEmits(['cancel'])
   <Transition name="cancel-pop">
     <button
       v-show="visible"
+      type="button"
       class="cancel-btn"
+      :class="{ 'cancel-btn--pending': pending }"
+      :disabled="pending"
+      :aria-busy="pending"
+      :title="pending ? 'Cancelling current task...' : 'Cancel current task'"
       @click="emit('cancel')"
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <span v-if="pending" class="cancel-spinner" aria-hidden="true"></span>
+      <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <rect x="4" y="4" width="16" height="16" rx="2"/>
       </svg>
-      Cancel
+      {{ pending ? 'Cancelling...' : 'Cancel' }}
     </button>
   </Transition>
 </template>
@@ -42,16 +52,38 @@ const emit = defineEmits(['cancel'])
   animation: cancel-pulse 2s ease-in-out infinite;
 }
 
-.cancel-btn:hover {
+.cancel-btn:hover:not(:disabled) {
   filter: brightness(1.15);
   box-shadow: var(--shadow-md), 0 0 12px var(--red-dim);
   transform: translateY(-1px);
 }
 
-.cancel-btn:active {
+.cancel-btn:active:not(:disabled) {
   transform: translateY(0) scale(0.97);
   filter: brightness(0.95);
   transition-duration: 100ms;
+}
+
+.cancel-btn:disabled {
+  cursor: wait;
+}
+
+.cancel-btn--pending {
+  filter: brightness(0.95);
+  animation: none;
+}
+
+.cancel-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: cancel-spin 700ms linear infinite;
+}
+
+@keyframes cancel-spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes cancel-pulse {

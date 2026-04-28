@@ -26,7 +26,9 @@ class ClaudeAgentGateway(ABC):
             model: Claude model name.
             prompt: Initial user prompt text.
             cwd: Working directory for Claude Agent SDK.
-            sdk_session_id: Previous SDK session UUID for resume support.
+            sdk_session_id: Previous SDK session UUID for resume support. A value in
+                the form fork:<sdk-session-id> means the connection should fork from
+                that source Claude Code session before running the prompt.
 
         Yields:
             dict with message_type, content, and optionally input_tokens/output_tokens
@@ -117,7 +119,9 @@ class ClaudeAgentGateway(ABC):
             session_id: Session identifier for client lifecycle management.
             model: Claude model name.
             cwd: Working directory for Claude Agent SDK.
-            sdk_session_id: Previous SDK session UUID for resume support.
+            sdk_session_id: Previous SDK session UUID for resume support. A value in
+                the form fork:<sdk-session-id> means the connection should fork from
+                that source Claude Code session before running the prompt.
         """
         ...
 

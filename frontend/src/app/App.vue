@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onUnmounted, nextTick } from 'vue'
-import { useSession } from '@entities/session'
+import { applyVbReviews, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
 import { createWsConnection, createGlobalEventConnection } from '@shared/api/wsClient'
@@ -13,6 +13,7 @@ import { fetchSessionRunSteps } from '@features/task-progress'
 import { SettingsButton, SettingsDialog } from '@features/settings-manager'
 import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
+import { WorkspaceButton, WorkspacePanel } from '@features/workspace'
 import { SchedulerDialog } from '@features/scheduler'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
 import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
@@ -65,11 +66,40 @@ const initError = ref(null)
 const settingsDialogVisible = ref(false)
 const gitManagerVisible = ref(false)
 const terminalDrawerVisible = ref(false)
+const terminalDockHeight = ref(0)
+const workspaceVisible = ref(false)
+const workspaceDockWidth = ref(0)
 const schedulerVisible = ref(false)
 const schedulerProjectId = ref('')
 const scheduleCounts = ref({})
 let globalEventConnection = null
 const sidebarRef = ref(null)
+const currentProject = computed(() => {
+  const projectId = session.value?.project_id
+  if (!projectId) return null
+  return projects.value.find(project => project.id === projectId) || null
+})
+const vbRunning = ref(false)
+const vbMessage = ref('')
+let vbRefresh = null
+
+async function handleApplyVb(payload) {
+  if (!currentSessionId.value || !currentProject.value || vbRunning.value) return
+  vbRunning.value = true
+  vbMessage.value = 'VB task started'
+  vbRefresh = payload.refresh
+  try {
+    await applyVbReviews(currentSessionId.value, {
+      projectId: currentProject.value.id,
+      filePath: payload.file_path,
+      reviews: payload.reviews,
+    })
+  } catch (e) {
+    vbRunning.value = false
+    vbMessage.value = e.message || 'VB failed to start'
+    vbRefresh = null
+  }
+}
 
 const isMobileSidebarOpen = ref(false)
 const isSidebarCollapsed = ref(
@@ -83,6 +113,14 @@ function toggleSidebar() {
 function toggleSidebarCollapse() {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
   localStorage.setItem('vp_sidebar_collapsed', isSidebarCollapsed.value)
+}
+
+function handleWorkspaceWidthChange(width) {
+  workspaceDockWidth.value = width || 0
+}
+
+function handleTerminalHeightChange(height) {
+  terminalDockHeight.value = height || 0
 }
 
 function handleSessionSelect(id) {
@@ -297,6 +335,30 @@ function setupUnifiedHandler(connection, sessionId) {
         }
         break
 
+      case 'vb_started':
+        if (isCurrent) {
+          vbRunning.value = true
+          vbMessage.value = 'VB is modifying the file...'
+        }
+        break
+
+      case 'vb_completed':
+        if (isCurrent) {
+          vbRunning.value = false
+          vbMessage.value = 'VB completed'
+          vbRefresh?.()
+          vbRefresh = null
+        }
+        break
+
+      case 'vb_failed':
+        if (isCurrent) {
+          vbRunning.value = false
+          vbMessage.value = data.message || 'VB failed'
+          vbRefresh = null
+        }
+        break
+
       case 'cancel_rewind':
         updateSessionFor(sessionId, data.session)
         if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
@@ -305,11 +367,6 @@ function setupUnifiedHandler(connection, sessionId) {
         setQueuedFor(sessionId, false)
         updateSessionInList(sessionId, data.session)
         markDone(sessionId)
-        if (isCurrent) {
-          window.dispatchEvent(new CustomEvent('vp-cancel-rewind', {
-            detail: { prompt: data.prompt || '' },
-          }))
-        }
         break
 
       case 'status': {
@@ -542,12 +599,19 @@ useGlobalHotkeys({
           <WorkingSessionsButton @navigate="handleNotificationNavigate" />
           <GitManagerButton @click="gitManagerVisible = true" />
           <SettingsButton @click="settingsDialogVisible = true" />
+          <WorkspaceButton :active="workspaceVisible" @click="workspaceVisible = true" />
           <TerminalButton @click="terminalDrawerVisible = true" />
           <ThemeSwitcher />
         </div>
       </header>
 
-      <div class="app-body">
+      <div
+        class="app-body"
+        :style="{
+          paddingBottom: terminalDrawerVisible ? terminalDockHeight + 'px' : '0px',
+          paddingRight: workspaceVisible ? workspaceDockWidth + 'px' : '0px',
+        }"
+      >
         <div
           v-if="isMobileSidebarOpen"
           class="mobile-sidebar-overlay"
@@ -627,11 +691,21 @@ useGlobalHotkeys({
         :visible="gitManagerVisible"
         @close="gitManagerVisible = false"
       />
+      <WorkspacePanel
+        :visible="workspaceVisible"
+        :project="currentProject"
+        :vb-running="vbRunning"
+        :vb-message="vbMessage"
+        @apply-vb="handleApplyVb"
+        @width-change="handleWorkspaceWidthChange"
+        @close="workspaceVisible = false"
+      />
       <TerminalDrawer
         :visible="terminalDrawerVisible"
         :project-dir="session?.project_dir || ''"
         :git-branch="session?.git_branch || ''"
         @close="terminalDrawerVisible = false"
+        @height-change="handleTerminalHeightChange"
       />
       <SchedulerDialog
         :visible="schedulerVisible"
@@ -713,6 +787,9 @@ useGlobalHotkeys({
   display: flex;
   overflow: hidden;
   position: relative;
+  transition:
+    padding-bottom 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding-right 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .mobile-menu-btn {

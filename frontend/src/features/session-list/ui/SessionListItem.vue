@@ -18,9 +18,13 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  pinned: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['select', 'delete', 'rename', 'toggle-select'])
+const emit = defineEmits(['select', 'delete', 'rename', 'toggle-select', 'toggle-pin'])
 
 const isClaudeCode = computed(() => props.session.source === 'claude-code')
 
@@ -155,7 +159,7 @@ onBeforeUnmount(() => {
 <template>
   <div
     class="session-item"
-    :class="{ active, 'is-claude-code': isClaudeCode, 'is-selected': selected }"
+    :class="{ active, 'is-claude-code': isClaudeCode, 'is-selected': selected, 'is-pinned': pinned }"
     @click="selectable ? emit('toggle-select', session.session_id) : emit('select', session.session_id)"
     role="button"
     tabindex="0"
@@ -196,6 +200,18 @@ onBeforeUnmount(() => {
             {{ displayName }}
           </span>
           <span class="action-buttons">
+            <button
+              class="pin-btn"
+              :class="{ pinned }"
+              @click.stop="emit('toggle-pin', session.session_id)"
+              :aria-label="pinned ? 'Unpin session' : 'Pin session'"
+              :title="pinned ? 'Unpin' : 'Pin'"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="17" x2="12" y2="22"/>
+                <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+              </svg>
+            </button>
             <button
               class="copy-btn"
               @click.stop="copySessionId"
@@ -390,9 +406,10 @@ onBeforeUnmount(() => {
 
 .session-item:hover .action-buttons {
   opacity: 1;
-  width: 44px;
+  width: 68px;
 }
 
+.pin-btn,
 .copy-btn {
   display: flex;
   align-items: center;
@@ -406,6 +423,20 @@ onBeforeUnmount(() => {
   cursor: pointer;
   transition: all 0.15s;
   padding: 0;
+}
+
+.pin-btn:hover,
+.pin-btn.pinned {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.session-item.is-pinned .session-name {
+  color: var(--text-primary);
+}
+
+.session-item.is-pinned .status-dot {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-dim);
 }
 
 .copy-btn:hover {

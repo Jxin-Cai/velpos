@@ -1,10 +1,10 @@
 export function useCancelQuery(wsConnection) {
   function cancelQuery() {
     if (!wsConnection || wsConnection.getReadyState() !== WebSocket.OPEN) {
-      return
+      return false
     }
 
-    wsConnection.send({ action: 'cancel' })
+    return wsConnection.send({ action: 'cancel' })
   }
 
   return { cancelQuery }

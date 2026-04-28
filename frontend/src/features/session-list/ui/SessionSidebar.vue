@@ -1,11 +1,11 @@
 <script setup>
 import { ref, computed, reactive, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useProject } from '@entities/project'
+import { PINNED_PROJECTS_KEY, PINNED_SESSIONS_KEY, compareSessions, loadPinnedIds, savePinnedIds, splitPinnedProjects, togglePinnedId } from '@shared/lib/pinning'
 import SessionListItem from './SessionListItem.vue'
 import CreateSessionDialog from './CreateSessionDialog.vue'
 
 const COLLAPSED_KEY = 'pf_collapsed_groups'
-const PINNED_KEY = 'pf_pinned_projects'
 
 const props = defineProps({
   sessions: {
@@ -15,6 +15,10 @@ const props = defineProps({
   currentSessionId: {
     type: String,
     default: null,
+  },
+  loading: {
+    type: Boolean,
+    default: false,
   },
   scheduleCounts: {
     type: Object,
@@ -38,17 +42,24 @@ const { projects } = useProject()
 
 const showCreateDialog = ref(false)
 
-// Pinned projects management
-const pinnedProjectIds = ref(new Set())
+// Pinned management
+const pinnedProjectIds = ref(loadPinnedIds(PINNED_PROJECTS_KEY))
+const pinnedSessionIds = ref(loadPinnedIds(PINNED_SESSIONS_KEY))
 
-// Load pinned projects from localStorage on mount
-try {
-  const stored = localStorage.getItem(PINNED_KEY)
-  if (stored) {
-    pinnedProjectIds.value = new Set(JSON.parse(stored))
+function persistPinnedProjects() {
+  try {
+    savePinnedIds(PINNED_PROJECTS_KEY, pinnedProjectIds.value)
+  } catch (e) {
+    console.warn('Failed to save pinned projects:', e)
   }
-} catch (e) {
-  console.warn('Failed to load pinned projects:', e)
+}
+
+function persistPinnedSessions() {
+  try {
+    savePinnedIds(PINNED_SESSIONS_KEY, pinnedSessionIds.value)
+  } catch (e) {
+    console.warn('Failed to save pinned sessions:', e)
+  }
 }
 
 function scheduleCount(projectId) {
@@ -60,20 +71,18 @@ function isProjectPinned(projectId) {
 }
 
 function toggleProjectPin(projectId) {
-  const newSet = new Set(pinnedProjectIds.value)
-  if (newSet.has(projectId)) {
-    newSet.delete(projectId)
-  } else {
-    newSet.add(projectId)
-  }
-  pinnedProjectIds.value = newSet
+  pinnedProjectIds.value = togglePinnedId(pinnedProjectIds.value, projectId)
+  persistPinnedProjects()
+}
 
-  // Save to localStorage
-  try {
-    localStorage.setItem(PINNED_KEY, JSON.stringify([...newSet]))
-  } catch (e) {
-    console.warn('Failed to save pinned projects:', e)
-  }
+function isSessionPinned(sessionId) {
+  return pinnedSessionIds.value.has(sessionId)
+}
+
+function toggleSessionPin(sessionId) {
+  pinnedSessionIds.value = togglePinnedId(pinnedSessionIds.value, sessionId)
+  persistPinnedSessions()
+  nextTick(() => scrollToSession(sessionId))
 }
 
 // Dynamic max-height for group content (avoids fixed 2000px truncation)
@@ -216,17 +225,9 @@ const projectGroups = computed(() => {
     sessionsByProject[pid].push(session)
   }
 
-  // Sort sessions within each group: running first, then by updated_time descending
+  // Sort sessions within each group: pinned first, running next, then by updated_time descending
   for (const list of Object.values(sessionsByProject)) {
-    list.sort((a, b) => {
-      // Running sessions always come first
-      const aRunning = a.status === 'running' ? 1 : 0
-      const bRunning = b.status === 'running' ? 1 : 0
-      if (aRunning !== bRunning) return bRunning - aRunning
-      const timeA = a.updated_time ? new Date(a.updated_time).getTime() : 0
-      const timeB = b.updated_time ? new Date(b.updated_time).getTime() : 0
-      return timeB - timeA
-    })
+    list.sort((a, b) => compareSessions(a, b, pinnedSessionIds.value))
   }
 
   // Build ordered project groups (projects are already sorted by sort_order from backend)
@@ -234,7 +235,9 @@ const projectGroups = computed(() => {
   const pinnedGroups = []
   const unpinnedGroups = []
 
-  for (const project of projects.value) {
+  const { pinnedProjects, unpinnedProjects } = splitPinnedProjects(projects.value, pinnedProjectIds.value)
+
+  for (const project of [...pinnedProjects, ...unpinnedProjects]) {
     const projectSessions = sessionsByProject[project.id] || []
     if (projectSessions.length === 0) continue
 
@@ -543,11 +546,13 @@ defineExpose({ scrollToSession })
               :active="session.session_id === currentSessionId"
               :selectable="selectionMode"
               :selected="selectedIds.has(session.session_id)"
+              :pinned="isSessionPinned(session.session_id)"
               class="indented-session"
               @select="emit('select', $event)"
               @delete="emit('delete', $event)"
               @rename="emit('rename', $event)"
               @toggle-select="toggleSelect"
+              @toggle-pin="toggleSessionPin"
             />
           </div>
           <!-- Separator after last pinned project (outside group-content so it stays visible when collapsed) -->

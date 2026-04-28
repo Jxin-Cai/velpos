@@ -209,6 +209,24 @@ class BranchSessionResponse(BaseModel):
     sessions: list[SessionResponse]
 
 
+class VbReviewRequest(BaseModel):
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    selected_text: str = Field(default="", max_length=10000)
+    comment: str = Field(min_length=1, max_length=2000)
+
+
+class ApplyVbRequest(BaseModel):
+    project_id: str = Field(default="", max_length=8)
+    file_path: str = Field(min_length=1, max_length=1000)
+    reviews: list[VbReviewRequest] = Field(min_length=1)
+
+
+class ApplyVbResponse(BaseModel):
+    job_id: str
+    branch_session_id: str
+
+
 class SessionArtifactResponse(BaseModel):
     id: str
     path: str

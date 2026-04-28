@@ -3,6 +3,7 @@ import { useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useDialogManager } from '@shared/lib/useDialogManager'
+import { PINNED_PROJECTS_KEY, PINNED_SESSIONS_KEY, compareSessions, loadPinnedIds, splitPinnedProjects } from '@shared/lib/pinning'
 import { inject, nextTick } from 'vue'
 
 const { status, currentSessionId, sessions, setCurrentSessionId } = useSession()
@@ -25,7 +26,8 @@ function getFlattenedSessionList() {
   if (!sessions.value?.length || !projects.value?.length) return []
 
   const collapsedProjects = getCollapsedProjectIds()
-  const pinnedProjectIds = getPinnedProjectIds()
+  const pinnedProjectIds = loadPinnedIds(PINNED_PROJECTS_KEY)
+  const pinnedSessionIds = loadPinnedIds(PINNED_SESSIONS_KEY)
 
   // 过滤出纳入 velpos 管理的 sessions（有 project_id）
   const managedSessions = sessions.value.filter(s => !!s.project_id)
@@ -41,29 +43,11 @@ function getFlattenedSessionList() {
 
   // 对每个项目内的 sessions 排序（遵循 SessionSidebar 的逻辑）
   for (const list of Object.values(sessionsByProject)) {
-    list.sort((a, b) => {
-      // Running sessions always come first
-      const aRunning = a.status === 'running' ? 1 : 0
-      const bRunning = b.status === 'running' ? 1 : 0
-      if (aRunning !== bRunning) return bRunning - aRunning
-      // Then by updated_time (most recent first)
-      const timeA = a.updated_time ? new Date(a.updated_time).getTime() : 0
-      const timeB = b.updated_time ? new Date(b.updated_time).getTime() : 0
-      return timeB - timeA
-    })
+    list.sort((a, b) => compareSessions(a, b, pinnedSessionIds))
   }
 
   // 分离置顶和非置顶项目
-  const pinnedProjects = []
-  const unpinnedProjects = []
-
-  for (const project of projects.value) {
-    if (pinnedProjectIds.has(project.id)) {
-      pinnedProjects.push(project)
-    } else {
-      unpinnedProjects.push(project)
-    }
-  }
+  const { pinnedProjects, unpinnedProjects } = splitPinnedProjects(projects.value, pinnedProjectIds)
 
   // 构建扁平列表：置顶项目在前，然后是非置顶项目
   const flattenedList = []
@@ -82,18 +66,6 @@ function getFlattenedSessionList() {
   }
 
   return flattenedList
-}
-
-/**
- * 获取置顶的项目 ID 列表
- */
-function getPinnedProjectIds() {
-  try {
-    const stored = localStorage.getItem('pf_pinned_projects')
-    return stored ? new Set(JSON.parse(stored)) : new Set()
-  } catch {
-    return new Set()
-  }
 }
 
 /**

@@ -116,6 +116,14 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
         return lines, _on_stderr
 
+    _FORK_SESSION_PREFIX = "fork:"
+
+    @classmethod
+    def _fork_source_session_id(cls, sdk_session_id: str | None) -> str:
+        if sdk_session_id and sdk_session_id.startswith(cls._FORK_SESSION_PREFIX):
+            return sdk_session_id[len(cls._FORK_SESSION_PREFIX):]
+        return ""
+
     async def _try_connect(
         self,
         session_id: str,
@@ -123,8 +131,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         perm_mode: str,
         cwd: str,
         prev_sdk_sid: str | None,
+        fork_session: bool = False,
     ) -> ClaudeSDKClient:
-        """Build options, connect CLI; if resume fails, fallback to fresh session."""
+        """Build options, connect CLI; if normal resume fails, fallback to fresh session."""
         stderr_lines, stderr_cb = self._create_stderr_collector()
         options = ClaudeAgentOptions(
             model=model,
@@ -135,6 +144,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             cwd=cwd if cwd else None,
             resume=prev_sdk_sid,
             continue_conversation=bool(prev_sdk_sid),
+            fork_session=fork_session,
             can_use_tool=self._create_can_use_tool_callback(session_id),
             stderr=stderr_cb,
         )
@@ -144,7 +154,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             await client.connect()
             return client
         except ProcessError:
-            if not prev_sdk_sid:
+            if not prev_sdk_sid or fork_session:
                 raise
 
             # Resume failed — fallback to fresh session
@@ -252,8 +262,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         sdk_session_id: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
 
-        # Use externally persisted sdk_session_id for resume, fall back to in-memory cache
-        prev_sdk_sid = sdk_session_id or self._sdk_session_ids.get(session_id)
+        # Use externally persisted sdk_session_id for resume, fall back to in-memory cache.
+        # Branch/VB sessions can store fork:<source-sdk-session-id> until their first
+        # real Claude response provides the new forked SDK session id.
+        raw_prev_sdk_sid = sdk_session_id or self._sdk_session_ids.get(session_id)
+        fork_source_sid = self._fork_source_session_id(raw_prev_sdk_sid)
+        prev_sdk_sid = fork_source_sid or raw_prev_sdk_sid
 
         # Disconnect existing client if any
         await self.disconnect(session_id)
@@ -267,6 +281,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             perm_mode=perm_mode,
             cwd=cwd,
             prev_sdk_sid=prev_sdk_sid,
+            fork_session=bool(fork_source_sid),
         )
         self._clients[session_id] = client
         self._connected_models[session_id] = model
@@ -563,7 +578,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         sdk_session_id: str = "",
     ) -> None:
         """Open a persistent SDK connection without sending a query."""
-        prev_sdk_sid = sdk_session_id or self._sdk_session_ids.get(session_id)
+        raw_prev_sdk_sid = sdk_session_id or self._sdk_session_ids.get(session_id)
+        fork_source_sid = self._fork_source_session_id(raw_prev_sdk_sid)
+        prev_sdk_sid = fork_source_sid or raw_prev_sdk_sid
 
         if not prev_sdk_sid:
             raise RuntimeError(
@@ -581,6 +598,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             perm_mode=perm_mode,
             cwd=cwd,
             prev_sdk_sid=prev_sdk_sid,
+            fork_session=bool(fork_source_sid),
         )
         self._clients[session_id] = client
         self._connected_models[session_id] = model
@@ -657,6 +675,8 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         # Try to find and delete by tracked SDK session_id first
         # Fall back to DB-persisted sdk_session_id when in-memory mapping is empty
         sdk_sid = self._sdk_session_ids.get(session_id) or sdk_session_id
+        if self._fork_source_session_id(sdk_sid):
+            sdk_sid = ""
         cwd = self._session_cwds.get(session_id) or project_dir
 
         if sdk_sid and cwd:

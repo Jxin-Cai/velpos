@@ -29,12 +29,21 @@ const searchQuery = ref('')
 
 const filteredPlugins = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return plugins.value
-  return plugins.value.filter(p =>
-    p.name.toLowerCase().includes(q) ||
-    (p.description && p.description.toLowerCase().includes(q)) ||
-    p.marketplace.toLowerCase().includes(q)
-  )
+  const matched = q
+    ? plugins.value.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      (p.description && p.description.toLowerCase().includes(q)) ||
+      p.marketplace.toLowerCase().includes(q)
+    )
+    : plugins.value
+
+  return matched
+    .map((plugin, index) => ({ plugin, index }))
+    .sort((a, b) => {
+      const scopeRank = Number(b.plugin.scope === 'project') - Number(a.plugin.scope === 'project')
+      return scopeRank || a.index - b.index
+    })
+    .map(item => item.plugin)
 })
 
 watch(() => props.visible, (val) => {

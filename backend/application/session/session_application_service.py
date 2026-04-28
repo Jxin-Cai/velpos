@@ -336,6 +336,10 @@ class SessionApplicationService:
         return artifacts
 
     @staticmethod
+    def _public_sdk_session_id(sdk_session_id: str) -> str:
+        return "" if sdk_session_id.startswith("fork:") else sdk_session_id
+
+    @staticmethod
     def _session_to_dict(session: Session) -> dict[str, Any]:
         """Convert session to dict for WS broadcast (avoids ohs layer dependency)."""
         return {
@@ -351,7 +355,7 @@ class SessionApplicationService:
             "last_input_tokens": session.last_input_tokens,
             "project_dir": session.project_dir,
             "name": session.name,
-            "sdk_session_id": session.sdk_session_id,
+            "sdk_session_id": SessionApplicationService._public_sdk_session_id(session.sdk_session_id),
             "updated_time": session.updated_time.isoformat() if session.updated_time else None,
             "git_branch": "",
             "recovery": SessionApplicationService._recovery_to_dict(session),
@@ -599,6 +603,7 @@ class SessionApplicationService:
             "query_started",
             actor="user",
             payload={
+                "run_id": run_id,
                 "image_count": len(command.image_paths),
                 "attachment_count": len(command.attachments),
                 "prompt_length": len(command.prompt),
@@ -719,6 +724,11 @@ class SessionApplicationService:
                 # If send_query's stream fails mid-iteration (e.g. dead CLI process),
                 # fall back to a fresh connect
                 if is_connected:
+                    await self._record_audit_event(
+                        command.session_id,
+                        "query_retrying",
+                        payload={"run_id": run_id, "error": str(stream_err)[:500]},
+                    )
                     logger.warning(
                         "[session=%s] 消息流中断 (%s), 重新 connect",
                         command.session_id,
@@ -773,6 +783,7 @@ class SessionApplicationService:
                 command.session_id,
                 "query_finished",
                 payload={
+                    "run_id": run_id,
                     "input_tokens": session.usage.input_tokens,
                     "output_tokens": session.usage.output_tokens,
                     "message_count": session.message_count,
@@ -797,7 +808,7 @@ class SessionApplicationService:
             await self._record_audit_event(
                 command.session_id,
                 "query_failed",
-                payload={"error": str(e)[:500]},
+                payload={"run_id": run_id, "error": str(e)[:500]},
             )
             await self._connection_manager.broadcast(
                 session.session_id,
@@ -848,7 +859,7 @@ class SessionApplicationService:
                         "last_input_tokens": session.last_input_tokens,
                         "project_dir": session.project_dir,
                         "name": session.name,
-                        "sdk_session_id": session.sdk_session_id,
+                        "sdk_session_id": SessionApplicationService._public_sdk_session_id(session.sdk_session_id),
                         "updated_time": session.updated_time.isoformat() if session.updated_time else None,
                         "git_branch": "",
                     },
@@ -909,6 +920,7 @@ class SessionApplicationService:
         )
         message_count = 0
         tool_count = 0
+        waiting_count = 0
         aiter = msg_stream.__aiter__()
         next_msg_task: asyncio.Task | None = None
         try:
@@ -937,9 +949,15 @@ class SessionApplicationService:
                         "[session=%s] 消息流等待超时但进程仍存活, 继续等待",
                         session.session_id,
                     )
+                    waiting_count += 1
+                    await self._record_audit_event(
+                        session.session_id,
+                        "stream_waiting",
+                        payload={"run_id": run_id, "waiting_count": waiting_count},
+                    )
                     await self._connection_manager.broadcast(
                         session.session_id,
-                        {"event": "stream_waiting", "status": "waiting_output"},
+                        {"event": "stream_waiting", "status": "waiting_output", "waiting_count": waiting_count},
                     )
                     continue
                 msg_type_str = msg_dict["message_type"]
@@ -1028,6 +1046,11 @@ class SessionApplicationService:
                     new_sid = msg_dict["sdk_session_id"]
                     if new_sid and new_sid != session.sdk_session_id:
                         session.update_sdk_session_id(new_sid)
+                        await self._record_audit_event(
+                            session.session_id,
+                            "sdk_session_id_seen",
+                            payload={"run_id": run_id},
+                        )
                         logger.info(
                             "[session=%s] 更新 SDK session_id: %s",
                             session.session_id,

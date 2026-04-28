@@ -154,15 +154,16 @@ class ClaudeMdRevisionApplicationService:
     async def delete_revision(self, revision_id: str) -> None:
         revision = await self._get_revision(revision_id)
         project = await self._project_repository.find_by_id(revision.project_id)
-        if revision.state == ClaudeMdRevisionState.APPLIED:
-            raise BusinessException("Applied CLAUDE.md revisions cannot be deleted")
-        if project and project.active_claude_md_revision_id == revision.id:
-            raise BusinessException("Active CLAUDE.md revision cannot be deleted")
-        if await self._revision_repository.has_children(revision.id):
-            raise BusinessException("CLAUDE.md revisions used as a base cannot be deleted")
         removed = await self._revision_repository.remove(revision.id)
         if not removed:
             raise BusinessException("CLAUDE.md revision not found")
+        if project and project.active_claude_md_revision_id == revision.id:
+            fallback = await self._revision_repository.find_active_by_project_id(project.id)
+            if fallback:
+                project.update_claude_md_revision(fallback.id, fallback.content_hash)
+            else:
+                project.update_claude_md_revision("", "")
+            await self._project_repository.save(project)
 
     async def diff_revision(self, revision_id: str) -> dict:
         revision = await self._get_revision(revision_id)

@@ -71,6 +71,26 @@ export function writeMemoryIndex(projectDir, content) {
   return put('/memory/index/update', { project_dir: projectDir, content })
 }
 
+export function listRules(projectDir) {
+  return get(`/memory/rules?project_dir=${encodeURIComponent(projectDir)}`)
+}
+
+function encodeRulePath(rulePath) {
+  return rulePath.split('/').map(encodeURIComponent).join('/')
+}
+
+export function readRule(projectDir, rulePath) {
+  return get(`/memory/rules/${encodeRulePath(rulePath)}?project_dir=${encodeURIComponent(projectDir)}`)
+}
+
+export function writeRule(projectDir, rulePath, payload) {
+  return put(`/memory/rules/${encodeRulePath(rulePath)}`, { project_dir: projectDir, ...payload })
+}
+
+export function deleteRule(projectDir, rulePath) {
+  return del(`/memory/rules/${encodeRulePath(rulePath)}?project_dir=${encodeURIComponent(projectDir)}`)
+}
+
 export function listProjectMemories(projectDir) {
   return get(`/project-memories?project_dir=${encodeURIComponent(projectDir)}`)
 }

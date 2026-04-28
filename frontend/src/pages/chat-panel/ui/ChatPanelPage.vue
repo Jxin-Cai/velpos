@@ -96,6 +96,7 @@ const {
 } = useCommandPalette()
 
 const messageInputRef = ref(null)
+const canceling = ref(false)
 const showMediaMenu = ref(false)
 const videoEl = ref(null)
 const showVideoPreview = ref(false)
@@ -157,12 +158,9 @@ onMounted(async () => {
   if (currentSessionId.value) {
     fetchImStatus(currentSessionId.value)
   }
-  // Listen for cancel-rewind events to restore prompt to input
-  window.addEventListener('vp-cancel-rewind', handleCancelRewind)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('vp-cancel-rewind', handleCancelRewind)
   window.removeEventListener('vp-dialog-open', handleDialogOpen)
   window.removeEventListener('vp-debug-toggle', handleDebugToggle)
   window.removeEventListener('vp-voice-toggle', handleVoiceToggle)
@@ -232,19 +230,13 @@ window.addEventListener('vp-voice-toggle', handleVoiceToggle)
 window.addEventListener('vp-camera-toggle', handleCameraToggle)
 window.addEventListener('vp-clear-context', handleClearContext)
 
-function handleCancelRewind(e) {
-  const prompt = e.detail?.prompt || ''
-  if (prompt && messageInputRef.value) {
-    messageInputRef.value.setInput(prompt)
-  }
-}
-
 function handleCompact() {
   compactContext(currentSessionId.value)
 }
 
 // Fetch IM status and channels when session changes
 watch(currentSessionId, (newId) => {
+  canceling.value = false
   if (newId) {
     fetchImStatus(newId)
     fetchImChannels()
@@ -491,8 +483,18 @@ function handleSend(textOrData) {
   useSendMessage(wsConnection.value).sendPrompt(textOrData)
 }
 
+watch(isRunning, (running) => {
+  if (!running) canceling.value = false
+})
+
 function handleCancel() {
-  useCancelQuery(wsConnection.value).cancelQuery()
+  if (canceling.value || !isRunning.value) return
+  const sent = useCancelQuery(wsConnection.value).cancelQuery()
+  if (sent) {
+    canceling.value = true
+  } else {
+    setError('Not connected')
+  }
 }
 
 function handleClear() {
@@ -820,7 +822,7 @@ function formatCost(value) {
           <span class="queue-dot"></span>
           Your message is queued — will run after current task
         </div>
-        <CancelButton :visible="isRunning" @cancel="handleCancel" />
+        <CancelButton :visible="isRunning" :pending="canceling || isCancelRequested" @cancel="handleCancel" />
       </template>
     </MessageList>
     <div class="input-section">
@@ -2618,9 +2620,23 @@ button.dash-chip[disabled] {
   text-transform: uppercase;
 }
 
-.multi-session-header h3 {
-  font-size: 20px;
-  letter-spacing: -0.02em;
+.multi-session-header .close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background var(--transition-fast);
+  display: flex;
+  align-items: center;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.multi-session-header .close-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .multi-session-body {

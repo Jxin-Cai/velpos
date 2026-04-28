@@ -38,11 +38,11 @@ const activeTab = ref('claude')
 
 const {
   content, versions, selectedRevision, selectedContent, canEditSelected,
-  projectMemories, selectedMemory, memoryEditing, memoryDraft,
+  rules, selectedRule, ruleEditing, ruleDraft,
   loading, editing, editContent, saving, applying, error, conflictMessage,
-  loadClaudeMd, loadProjectMemories, selectRevision, selectMemory,
-  startEdit, cancelEdit, save, startMemoryEdit, cancelMemoryEdit,
-  saveProjectMemory, removeProjectMemory, toggleProjectMemory,
+  loadClaudeMd, loadRules, selectRevision, selectRule,
+  startEdit, cancelEdit, save, startRuleEdit, cancelRuleEdit,
+  saveRule, removeRule,
   proposeSelected, approveSelected, rejectSelected, deleteSelectedRevision, applySelected, reset,
 } = useMemoryManager()
 
@@ -56,14 +56,14 @@ const renderedPreview = computed(() => {
   return configuredMarked(editContent.value)
 })
 
-const renderedMemoryContent = computed(() => {
-  if (!selectedMemory.value?.content) return ''
-  return configuredMarked(selectedMemory.value.content)
+const renderedRuleContent = computed(() => {
+  if (!selectedRule.value?.content) return ''
+  return configuredMarked(selectedRule.value.content)
 })
 
-const renderedMemoryPreview = computed(() => {
-  if (!memoryDraft.value.content) return ''
-  return configuredMarked(memoryDraft.value.content)
+const renderedRulePreview = computed(() => {
+  if (!ruleDraft.value.content) return ''
+  return configuredMarked(ruleDraft.value.content)
 })
 
 const selectedState = computed(() => selectedRevision.value?.state || '')
@@ -71,12 +71,12 @@ const canPropose = computed(() => selectedState.value === 'draft')
 const canApprove = computed(() => selectedState.value === 'proposed')
 const canApply = computed(() => selectedState.value === 'approved')
 const canReject = computed(() => ['draft', 'proposed', 'approved', 'conflicted'].includes(selectedState.value))
-const canDeleteRevision = computed(() => Boolean(selectedRevision.value) && selectedState.value !== 'applied')
+const canDeleteRevision = computed(() => Boolean(selectedRevision.value))
 
 watch(() => props.visible, (v) => {
   if (v && props.projectDir) {
     loadClaudeMd(props.projectDir)
-    loadProjectMemories(props.projectDir)
+    loadRules(props.projectDir)
   } else if (!v) {
     reset()
   }
@@ -85,6 +85,7 @@ watch(() => props.visible, (v) => {
 function handleRefresh() {
   if (props.visible && props.projectDir) {
     loadClaudeMd(props.projectDir)
+    loadRules(props.projectDir)
   }
 }
 
@@ -95,17 +96,25 @@ async function handleSave() {
   await save(props.projectDir)
 }
 
+async function handleDeleteRevision() {
+  await deleteSelectedRevision(props.projectDir)
+}
+
 async function handleApply() {
   await applySelected(props.projectDir)
 }
 
-async function handleMemorySave() {
-  await saveProjectMemory(props.projectDir)
+async function handleRuleSave() {
+  await saveRule(props.projectDir)
 }
 
-function handleNewMemory() {
-  selectMemory(null)
-  startMemoryEdit()
+async function handleRemoveRule() {
+  await removeRule(props.projectDir, selectedRule.value?.path)
+}
+
+function handleNewRule() {
+  selectRule(null)
+  startRuleEdit()
 }
 </script>
 
@@ -113,11 +122,11 @@ function handleNewMemory() {
   <teleport to="body">
     <Transition name="dialog-fade">
       <div v-if="visible" class="memory-overlay" @click.self="emit('close')">
-        <div class="memory-dialog" :class="{ 'memory-dialog--editing': editing || memoryEditing }">
+        <div class="memory-dialog" :class="{ 'memory-dialog--editing': editing || ruleEditing }">
           <div class="memory-header">
             <div>
-              <h3 class="memory-title">Project Memory</h3>
-              <div class="memory-subtitle">Versioned CLAUDE.md and shared project memories</div>
+              <h3 class="memory-title">Project Instructions</h3>
+              <div class="memory-subtitle">Versioned CLAUDE.md and Claude Code rules</div>
             </div>
             <div class="header-actions">
               <template v-if="activeTab === 'claude'">
@@ -131,14 +140,14 @@ function handleNewMemory() {
                     Evolve
                   </button>
                   <button class="action-btn edit" @click="startEdit" :disabled="!canEditSelected || loading">
-                    {{ selectedRevision ? 'Edit Draft' : 'New Draft' }}
+                    {{ selectedRevision ? 'Edit' : 'New Draft' }}
                   </button>
                   <button class="action-btn" @click="proposeSelected" :disabled="!canPropose || saving">Propose</button>
                   <button class="action-btn" @click="approveSelected" :disabled="!canApprove || saving">Approve</button>
                   <button class="action-btn save" @click="handleApply" :disabled="!canApply || applying">
                     {{ applying ? 'Applying...' : 'Apply' }}
                   </button>
-                  <button class="action-btn danger" @click="deleteSelectedRevision" :disabled="!canDeleteRevision || saving">Delete Version</button>
+                  <button class="action-btn danger" @click="handleDeleteRevision" :disabled="!canDeleteRevision || saving">Delete Version</button>
                   <button class="action-btn danger" @click="rejectSelected('Rejected from UI')" :disabled="!canReject || saving">Reject</button>
                 </template>
                 <template v-else>
@@ -149,19 +158,16 @@ function handleNewMemory() {
                 </template>
               </template>
               <template v-else>
-                <template v-if="!memoryEditing">
-                  <button class="action-btn edit" @click="handleNewMemory">New Memory</button>
-                  <button class="action-btn" @click="startMemoryEdit(selectedMemory)" :disabled="!selectedMemory">Edit</button>
-                  <button class="action-btn" @click="toggleProjectMemory(selectedMemory)" :disabled="!selectedMemory || saving">
-                    {{ selectedMemory?.state === 'disabled' ? 'Enable' : 'Disable' }}
-                  </button>
-                  <button class="action-btn danger" @click="removeProjectMemory(selectedMemory?.id)" :disabled="!selectedMemory || saving">Delete</button>
+                <template v-if="!ruleEditing">
+                  <button class="action-btn edit" @click="handleNewRule">New Rule</button>
+                  <button class="action-btn" @click="startRuleEdit(selectedRule)" :disabled="!selectedRule">Edit</button>
+                  <button class="action-btn danger" @click="handleRemoveRule" :disabled="!selectedRule || saving">Delete</button>
                 </template>
                 <template v-else>
-                  <button class="action-btn save" @click="handleMemorySave" :disabled="saving || !memoryDraft.title">
-                    {{ saving ? 'Saving...' : 'Save Memory' }}
+                  <button class="action-btn save" @click="handleRuleSave" :disabled="saving || !ruleDraft.path">
+                    {{ saving ? 'Saving...' : 'Save Rule' }}
                   </button>
-                  <button class="action-btn cancel" @click="cancelMemoryEdit">Cancel</button>
+                  <button class="action-btn cancel" @click="cancelRuleEdit">Cancel</button>
                 </template>
               </template>
               <button class="close-btn" @click="emit('close')">
@@ -174,7 +180,7 @@ function handleNewMemory() {
 
           <div class="memory-tabs">
             <button :class="{ active: activeTab === 'claude' }" @click="activeTab = 'claude'">CLAUDE.md</button>
-            <button :class="{ active: activeTab === 'project' }" @click="activeTab = 'project'">Project Memories</button>
+            <button :class="{ active: activeTab === 'rules' }" @click="activeTab = 'rules'">Rules</button>
           </div>
 
           <div v-if="error || conflictMessage" class="notice" :class="{ conflict: conflictMessage }">
@@ -231,50 +237,45 @@ function handleNewMemory() {
 
             <template v-else>
               <aside class="version-sidebar">
-                <div class="version-header">Memories</div>
+                <div class="version-header">Rules</div>
                 <button
-                  v-for="memory in projectMemories"
-                  :key="memory.id"
+                  v-for="rule in rules"
+                  :key="rule.path"
                   class="version-item"
-                  :class="{ active: selectedMemory?.id === memory.id }"
-                  @click="selectMemory(memory)"
+                  :class="{ active: selectedRule?.path === rule.path }"
+                  @click="selectRule(rule)"
                 >
-                  <span class="version-main">{{ memory.title }}</span>
-                  <span class="state-badge" :class="memory.state">{{ memory.state }}</span>
+                  <span class="version-main">{{ rule.path }}</span>
+                  <span class="state-badge applied">active</span>
                 </button>
-                <div v-if="projectMemories.length === 0" class="empty-version">No memories</div>
+                <div v-if="rules.length === 0" class="empty-version">No rules</div>
               </aside>
 
               <section class="content-panel">
-                <div v-if="selectedMemory" class="revision-meta">
-                  <span>{{ selectedMemory.memory_type }}</span>
-                  <span class="state-badge" :class="selectedMemory.state">{{ selectedMemory.state }}</span>
-                  <span class="hash">{{ selectedMemory.id }}</span>
+                <div v-if="selectedRule" class="revision-meta">
+                  <span>{{ selectedRule.path }}</span>
+                  <span class="state-badge applied">active</span>
+                  <span class="hash">{{ selectedRule.paths?.length ? selectedRule.paths.join(', ') : 'global' }}</span>
                 </div>
 
-                <template v-if="memoryEditing">
+                <template v-if="ruleEditing">
                   <div class="split-pane">
                     <div class="split-editor">
                       <div class="split-label">Editor</div>
-                      <input v-model="memoryDraft.title" class="memory-title-input" placeholder="Title" />
-                      <select v-model="memoryDraft.memory_type" class="memory-type-select">
-                        <option value="note">note</option>
-                        <option value="preference">preference</option>
-                        <option value="decision">decision</option>
-                        <option value="reference">reference</option>
-                      </select>
-                      <textarea v-model="memoryDraft.content" class="content-editor memory-editor" spellcheck="false"></textarea>
+                      <input v-model="ruleDraft.path" class="memory-title-input" placeholder="Rule path, e.g. frontend.md or vue/components.md" />
+                      <textarea v-model="ruleDraft.pathsText" class="memory-paths-input" placeholder="paths globs, one per line. Empty means global." spellcheck="false"></textarea>
+                      <textarea v-model="ruleDraft.content" class="content-editor memory-editor" spellcheck="false"></textarea>
                     </div>
                     <div class="split-divider"></div>
                     <div class="split-preview">
                       <div class="split-label">Preview</div>
-                      <div class="content-rendered markdown-body" v-html="renderedMemoryPreview"></div>
+                      <div class="content-rendered markdown-body" v-html="renderedRulePreview"></div>
                     </div>
                   </div>
                 </template>
 
-                <div v-else-if="selectedMemory" class="content-rendered markdown-body" v-html="renderedMemoryContent"></div>
-                <div v-else class="empty-state">Select or create a project memory</div>
+                <div v-else-if="selectedRule" class="content-rendered markdown-body" v-html="renderedRuleContent"></div>
+                <div v-else class="empty-state">Select or create a rule</div>
               </section>
             </template>
           </div>
@@ -438,7 +439,7 @@ function handleNewMemory() {
   font-family: var(--font-mono); font-size: 13px; line-height: 1.6;
 }
 .memory-title-input,
-.memory-type-select {
+.memory-paths-input {
   margin: 10px 12px 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -446,6 +447,10 @@ function handleNewMemory() {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-sans);
+}
+.memory-paths-input {
+  min-height: 70px;
+  resize: vertical;
 }
 .memory-editor { margin-top: 10px; }
 .dialog-fade-enter-active, .dialog-fade-leave-active { transition: opacity 0.15s ease; }

@@ -47,3 +47,26 @@ export function getGitBranches(projectId) {
 export function checkoutGitBranch(projectId, branch) {
   return post(`/projects/${projectId}/git/checkout`, { branch })
 }
+
+export function listWorkspaceFiles(projectId, { changedOnly = false, keyword = '' } = {}) {
+  const params = new URLSearchParams()
+  params.set('changed_only', changedOnly ? 'true' : 'false')
+  if (keyword) params.set('keyword', keyword)
+  return get(`/projects/${projectId}/workspace/files?${params.toString()}`)
+}
+
+export function readWorkspaceFile(projectId, path) {
+  return get(`/projects/${projectId}/workspace/file?path=${encodeURIComponent(path)}`)
+}
+
+export function getWorkspaceDiff(projectId, path) {
+  return get(`/projects/${projectId}/workspace/diff?path=${encodeURIComponent(path)}`)
+}
+
+export function listWorkspaceFileHistory(projectId, path, limit = 20) {
+  return get(`/projects/${projectId}/workspace/file-history?path=${encodeURIComponent(path)}&limit=${limit}`)
+}
+
+export function readWorkspaceFileAtRef(projectId, path, ref) {
+  return get(`/projects/${projectId}/workspace/file-at-ref?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`)
+}
