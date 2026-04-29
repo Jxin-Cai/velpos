@@ -52,3 +52,6 @@ uv.lock
 # GPT image generation
 .gpt-image-gen/
 image_output/
+
+# Agents
+.agents/
