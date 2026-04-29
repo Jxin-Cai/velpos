@@ -20,12 +20,15 @@ Velpos is a web console for [Claude Code](https://github.com/anthropics/claude-c
 
 This makes it much easier for **non-technical users** to build and operate multi-agent AI assistants — no hand-written prompts, no manual tool wiring, no fragile command chains.
 
+Over the past month, Velpos has evolved from a chat-style Claude Code wrapper into a **project operation console**: it can manage projects and sessions, run scheduled work, branch and compare parallel attempts, track task progress, review workspace history, operate through IM channels, and keep the whole workflow controllable from a browser.
+
 <br/>
 
 ## Table of Contents
 
 - [Why Agent Packaging](#why-agent-packaging)
 - [Highlights](#highlights)
+- [Recent Updates](#recent-updates)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Deployment](#deployment)
   - [Development](#development)
@@ -64,23 +67,51 @@ This is especially useful for teams where the operators are **product owners, su
 - **Plugin-powered SOPs** — turn repeatable workflows into stable operating procedures through plugins
 - **Tool encapsulation** — hide low-level tool wiring so end users work at the task level
 - **Multi-agent collaboration** — combine packaged agents for specialized roles, handoffs, and team workflows
+- **Marketplace refresh** — update plugin marketplace metadata before installing packaged agents so projects use current tool definitions
 
-### Platform Capabilities
+### Project Operations
 
-- **Project workspaces** — organize sessions by directory with isolated Claude Code working areas
-- **Streaming chat** — real-time WebSocket with Markdown rendering and code highlighting
-- **Built-in terminal** — run commands inside the current project directory
-- **Plugin management** — install / uninstall Claude Code MCP plugins
-- **Memory management** — edit `CLAUDE.md` and memory files from the UI
-- **Git management** — configure identity and SSH keys
-- **IM integrations** — connect Lark, WeChat, QQ, and OpenIM for two-way sync
+- **Project workspaces** — create projects from local directories, organize sessions by project, and keep Claude Code work scoped to the selected workspace
+- **Streaming chat** — real-time WebSocket responses with Markdown rendering, code highlighting, permission requests, and user choices
+- **Attachments** — send images/files into sessions and keep attachment records with the conversation
+- **Task progress** — render `TodoWrite` progress inline, show run steps, and surface timeline events while Claude Code is working
+- **Built-in terminal** — run commands inside the current project directory with a drawer-style terminal based on xterm
+- **Workspace history** — inspect recent workspace changes, browse file versions, and compare message/code differences across branches
+- **Memory management** — edit `CLAUDE.md`, memory files, and project memory entries from the UI
+- **Settings center** — manage Claude Code settings, channel profiles, model mappings, permission modes, and user input preferences in one place
+
+### Governance and Collaboration
+
+- **Plugin management** — install / uninstall Claude Code MCP plugins from the browser
+- **Git management** — configure identity and SSH keys for Claude Code project work
+- **IM integrations** — connect Lark, WeChat, QQ, and OpenIM for two-way session sync
 - **Project Clock** — schedule recurring project work, bind each run to a selected IM channel instance, auto-disconnect after completion, and optionally delete successful one-shot execution sessions
 - **Parallel sessions** — branch a conversation into multiple sessions, optionally isolate each branch in a Git worktree, compare message/code differences, and ask Claude to analyze the trade-offs
 - **Branch convergence** — keep one target session, delete the alternatives, and merge committed worktree changes back into the base branch with safety checks
-- **Channel profiles** — manage multiple API keys, hosts, and model mappings
-- **Settings center** — manage Claude Code core settings in one place
+- **Usage governance** — track token usage and budget policy state for session-level visibility
+- **Evolution proposals** — capture improvement proposals and project evolution ideas as first-class records
 
-### Current Release: v0.2.0
+<br/>
+
+## Recent Updates
+
+The April 2026 development cycle focused on making Velpos practical for day-to-day project operations:
+
+| Area | What changed | How it helps users |
+|---|---|---|
+| Project setup | Development and production configuration were consolidated under `build/dev/.env` and `build/prod/.env`; dev startup now auto-detects `claude` from PATH | Fewer setup files, less manual configuration, easier first run |
+| Session reliability | Session execution state is isolated per session, WebSocket connections are unified, and database commits release locks more promptly | Long-running sessions and multi-session switching are more stable |
+| Task visibility | Inline `TodoWrite` rendering, task progress panel, run steps, and timeline events were added | Users can see what Claude Code is doing instead of waiting on a black box |
+| Scheduling | Project Clock can run recurring tasks, route output to a chosen IM channel, auto-unbind sessions, and clean up successful one-shot sessions | Repetitive project operations can be delegated safely |
+| Branching | Parallel session branches, optional worktree isolation, branch comparison, and convergence flows were added | Teams can explore multiple solutions and keep the winning branch |
+| Workspace | Workspace panel now shows richer project history, file/version comparison, and session-aware Git branch display | Users can review what changed without leaving the browser |
+| Memory and evolution | Project memory entries, `CLAUDE.md` revision flow, and evolution proposals were added | Project knowledge and improvement ideas become manageable artifacts |
+| Input and shortcuts | Global shortcuts, session navigation, permission-mode cycling, hotkey hints, IME-safe input, and configurable Enter behavior were added | Faster keyboard-driven operation with fewer accidental sends |
+| UI polish | Sidebar, dialogs, settings, terminal, notification, message list, and startup visuals were refined | The console feels more consistent and easier to operate |
+
+<br/>
+
+## Current Release: v0.2.0
 
 v0.2.0 is the first formal release focused on project operations and branch governance:
 
@@ -91,7 +122,6 @@ v0.2.0 is the first formal release focused on project operations and branch gove
 - Parallel session branching with optional worktree isolation and session-aware branch display
 - Session comparison with message diff, Git diff summary, and Claude-ready analysis prompts
 - Target-session convergence that deletes alternatives and safely merges committed worktree branches back to the base branch
-
 
 <br/>
 
@@ -115,8 +145,10 @@ Velpos provides a comprehensive keyboard shortcut system for efficient navigatio
 
 | Shortcut | Action |
 |---|---|
-| `Enter` | Send message (default mode) |
-| `Ctrl/Cmd + Enter` | New line (default mode) / Send message (alternative mode) |
+| `Enter` | Send message in the default input mode |
+| `Ctrl/Cmd + Enter` | Insert a new line in the default input mode; send message in the alternative mode |
+
+Velpos also protects IME composition, so selecting Chinese/Japanese/Korean candidate text with `Enter` will not accidentally send the message.
 
 ### Workspace Panel
 
@@ -291,7 +323,9 @@ The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http:
 
 </details>
 
-**4.** Create a project, create a session, **load your packaged agents**, and start working.
+**4.** Create a project from a local directory or a new path under `PROJECTS_ROOT_DIR`.
+
+**5.** Create a session, choose model and permission mode, **load your packaged agents**, and start working.
 
 <br/>
 
@@ -307,16 +341,28 @@ The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http:
 
 | Area | What you can do |
 |---|---|
-| **Projects & Sessions** | Create projects from the sidebar, point each to a local directory, manage sessions |
-| **Chat** | Send prompts, paste/drag images, view streamed Markdown with code highlighting |
-| **Models & Permissions** | Switch models from the top bar, choose permission modes for autonomy control |
-| **Terminal** | Open the built-in terminal, run commands in the project directory |
-| **Plugins & Agents** | Install MCP plugins, load project-level packaged agents |
-| **Memory** | Edit `CLAUDE.md` and memory files directly in the UI |
-| **Git** | Manage global Git identity and SSH keys |
-| **IM Integration** | Bind sessions to **Lark**, **WeChat**, **QQ**, or **OpenIM** for two-way sync |
-| **Scheduled tasks** | Run recurring project work, route notifications through a selected IM channel instance, and optionally clean up successful one-shot sessions |
-| **Parallel branches** | Create multiple session branches, isolate them with worktrees, compare message/code diffs, and converge on one target session |
+| **Projects & Sessions** | Create projects from the sidebar, point each to a local directory, create/import sessions, pin important projects, and switch sessions with shortcuts |
+| **Chat** | Send prompts, paste/drag images, view streamed Markdown with code highlighting, respond to permission requests, and monitor inline task progress |
+| **Models & Permissions** | Switch models from the top bar, choose permission modes for autonomy control, and cycle modes quickly with `Shift + Tab` |
+| **Terminal** | Open the built-in terminal, run commands in the project directory, and keep terminal work alongside the chat context |
+| **Workspace** | Review project history, inspect generated files, compare versions, and understand how session branches changed the code |
+| **Plugins & Agents** | Install MCP plugins, refresh marketplace-backed packaged agents, and load project-level agents for specialized work |
+| **Memory** | Edit `CLAUDE.md`, project memory entries, and revision records directly in the UI |
+| **Git** | Manage global Git identity and SSH keys used by Claude Code sessions |
+| **IM Integration** | Bind sessions to **Lark**, **WeChat**, **QQ**, or **OpenIM** for two-way sync and remote operation |
+| **Scheduled tasks** | Run recurring project work, route notifications through a selected IM channel instance, auto-unbind after completion, and optionally clean up successful one-shot sessions |
+| **Parallel branches** | Create multiple session branches, isolate them with worktrees, compare message/code diffs, ask Claude to analyze trade-offs, and converge on one target session |
+| **Evolution** | Record project improvement proposals so recurring ideas do not disappear inside chat history |
+
+### Typical Workflow
+
+1. Start the dev stack with `build/dev/start.sh start` and open the web console.
+2. Configure a channel profile and activate the model mapping you want to use.
+3. Create or select a project directory, then create a Claude Code session.
+4. Load packaged agents or plugins that match the task.
+5. Work through chat while watching task progress, timeline events, terminal output, and workspace changes.
+6. For uncertain tasks, create parallel branches, compare the results, and converge on the best session.
+7. For repeatable work, create a Project Clock schedule and route updates to the right IM channel.
 
 <br/>
 
@@ -353,7 +399,7 @@ The backend follows a **DDD four-layer** architecture. The frontend uses a **fea
 | Layer | Technologies |
 |---|---|
 | Backend | Python, FastAPI, SQLAlchemy (async), Alembic, Claude Agent SDK, aiomysql |
-| Frontend | Vue 3, Vite, marked, highlight.js |
+| Frontend | Vue 3, Vite, marked, highlight.js, DOMPurify, xterm.js |
 | Database | MySQL 8 |
 | Package Mgmt | uv (backend), npm (frontend) |
 
