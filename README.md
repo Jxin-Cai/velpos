@@ -26,6 +26,7 @@ This makes it much easier for **non-technical users** to build and operate multi
 
 - [Why Agent Packaging](#why-agent-packaging)
 - [Highlights](#highlights)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Deployment](#deployment)
   - [Development](#development)
   - [Production](#production)
@@ -91,6 +92,41 @@ v0.2.0 is the first formal release focused on project operations and branch gove
 - Session comparison with message diff, Git diff summary, and Claude-ready analysis prompts
 - Target-session convergence that deletes alternatives and safely merges committed worktree branches back to the base branch
 
+
+<br/>
+
+## Keyboard Shortcuts
+
+Velpos provides a comprehensive keyboard shortcut system for efficient navigation and control.
+
+### Global Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `ESC` | Close the topmost dialog; if no dialog is open, cancel the running query |
+| `Cmd/Ctrl + ↑` | Switch to the previous session |
+| `Cmd/Ctrl + ↓` | Switch to the next session |
+| `Cmd/Ctrl + P` | Open Settings |
+| `Cmd/Ctrl + B` | Toggle sidebar collapse |
+| `Cmd/Ctrl + K` | Toggle voice input |
+| `Shift + Tab` | Cycle through permission modes |
+
+### Chat Input
+
+| Shortcut | Action |
+|---|---|
+| `Enter` | Send message (default mode) |
+| `Ctrl/Cmd + Enter` | New line (default mode) / Send message (alternative mode) |
+
+### Workspace Panel
+
+| Shortcut | Action |
+|---|---|
+| `← / →` | Browse file versions in compare mode |
+
+### Dialogs
+
+All dialogs (Settings, Scheduler, Memory, Evolution, Plugin, Agent, Git, IM) respond to `ESC` to close. The hotkey system uses priority-based dispatch — dialogs always take precedence over global handlers.
 
 <br/>
 
@@ -261,6 +297,14 @@ The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http:
 
 ## Usage Overview
 
+### Core Features
+
+![Velpos Core Features](./doc/features-en.png)
+
+### User Journey
+
+![Velpos User Journey](./doc/journey-en.png)
+
 | Area | What you can do |
 |---|---|
 | **Projects & Sessions** | Create projects from the sidebar, point each to a local directory, manage sessions |
@@ -277,6 +321,8 @@ The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http:
 <br/>
 
 ## Architecture
+
+![Velpos Architecture](./doc/architecture-en.png)
 
 ```text
 velpos/
