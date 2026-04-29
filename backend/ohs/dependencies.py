@@ -30,6 +30,7 @@ from application.scheduler.scheduler_application_service import SchedulerApplica
 from application.session.session_application_service import SessionApplicationService
 from application.session.session_branch_application_service import SessionBranchApplicationService
 from application.session.session_run_timeline_service import SessionRunTimelineService
+from application.session.session_timeline_event_service import SessionTimelineEventService
 from application.settings.settings_application_service import SettingsApplicationService
 from application.terminal.terminal_application_service import TerminalApplicationService
 from application.usage.usage_governance_application_service import UsageGovernanceApplicationService
@@ -64,6 +65,7 @@ from infr.repository.session_audit_event_repository_impl import SessionAuditEven
 from infr.repository.session_branch_repository_impl import SessionBranchRepositoryImpl
 from infr.repository.session_repository_impl import SessionRepositoryImpl
 from infr.repository.session_run_step_repository_impl import SessionRunStepRepositoryImpl
+from infr.repository.session_timeline_event_repository_impl import SessionTimelineEventRepositoryImpl
 from infr.repository.session_snapshot_repository_impl import SessionSnapshotRepositoryImpl
 from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
@@ -321,6 +323,55 @@ async def _record_session_audit_event(event) -> None:
         await db_session.commit()
 
 
+async def _record_session_timeline_event(
+    session_id: str,
+    event_type: str,
+    title: str,
+    payload: dict | None = None,
+    status: str = "completed",
+) -> None:
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        svc = SessionTimelineEventService(
+            repository=SessionTimelineEventRepositoryImpl(db_session),
+            connection_manager=None,
+        )
+        await svc.record_event(
+            session_id=session_id,
+            run_id="external",
+            event_type=event_type,
+            title=title,
+            payload=payload or {},
+            status=status,
+            commit=True,
+            emit=False,
+        )
+
+
+async def _timeline_broadcast_hook(session_id: str, data: dict) -> None:
+    event = data.get("event")
+    if event == "permission_request":
+        await _record_session_timeline_event(
+            session_id,
+            "permission_request",
+            f"权限请求：{data.get('tool_name', '')}",
+            {"tool_name": data.get("tool_name", ""), "tool_input": data.get("tool_input", "")},
+            status="running",
+        )
+    elif event == "user_choice_request":
+        await _record_session_timeline_event(
+            session_id,
+            "permission_request",
+            "用户选择请求",
+            {"tool_name": data.get("tool_name", ""), "questions": data.get("questions", [])},
+            status="running",
+        )
+
+
+_connection_manager.register_broadcast_hook(_timeline_broadcast_hook)
+
+
 async def _record_usage_ledger(
     session_id: str,
     project_id: str,
@@ -358,6 +409,10 @@ async def get_session_application_service(
         repository=SessionRunStepRepositoryImpl(db_session),
         connection_manager=_connection_manager,
     )
+    timeline_event_service = SessionTimelineEventService(
+        repository=SessionTimelineEventRepositoryImpl(db_session),
+        connection_manager=_connection_manager,
+    )
     return SessionApplicationService(
         session_repository=repository,
         claude_agent_gateway=_claude_agent_gateway,
@@ -371,6 +426,8 @@ async def get_session_application_service(
         audit_event_recorder=_record_session_audit_event,
         usage_recorder=_record_usage_ledger,
         timeline_service=timeline_service,
+        timeline_event_service=timeline_event_service,
+        session_service_factory=_create_session_service,
     )
 
 
@@ -538,6 +595,11 @@ async def _create_session_service(
             repository=SessionRunStepRepositoryImpl(db_session),
             connection_manager=_connection_manager,
         ),
+        timeline_event_service=SessionTimelineEventService(
+            repository=SessionTimelineEventRepositoryImpl(db_session),
+            connection_manager=_connection_manager,
+        ),
+        session_service_factory=_create_session_service,
     )
 
 
@@ -546,6 +608,15 @@ async def get_session_run_timeline_service(
 ) -> SessionRunTimelineService:
     return SessionRunTimelineService(
         repository=SessionRunStepRepositoryImpl(db_session),
+        connection_manager=_connection_manager,
+    )
+
+
+async def get_session_timeline_event_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> SessionTimelineEventService:
+    return SessionTimelineEventService(
+        repository=SessionTimelineEventRepositoryImpl(db_session),
         connection_manager=_connection_manager,
     )
 

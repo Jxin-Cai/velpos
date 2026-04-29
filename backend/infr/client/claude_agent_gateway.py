@@ -42,6 +42,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._permission_mode = permission_mode or os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
         self._max_buffer_size = max_buffer_size or int(os.getenv("CLAUDE_MAX_BUFFER_SIZE", str(10 * 1024 * 1024)))
         self._idle_timeout = float(os.getenv("CLAUDE_IDLE_TIMEOUT", "300"))
+        self._user_response_timeout = float(os.getenv("CLAUDE_USER_RESPONSE_TIMEOUT", "3600"))
         # session_id -> ClaudeSDKClient (long-lived connections)
         self._clients: dict[str, ClaudeSDKClient] = {}
         # session_id -> SDK session_id (UUID) for JSONL cleanup
@@ -64,12 +65,20 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._idle_timers: dict[str, asyncio.TimerHandle] = {}
         # sessions actively running a query (protected from idle disconnect)
         self._active_sessions: set[str] = set()
+        # session_id -> coarse SDK state for UI diagnostics
+        self._session_states: dict[str, str] = {}
         # broadcast callback: set externally to push events to WS clients
         self._broadcast_fn: Any = None
         # IM binding check callback: set externally to protect bound sessions
         self._is_im_bound_fn: Any = None
         # Lock for protecting _pending_user_responses and _clients mutations
         self._lock = asyncio.Lock()
+
+    def _set_state(self, session_id: str, state: str) -> None:
+        self._session_states[session_id] = state
+
+    def get_state(self, session_id: str) -> str:
+        return self._session_states.get(session_id, "idle")
 
     def set_broadcast_fn(self, fn: Any) -> None:
         """Set the broadcast function for pushing events to WebSocket clients."""
@@ -132,8 +141,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         cwd: str,
         prev_sdk_sid: str | None,
         fork_session: bool = False,
-    ) -> ClaudeSDKClient:
-        """Build options, connect CLI; if normal resume fails, fallback to fresh session."""
+    ) -> tuple[ClaudeSDKClient, bool]:
+        """Build options, connect CLI; if normal resume fails, fallback to fresh session.
+
+        Returns (client, resume_failed) where resume_failed is True if we
+        attempted resume but had to fall back to a fresh session.
+        """
         stderr_lines, stderr_cb = self._create_stderr_collector()
         options = ClaudeAgentOptions(
             model=model,
@@ -152,7 +165,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         client = ClaudeSDKClient(options=options)
         try:
             await client.connect()
-            return client
+            return client, False
         except ProcessError:
             if not prev_sdk_sid or fork_session:
                 raise
@@ -173,7 +186,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             )
             client_fresh = ClaudeSDKClient(options=options_fresh)
             await client_fresh.connect()
-            return client_fresh
+            return client_fresh, True
 
     def mark_active(self, session_id: str) -> None:
         """Mark a session as actively running a query."""
@@ -259,13 +272,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         model: str,
         prompt: str,
         cwd: str = "",
-        sdk_session_id: str = "",
+        sdk_session_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
 
-        # Use externally persisted sdk_session_id for resume, fall back to in-memory cache.
-        # Branch/VB sessions can store fork:<source-sdk-session-id> until their first
-        # real Claude response provides the new forked SDK session id.
-        raw_prev_sdk_sid = sdk_session_id or self._sdk_session_ids.get(session_id)
+        # sdk_session_id semantics: None = allow cache fallback, "" = force fresh.
+        raw_prev_sdk_sid = self._sdk_session_ids.get(session_id) if sdk_session_id is None else sdk_session_id
         fork_source_sid = self._fork_source_session_id(raw_prev_sdk_sid)
         prev_sdk_sid = fork_source_sid or raw_prev_sdk_sid
 
@@ -275,7 +286,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         # Use per-session permission mode if set, otherwise fall back to default
         perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
 
-        client = await self._try_connect(
+        client, resume_failed = await self._try_connect(
             session_id=session_id,
             model=model,
             perm_mode=perm_mode,
@@ -285,6 +296,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         )
         self._clients[session_id] = client
         self._connected_models[session_id] = model
+        self._set_state(session_id, "connected")
         self._touch(session_id)
         if cwd:
             self._session_cwds[session_id] = cwd
@@ -296,21 +308,30 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             logger.debug("set_permission_mode after connect failed (non-critical): session=%s", session_id)
 
         # Send query and receive response until ResultMessage
+        self._set_state(session_id, "streaming")
         await client.query(prompt=prompt)
 
-        async for msg in client.receive_response():
-            # Capture SDK session_id from messages that carry it
-            sdk_sid = getattr(msg, "session_id", None)
-            if sdk_sid:
-                old_sid = self._sdk_session_ids.get(session_id)
-                if old_sid != sdk_sid:
-                    self._sdk_session_ids[session_id] = sdk_sid
-            info = self._extract_message_info(msg)
-            if info is not None:
-                # Attach captured SDK session_id so caller can persist it
+        # Signal resume failure to caller so it can clear stale sdk_session_id
+        if resume_failed:
+            yield {"message_type": "_meta", "resume_failed": True}
+
+        try:
+            async for msg in client.receive_response():
+                # Capture SDK session_id from messages that carry it
+                sdk_sid = getattr(msg, "session_id", None)
                 if sdk_sid:
-                    info["sdk_session_id"] = sdk_sid
-                yield info
+                    old_sid = self._sdk_session_ids.get(session_id)
+                    if old_sid != sdk_sid:
+                        self._sdk_session_ids[session_id] = sdk_sid
+                info = self._extract_message_info(msg)
+                if info is not None:
+                    # Attach captured SDK session_id so caller can persist it
+                    if sdk_sid:
+                        info["sdk_session_id"] = sdk_sid
+                    yield info
+        finally:
+            if self._clients.get(session_id) is client:
+                self._set_state(session_id, "connected")
 
     async def send_query(
         self,
@@ -322,19 +343,24 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             raise RuntimeError(f"No active connection for session {session_id}")
 
         self._touch(session_id)
+        self._set_state(session_id, "streaming")
         await client.query(prompt=prompt)
 
-        async for msg in client.receive_response():
-            sdk_sid = getattr(msg, "session_id", None)
-            if sdk_sid:
-                old_sid = self._sdk_session_ids.get(session_id)
-                if old_sid != sdk_sid:
-                    self._sdk_session_ids[session_id] = sdk_sid
-            info = self._extract_message_info(msg)
-            if info is not None:
+        try:
+            async for msg in client.receive_response():
+                sdk_sid = getattr(msg, "session_id", None)
                 if sdk_sid:
-                    info["sdk_session_id"] = sdk_sid
-                yield info
+                    old_sid = self._sdk_session_ids.get(session_id)
+                    if old_sid != sdk_sid:
+                        self._sdk_session_ids[session_id] = sdk_sid
+                info = self._extract_message_info(msg)
+                if info is not None:
+                    if sdk_sid:
+                        info["sdk_session_id"] = sdk_sid
+                    yield info
+        finally:
+            if self._clients.get(session_id) is client:
+                self._set_state(session_id, "connected")
 
     async def compact(
         self,
@@ -354,12 +380,15 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     self._sdk_session_ids[session_id] = sdk_sid
             info = self._extract_message_info(msg)
             if info is not None:
+                if sdk_sid:
+                    info["sdk_session_id"] = sdk_sid
                 yield info
 
     async def interrupt(self, session_id: str) -> None:
         client = self._clients.get(session_id)
         if client is None:
             raise RuntimeError(f"No active connection for session {session_id}")
+        self._set_state(session_id, "interrupted")
         await client.interrupt()
 
     async def disconnect(self, session_id: str) -> None:
@@ -368,13 +397,16 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             try:
                 await client.disconnect()
             except RuntimeError as e:
-                # anyio cross-task cancel scope error — kill subprocess directly
-                logger.warning("disconnect RuntimeError (cross-task): session=%s, %s", session_id, e)
+                if "cancel scope" in str(e):
+                    logger.info("disconnect via process cleanup: session=%s, %s", session_id, e)
+                else:
+                    logger.warning("disconnect RuntimeError: session=%s, %s", session_id, e)
                 self._force_kill_client(client)
             except Exception:
                 logger.warning("disconnect 异常: session=%s", session_id, exc_info=True)
                 self._force_kill_client(client)
         self._connected_models.pop(session_id, None)
+        self._set_state(session_id, "idle")
         # Note: _sdk_session_ids, _session_cwds, _session_permission_modes persist
         # across reconnects to support resume and cleanup
 
@@ -399,6 +431,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._sdk_session_ids.pop(session_id, None)
         self._session_cwds.pop(session_id, None)
         self._session_permission_modes.pop(session_id, None)
+        self._session_states.pop(session_id, None)
         self._last_activity.pop(session_id, None)
         self._active_sessions.discard(session_id)
         timer = self._idle_timers.pop(session_id, None)
@@ -462,12 +495,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
             await self._persist_pending_request_context(session_id, pending_context)
 
+            self._set_state(session_id, "waiting_permission")
             # Broadcast to WS clients
             await self._broadcast_fn(session_id, event_data)
 
             try:
                 # Wait for user response with timeout (5 minutes)
-                response = await asyncio.wait_for(fut, timeout=300)
+                response = await asyncio.wait_for(fut, timeout=self._user_response_timeout)
             except asyncio.TimeoutError:
                 logger.warning("can_use_tool timeout: session=%s, tool=%s", session_id, tool_name)
                 return PermissionResultDeny(message="User response timeout")
@@ -479,6 +513,8 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     self._pending_user_responses.pop(session_id, None)
                     self._pending_request_context.pop(session_id, None)
                 await self._persist_pending_request_context(session_id, None)
+                if self.get_state(session_id) == "waiting_permission":
+                    self._set_state(session_id, "streaming")
 
             if tool_name == "AskUserQuestion":
                 # For AskUserQuestion, pass answers via updated_input
@@ -575,10 +611,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         session_id: str,
         model: str,
         cwd: str = "",
-        sdk_session_id: str = "",
+        sdk_session_id: str | None = None,
     ) -> None:
         """Open a persistent SDK connection without sending a query."""
-        raw_prev_sdk_sid = sdk_session_id or self._sdk_session_ids.get(session_id)
+        raw_prev_sdk_sid = self._sdk_session_ids.get(session_id) if sdk_session_id is None else sdk_session_id
         fork_source_sid = self._fork_source_session_id(raw_prev_sdk_sid)
         prev_sdk_sid = fork_source_sid or raw_prev_sdk_sid
 
@@ -592,7 +628,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
         perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
 
-        client = await self._try_connect(
+        client, _resume_failed = await self._try_connect(
             session_id=session_id,
             model=model,
             perm_mode=perm_mode,
@@ -602,6 +638,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         )
         self._clients[session_id] = client
         self._connected_models[session_id] = model
+        self._set_state(session_id, "connected")
         self._touch(session_id)
         if cwd:
             self._session_cwds[session_id] = cwd

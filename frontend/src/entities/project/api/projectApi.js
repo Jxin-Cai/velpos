@@ -1,3 +1,4 @@
+import { API_BASE } from '@shared/lib/constants'
 import { get, post, del, patch } from '@shared/api/httpClient'
 
 export function createProject(name, githubUrl = '') {
@@ -65,6 +66,34 @@ export function getWorkspaceDiff(projectId, path) {
 
 export function listWorkspaceFileHistory(projectId, path, limit = 20) {
   return get(`/projects/${projectId}/workspace/file-history?path=${encodeURIComponent(path)}&limit=${limit}`)
+}
+
+export async function downloadWorkspaceSelection(projectId, paths) {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/workspace/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+  if (!res.ok) {
+    let message = `HTTP error: ${res.status} ${res.statusText}`
+    try {
+      const body = await res.json()
+      message = body?.message || message
+    } catch {
+    }
+    throw new Error(message)
+  }
+  const blob = await res.blob()
+  const disposition = res.headers.get('content-disposition') || ''
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || 'workspace-export.zip'
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 export function readWorkspaceFileAtRef(projectId, path, ref) {

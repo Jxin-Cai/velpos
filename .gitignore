@@ -40,6 +40,7 @@ uv.lock
 # Runtime
 .pids/
 .logs/
+.log/
 
 # Lark credentials
 .lark_credentials.json
@@ -47,3 +48,7 @@ uv.lock
 # Thoughtworks
 .thoughtworks/
 .playwright-mcp
+
+# GPT image generation
+.gpt-image-gen/
+image_output/

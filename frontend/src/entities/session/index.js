@@ -10,7 +10,7 @@ export {
   renameSession,
   importClaudeSession,
   listModels,
-  listSessionArtifacts,
+  fetchSessionTimelineEvents,
   compactSession,
   createSessionBranch,
   listSessionBranches,

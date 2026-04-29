@@ -67,9 +67,7 @@ class ConnectionManager(ConnectionManagerPort):
                 self._global_connections.remove(ws)
 
     async def broadcast(self, session_id: str, data: dict[str, Any]) -> None:
-        if session_id not in self._connections:
-            return
-        connections = list(self._connections[session_id])
+        connections = list(self._connections.get(session_id, []))
 
         async def _safe_send(ws: WebSocket) -> WebSocket | None:
             try:
@@ -78,13 +76,14 @@ class ConnectionManager(ConnectionManagerPort):
             except Exception:
                 return ws
 
-        results = await asyncio.gather(*(_safe_send(ws) for ws in connections))
-        dead = [ws for ws in results if ws is not None]
-        for ws in dead:
-            if ws in self._connections.get(session_id, []):
-                self._connections[session_id].remove(ws)
-        if session_id in self._connections and not self._connections[session_id]:
-            del self._connections[session_id]
+        if connections:
+            results = await asyncio.gather(*(_safe_send(ws) for ws in connections))
+            dead = [ws for ws in results if ws is not None]
+            for ws in dead:
+                if ws in self._connections.get(session_id, []):
+                    self._connections[session_id].remove(ws)
+            if session_id in self._connections and not self._connections[session_id]:
+                del self._connections[session_id]
 
         if self._broadcast_hooks:
             await asyncio.gather(

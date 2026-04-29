@@ -22,8 +22,12 @@ class SessionRepositoryImpl(SessionRepository):
 
     async def save(self, session: Session) -> None:
         model = self._to_model(session)
-        await self._session.merge(model)
-        await self._session.flush()
+        try:
+            await self._session.merge(model)
+            await self._session.flush()
+        except Exception:
+            await self._session.rollback()
+            raise
 
     async def find_by_id(self, session_id: str) -> Session | None:
         stmt = select(SessionModel).where(
@@ -70,9 +74,9 @@ class SessionRepositoryImpl(SessionRepository):
             return None
         stmt = select(SessionModel).where(
             SessionModel.sdk_session_id == sdk_session_id,
-        )
+        ).limit(1)
         result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
+        model = result.scalars().first()
         if model is None:
             return None
         return self._to_domain(model)
@@ -153,7 +157,14 @@ class SessionRepositoryImpl(SessionRepository):
         ]
 
     async def commit(self) -> None:
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
 
     async def close(self) -> None:
         await self._session.close()

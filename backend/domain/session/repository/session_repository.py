@@ -62,6 +62,11 @@ class SessionRepository(ABC):
         ...
 
     @abstractmethod
+    async def rollback(self) -> None:
+        """Rollback the current unit of work."""
+        ...
+
+    @abstractmethod
     async def close(self) -> None:
         """Close the underlying database session."""
         ...

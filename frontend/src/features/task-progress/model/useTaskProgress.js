@@ -120,7 +120,7 @@ function buildTodoWriteTasks(messages, sessionRunning) {
 }
 
 export function useTaskProgress() {
-  const { messages, status, runSteps } = useSession()
+  const { messages, status, runSteps, timelineEvents } = useSession()
 
   const allTasks = computed(() => {
     const tasks = {}
@@ -339,6 +339,26 @@ export function useTaskProgress() {
 
   const hasTimelineSteps = computed(() => timelineSteps.value.length > 0)
 
+  const agentTimelineEvents = computed(() => timelineEvents.value.map(event => ({
+    ...event,
+    startedAt: event.started_time ? new Date(event.started_time).getTime() : Date.now(),
+  })))
+
+  const timelineEventCounts = computed(() => {
+    const counts = { tool: 0, permission: 0, error: 0, cost: 0, terminal: 0, total: 0 }
+    for (const event of agentTimelineEvents.value) {
+      counts.total++
+      if (event.event_type === 'tool_use' || event.event_type === 'tool_result') counts.tool++
+      if (event.event_type === 'permission_request' || event.event_type === 'permission_response') counts.permission++
+      if (event.event_type === 'error' || event.status === 'failed') counts.error++
+      if (event.event_type === 'token_usage' || event.event_type === 'cost') counts.cost++
+      if (event.event_type === 'background_terminal' || event.event_type === 'terminal') counts.terminal++
+    }
+    return counts
+  })
+
+  const hasTimelineEvents = computed(() => agentTimelineEvents.value.length > 0)
+
   return {
     allTasks,
     taskCounts,
@@ -349,5 +369,8 @@ export function useTaskProgress() {
     timelineSteps,
     timelineCounts,
     hasTimelineSteps,
+    agentTimelineEvents,
+    timelineEventCounts,
+    hasTimelineEvents,
   }
 }

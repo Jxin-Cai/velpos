@@ -20,6 +20,31 @@ class TerminalGateway(ABC):
         ...
 
     @abstractmethod
+    async def create_pty(self, cwd: str | None = None, cols: int = 120, rows: int = 30) -> dict[str, Any]:
+        """Create an interactive terminal session."""
+        ...
+
+    @abstractmethod
+    async def read_pty(self, terminal_id: str) -> str:
+        """Read output from an interactive terminal session."""
+        ...
+
+    @abstractmethod
+    async def write_pty(self, terminal_id: str, data: str) -> None:
+        """Write input to an interactive terminal session."""
+        ...
+
+    @abstractmethod
+    async def resize_pty(self, terminal_id: str, cols: int, rows: int) -> None:
+        """Resize an interactive terminal session."""
+        ...
+
+    @abstractmethod
+    async def close_pty(self, terminal_id: str) -> None:
+        """Close an interactive terminal session."""
+        ...
+
+    @abstractmethod
     async def open_path(self, path: str) -> dict[str, Any]:
         """Open a file or directory using the system default handler."""
         ...

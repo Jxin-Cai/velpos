@@ -16,6 +16,7 @@ from application.session.command.create_session_command import CreateSessionComm
 from application.session.command.import_claude_session_command import ImportClaudeSessionCommand
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_run_timeline_service import SessionRunTimelineService
+from application.session.session_timeline_event_service import SessionTimelineEventService
 from domain.session.acl.claude_agent_gateway import ClaudeAgentGateway
 from domain.session.acl.connection_manager import ConnectionManager
 from domain.session.model.message import Message
@@ -35,6 +36,32 @@ logger = logging.getLogger(__name__)
 
 
 class SessionApplicationService:
+    _session_locks: dict[str, asyncio.Lock] = {}
+    _session_locks_guard = asyncio.Lock()
+    # Shared across all instances to coordinate between WS-service and bg-service
+    _cancelled_sessions: set[str] = set()
+    _queued_messages: dict[str, "RunQueryCommand"] = {}
+    _waiting_for_slot: set[str] = set()
+    _query_semaphore: asyncio.Semaphore | None = None
+    _query_semaphore_guard = asyncio.Lock()
+
+    @classmethod
+    async def _lock_for_session(cls, session_id: str) -> asyncio.Lock:
+        async with cls._session_locks_guard:
+            lock = cls._session_locks.get(session_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                cls._session_locks[session_id] = lock
+            return lock
+
+    @classmethod
+    async def _get_query_semaphore(cls) -> asyncio.Semaphore:
+        if cls._query_semaphore is None:
+            async with cls._query_semaphore_guard:
+                if cls._query_semaphore is None:
+                    max_concurrent = int(os.getenv("SESSION_MAX_CONCURRENT_QUERIES", "2"))
+                    cls._query_semaphore = asyncio.Semaphore(max(1, max_concurrent))
+        return cls._query_semaphore
 
     def __init__(
         self,
@@ -50,6 +77,8 @@ class SessionApplicationService:
         audit_event_recorder: Callable[[SessionAuditEvent], Awaitable[None]] | None = None,
         usage_recorder: Callable[[str, str, str, int, int, int, int], Awaitable[None]] | None = None,
         timeline_service: SessionRunTimelineService | None = None,
+        timeline_event_service: SessionTimelineEventService | None = None,
+        session_service_factory: Callable[[], Awaitable["SessionApplicationService"]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -63,34 +92,42 @@ class SessionApplicationService:
         self._audit_event_recorder = audit_event_recorder
         self._usage_recorder = usage_recorder
         self._timeline_service = timeline_service
-        # Latest-wins queue: at most one pending message per session
-        self._queued_messages: dict[str, RunQueryCommand] = {}
-        # Tracks sessions that have been cancelled (to prevent retry in run_claude_query)
-        self._cancelled_sessions: set[str] = set()
-        max_concurrent = int(os.getenv("SESSION_MAX_CONCURRENT_QUERIES", "2"))
-        self._query_semaphore = asyncio.Semaphore(max(1, max_concurrent))
-        self._waiting_for_slot: set[str] = set()
+        self._timeline_event_service = timeline_event_service
+        self._session_service_factory = session_service_factory
 
     def is_waiting_for_slot(self, session_id: str) -> bool:
         return session_id in self._waiting_for_slot
 
     async def submit_query(self, command: RunQueryCommand) -> None:
         self._claude_agent_gateway.mark_active(command.session_id)
+        session_lock = await self._lock_for_session(command.session_id)
+        query_semaphore = await self._get_query_semaphore()
         try:
-            if self._query_semaphore.locked():
-                self._waiting_for_slot.add(command.session_id)
+            if session_lock.locked():
                 await self._connection_manager.broadcast(
                     command.session_id,
-                    {"event": "resource_waiting", "status": "waiting_slot"},
+                    {"event": "resource_waiting", "status": "waiting_session_runner"},
                 )
                 await self._record_audit_event(
                     command.session_id,
                     "resource_waiting",
-                    payload={"reason": "concurrency_limit"},
+                    payload={"reason": "session_runner_busy"},
                 )
-            async with self._query_semaphore:
-                self._waiting_for_slot.discard(command.session_id)
-                await self.run_claude_query(command)
+            async with session_lock:
+                if query_semaphore.locked():
+                    self._waiting_for_slot.add(command.session_id)
+                    await self._connection_manager.broadcast(
+                        command.session_id,
+                        {"event": "resource_waiting", "status": "waiting_slot"},
+                    )
+                    await self._record_audit_event(
+                        command.session_id,
+                        "resource_waiting",
+                        payload={"reason": "concurrency_limit"},
+                    )
+                async with query_semaphore:
+                    self._waiting_for_slot.discard(command.session_id)
+                    await self.run_claude_query(command)
         except asyncio.CancelledError:
             self._waiting_for_slot.discard(command.session_id)
             self._claude_agent_gateway.mark_idle(command.session_id)
@@ -110,6 +147,98 @@ class SessionApplicationService:
         await self._session_repository.save(session)
         if commit:
             await self._session_repository.commit()
+
+    @staticmethod
+    def _is_fork_sdk_session_id(sdk_session_id: str) -> bool:
+        return sdk_session_id.startswith("fork:")
+
+    async def _resolve_resume_sdk_session_id(self, session: Session) -> str:
+        sdk_session_id = session.sdk_session_id
+        if not sdk_session_id:
+            return ""
+        if self._is_fork_sdk_session_id(sdk_session_id):
+            return sdk_session_id
+
+        owner = await self._session_repository.find_by_sdk_session_id(sdk_session_id)
+        if owner is None or owner.session_id == session.session_id:
+            return sdk_session_id
+
+        session.update_sdk_session_id("")
+        await self._record_audit_event(
+            session.session_id,
+            "sdk_session_binding_reset",
+            payload={
+                "sdk_session_id": sdk_session_id,
+                "conflict_session_id": owner.session_id,
+                "source": "resume",
+            },
+        )
+        logger.error(
+            "[session=%s] SDK session binding conflict on resume: sdk_session_id=%s owner=%s",
+            session.session_id,
+            sdk_session_id,
+            owner.session_id,
+            extra={"session_id": session.session_id, "sdk_session_id": sdk_session_id},
+        )
+        await self._save_session(session, commit=True)
+        return ""
+
+    async def _accept_or_reject_sdk_session_id(
+        self,
+        session: Session,
+        new_sdk_session_id: str,
+        source: str,
+        run_id: str | None = None,
+    ) -> bool:
+        if not new_sdk_session_id or new_sdk_session_id == session.sdk_session_id:
+            return False
+
+        if not self._is_fork_sdk_session_id(new_sdk_session_id):
+            owner = await self._session_repository.find_by_sdk_session_id(new_sdk_session_id)
+            if owner is not None and owner.session_id != session.session_id:
+                session.update_sdk_session_id("")
+                await self._record_audit_event(
+                    session.session_id,
+                    "sdk_session_binding_conflict",
+                    payload={
+                        "sdk_session_id": new_sdk_session_id,
+                        "conflict_session_id": owner.session_id,
+                        "source": source,
+                        "run_id": run_id,
+                    },
+                )
+                logger.error(
+                    "[session=%s] rejected SDK session_id from %s: sdk_session_id=%s owner=%s",
+                    session.session_id,
+                    source,
+                    new_sdk_session_id,
+                    owner.session_id,
+                    extra={
+                        "session_id": session.session_id,
+                        "sdk_session_id": new_sdk_session_id,
+                        "run_id": run_id or "-",
+                    },
+                )
+                await self._claude_agent_gateway.disconnect(session.session_id)
+                raise RuntimeError("SDK session is already bound to another Velpos session")
+
+        session.update_sdk_session_id(new_sdk_session_id)
+        event_type = {
+            "clear": "sdk_session_id_updated_after_clear",
+            "rewind": "sdk_session_id_updated_after_rewind",
+            "compact": "sdk_session_id_updated_after_compact",
+        }.get(source, "sdk_session_id_seen")
+        await self._record_audit_event(
+            session.session_id,
+            event_type,
+            payload={"run_id": run_id, "source": source},
+        )
+        logger.info(
+            "[session=%s] 更新 SDK session_id: %s",
+            session.session_id,
+            new_sdk_session_id,
+        )
+        return True
 
     async def _record_audit_event(
         self,
@@ -219,6 +348,149 @@ class SessionApplicationService:
         except Exception:
             logger.warning("[session=%s] run step fail failed", step.session_id, exc_info=True)
 
+    async def _record_timeline_event(
+        self,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        title: str,
+        payload: dict[str, Any] | None = None,
+        status: str = "completed",
+        *,
+        commit: bool = True,
+        emit: bool = True,
+    ) -> None:
+        if self._timeline_event_service is None:
+            return
+        try:
+            await self._timeline_event_service.record_event(
+                session_id=session_id,
+                run_id=run_id,
+                event_type=event_type,
+                title=title,
+                payload=payload,
+                status=status,
+                commit=commit,
+                emit=emit,
+            )
+        except Exception:
+            logger.warning(
+                "[session=%s] timeline event write failed: %s",
+                session_id,
+                event_type,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _compact_payload_value(value: Any, limit: int = 1200) -> Any:
+        if isinstance(value, str):
+            return value if len(value) <= limit else value[:limit] + "..."
+        if isinstance(value, list):
+            return [SessionApplicationService._compact_payload_value(v, limit) for v in value[:20]]
+        if isinstance(value, dict):
+            return {
+                str(k): SessionApplicationService._compact_payload_value(v, limit)
+                for k, v in list(value.items())[:40]
+            }
+        return value
+
+    def _timeline_events_for_message(
+        self,
+        msg_type_str: str,
+        content: dict[str, Any],
+        msg_dict: dict[str, Any],
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        events: list[tuple[str, str, dict[str, Any]]] = []
+        if msg_type_str == "assistant":
+            blocks = content.get("blocks", []) if isinstance(content, dict) else []
+            text_parts = [
+                block.get("text", "")
+                for block in blocks
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text")
+            ]
+            if text_parts:
+                text = "\n".join(text_parts)
+                events.append((
+                    "assistant_message",
+                    "助手消息",
+                    {"summary": text[:500], "text_length": len(text)},
+                ))
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    name = str(block.get("name") or "tool")
+                    events.append((
+                        "tool_use",
+                        f"工具调用：{name}",
+                        {
+                            "tool_name": name,
+                            "tool_use_id": block.get("id", ""),
+                            "input": self._compact_payload_value(block.get("input", {})),
+                        },
+                    ))
+                elif block.get("type") == "tool_result":
+                    events.append((
+                        "tool_result",
+                        "工具结果",
+                        {
+                            "tool_use_id": block.get("tool_use_id", ""),
+                            "is_error": bool(block.get("is_error", False)),
+                            "content": self._compact_payload_value(block.get("content")),
+                        },
+                    ))
+                elif block.get("type") == "thinking":
+                    thinking = str(block.get("thinking") or "")
+                    events.append((
+                        "assistant_thinking",
+                        "思考中",
+                        {"summary": thinking[:500], "text_length": len(thinking)},
+                    ))
+        elif msg_type_str == "tool_result":
+            results = content.get("results", []) if isinstance(content, dict) else []
+            for result in results:
+                events.append((
+                    "tool_result",
+                    "工具结果",
+                    {
+                        "tool_use_id": result.get("tool_use_id", "") if isinstance(result, dict) else "",
+                        "is_error": bool(result.get("is_error", False)) if isinstance(result, dict) else False,
+                        "content": self._compact_payload_value(result.get("content") if isinstance(result, dict) else result),
+                    },
+                ))
+        elif msg_type_str == "system":
+            subtype = str(content.get("subtype") or "system") if isinstance(content, dict) else "system"
+            events.append(("system_message", f"系统事件：{subtype}", self._compact_payload_value(content)))
+        elif msg_type_str == "result":
+            usage = content.get("usage", {}) if isinstance(content, dict) else {}
+            events.append((
+                "final_result",
+                "最终结果",
+                {
+                    "is_error": bool(content.get("is_error", False)) if isinstance(content, dict) else False,
+                    "duration_ms": content.get("duration_ms", 0) if isinstance(content, dict) else 0,
+                    "num_turns": content.get("num_turns", 0) if isinstance(content, dict) else 0,
+                    "stop_reason": content.get("stop_reason") if isinstance(content, dict) else None,
+                    "total_cost_usd": content.get("total_cost_usd", 0) if isinstance(content, dict) else 0,
+                },
+            ))
+            events.append((
+                "token_usage",
+                "Token 与成本",
+                {
+                    "input_tokens": msg_dict.get("input_tokens", usage.get("input_tokens", 0)),
+                    "output_tokens": msg_dict.get("output_tokens", usage.get("output_tokens", 0)),
+                    "total_cost_usd": content.get("total_cost_usd", 0) if isinstance(content, dict) else 0,
+                },
+            ))
+        else:
+            events.append((
+                msg_type_str,
+                MessageConversionService.summarise_content(content),
+                self._compact_payload_value(content),
+            ))
+        return events
+
     async def list_audit_events(
         self,
         session_id: str,
@@ -230,6 +502,31 @@ class SessionApplicationService:
             session_id=session_id,
             limit=max(1, min(limit, 500)),
         )
+
+    async def list_timeline_events(
+        self,
+        session_id: str,
+        limit: int = 500,
+        event_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if self._timeline_event_service is None:
+            return []
+        events = await self._timeline_event_service.list_events(
+            session_id=session_id,
+            limit=max(1, min(limit, 1000)),
+            event_types=event_types,
+        )
+        return [self._timeline_event_service.event_to_dict(event) for event in events]
+
+    async def list_run_timeline_events(
+        self,
+        session_id: str,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        if self._timeline_event_service is None:
+            return []
+        events = await self._timeline_event_service.list_run_events(session_id, run_id)
+        return [self._timeline_event_service.event_to_dict(event) for event in events]
 
     async def _set_cancel_requested(self, session_id: str, requested: bool) -> None:
         session = await self._session_repository.find_by_id(session_id)
@@ -533,7 +830,7 @@ class SessionApplicationService:
                 # Prefer the sid from /clear response; fall back to gateway cache.
                 restored_sid = new_sdk_sid or self._claude_agent_gateway.get_cached_sdk_session_id(command.session_id)
                 if restored_sid:
-                    session.update_sdk_session_id(restored_sid)
+                    await self._accept_or_reject_sdk_session_id(session, restored_sid, "clear")
                 # Write back last_input_tokens from the /clear response so
                 # the frontend context bar reflects the post-clear state.
                 if clear_input_tokens > 0:
@@ -607,6 +904,18 @@ class SessionApplicationService:
                 "image_count": len(command.image_paths),
                 "attachment_count": len(command.attachments),
                 "prompt_length": len(command.prompt),
+            },
+        )
+        await self._record_timeline_event(
+            command.session_id,
+            run_id,
+            "user_input",
+            "用户输入",
+            {
+                "prompt": command.prompt[:1200],
+                "prompt_length": len(command.prompt),
+                "image_count": len(command.image_paths),
+                "attachment_count": len(command.attachments),
             },
         )
 
@@ -702,12 +1011,13 @@ class SessionApplicationService:
                     msg_stream = None
 
             if msg_stream is None:
+                resume_sdk_session_id = await self._resolve_resume_sdk_session_id(session)
                 msg_stream = self._claude_agent_gateway.connect(
                     session_id=command.session_id,
                     model=session.model,
                     prompt=actual_prompt,
                     cwd=session.project_dir,
-                    sdk_session_id=session.sdk_session_id,
+                    sdk_session_id=resume_sdk_session_id,
                 )
 
             try:
@@ -729,18 +1039,26 @@ class SessionApplicationService:
                         "query_retrying",
                         payload={"run_id": run_id, "error": str(stream_err)[:500]},
                     )
+                    await self._record_timeline_event(
+                        command.session_id,
+                        run_id,
+                        "retry",
+                        "消息流中断，重新连接",
+                        {"error": str(stream_err)[:500]},
+                    )
                     logger.warning(
                         "[session=%s] 消息流中断 (%s), 重新 connect",
                         command.session_id,
                         stream_err,
                     )
                     await self._claude_agent_gateway.disconnect(command.session_id)
+                    resume_sdk_session_id = await self._resolve_resume_sdk_session_id(session)
                     msg_stream = self._claude_agent_gateway.connect(
                         session_id=command.session_id,
                         model=session.model,
                         prompt=actual_prompt,
                         cwd=session.project_dir,
-                        sdk_session_id=session.sdk_session_id,
+                        sdk_session_id=resume_sdk_session_id,
                     )
                     await self._consume_message_stream(session, msg_stream, run_id)
                 else:
@@ -810,6 +1128,14 @@ class SessionApplicationService:
                 "query_failed",
                 payload={"run_id": run_id, "error": str(e)[:500]},
             )
+            await self._record_timeline_event(
+                command.session_id,
+                run_id,
+                "error",
+                "执行失败",
+                {"error": str(e)[:1000]},
+                status="failed",
+            )
             await self._connection_manager.broadcast(
                 session.session_id,
                 {"event": "error", "message": str(e)},
@@ -825,9 +1151,11 @@ class SessionApplicationService:
             try:
                 await self._save_session(session, commit=True)
             except Exception:
-                logger.warning(
+                logger.error(
                     "[session=%s] final save failed, retrying with fresh DB session",
-                    command.session_id, exc_info=True,
+                    command.session_id,
+                    exc_info=True,
+                    extra={"session_id": command.session_id, "run_id": run_id},
                 )
                 try:
                     from infr.config.database import async_session_factory
@@ -837,10 +1165,17 @@ class SessionApplicationService:
                         fresh_repo = SessionRepositoryImpl(fresh_db)
                         await fresh_repo.save(session)
                         await fresh_db.commit()
+                        logger.warning(
+                            "[session=%s] final save recovered with fresh DB session",
+                            command.session_id,
+                            extra={"session_id": command.session_id, "run_id": run_id},
+                        )
                 except Exception:
                     logger.error(
                         "[session=%s] retry save also failed",
-                        command.session_id, exc_info=True,
+                        command.session_id,
+                        exc_info=True,
+                        extra={"session_id": command.session_id, "run_id": run_id},
                     )
             await self._connection_manager.broadcast(
                 session.session_id,
@@ -876,7 +1211,17 @@ class SessionApplicationService:
                     payload={"prompt_length": len(queued.prompt), "attachment_count": len(queued.attachments)},
                 )
                 logger.info("[session=%s] 执行排队的后续消息", command.session_id)
-                safe_create_task(self.submit_query(queued))
+                if self._session_service_factory is not None:
+                    async def _run_queued_message(command: RunQueryCommand) -> None:
+                        queued_service = await self._session_service_factory()
+                        try:
+                            await queued_service.submit_query(command)
+                        finally:
+                            await queued_service.close()
+
+                    safe_create_task(_run_queued_message(queued))
+                else:
+                    safe_create_task(self.submit_query(queued))
 
     # Maximum seconds to wait for the next message from the Claude stream.
     # If no message arrives within this window AND the CLI process has died,
@@ -955,12 +1300,36 @@ class SessionApplicationService:
                         "stream_waiting",
                         payload={"run_id": run_id, "waiting_count": waiting_count},
                     )
+                    await self._record_timeline_event(
+                        session.session_id,
+                        run_id,
+                        "stream_waiting",
+                        "等待 Claude 输出",
+                        {"waiting_count": waiting_count},
+                    )
                     await self._connection_manager.broadcast(
                         session.session_id,
                         {"event": "stream_waiting", "status": "waiting_output", "waiting_count": waiting_count},
                     )
                     continue
                 msg_type_str = msg_dict["message_type"]
+
+                # Handle internal meta events from gateway (not real messages)
+                if msg_type_str == "_meta":
+                    if msg_dict.get("resume_failed"):
+                        session.update_sdk_session_id("")
+                        await self._save_session(session, commit=True)
+                        await self._record_audit_event(
+                            session.session_id,
+                            "sdk_resume_failed",
+                            payload={"run_id": run_id},
+                        )
+                        await self._connection_manager.broadcast(
+                            session.session_id,
+                            {"event": "status_change", "data": self._session_to_dict(session)},
+                        )
+                    continue
+
                 message = MessageConversionService.convert_stream_message(msg_dict)
                 if message is None:
                     logger.warning(
@@ -985,6 +1354,19 @@ class SessionApplicationService:
                     session.session_id,
                     {"event": "message", "data": {"type": message.message_type.value, "content": message.content}},
                 )
+                for event_type, title, payload in self._timeline_events_for_message(
+                    msg_type_str,
+                    message.content,
+                    msg_dict,
+                ):
+                    await self._record_timeline_event(
+                        session.session_id,
+                        run_id,
+                        event_type,
+                        title,
+                        payload,
+                        status="failed" if payload.get("is_error") else "completed",
+                    )
                 await self._progress_run_step(
                     stream_step,
                     {
@@ -1044,18 +1426,8 @@ class SessionApplicationService:
                 # Always update: resume may produce a new session_id
                 if "sdk_session_id" in msg_dict:
                     new_sid = msg_dict["sdk_session_id"]
-                    if new_sid and new_sid != session.sdk_session_id:
-                        session.update_sdk_session_id(new_sid)
-                        await self._record_audit_event(
-                            session.session_id,
-                            "sdk_session_id_seen",
-                            payload={"run_id": run_id},
-                        )
-                        logger.info(
-                            "[session=%s] 更新 SDK session_id: %s",
-                            session.session_id,
-                            new_sid,
-                        )
+                    if new_sid:
+                        await self._accept_or_reject_sdk_session_id(session, new_sid, "query", run_id)
 
                 # Periodic save: ensure reconnecting clients see recent messages.
                 # Uses the same DB session with explicit commit for visibility.
@@ -1103,6 +1475,9 @@ class SessionApplicationService:
         """Check if the SDK agent client is connected for a session."""
         return self._claude_agent_gateway.is_connected(session_id)
 
+    def get_agent_state(self, session_id: str) -> str:
+        return self._claude_agent_gateway.get_state(session_id)
+
     async def ensure_session_idle(self, session_id: str) -> None:
         """Correct stale 'running' status when the agent is no longer connected.
 
@@ -1141,15 +1516,26 @@ class SessionApplicationService:
             return
 
         try:
+            resume_sdk_session_id = await self._resolve_resume_sdk_session_id(session)
+            if not resume_sdk_session_id:
+                return
             await self._claude_agent_gateway.open_connection(
                 session_id=session_id,
                 model=session.model,
                 cwd=session.project_dir,
-                sdk_session_id=session.sdk_session_id,
+                sdk_session_id=resume_sdk_session_id,
             )
             logger.info("[session=%s] SDK 连接预热完成", session_id)
         except Exception as e:
             logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
+
+    async def refresh_context_usage(self, session_id: str) -> Session:
+        session = await self.get_session(session_id)
+        if not self._claude_agent_gateway.is_connected(session_id) and session.sdk_session_id:
+            await self.prewarm_connection(session_id)
+        if await self._refresh_context_usage(session):
+            await self._save_session(session, commit=True)
+        return session
 
     async def cancel_query(self, session_id: str) -> None:
         """Cancel an active Claude query via SDK interrupt, then rewind.
@@ -1165,6 +1551,14 @@ class SessionApplicationService:
         self._cancelled_sessions.add(session_id)
         self._waiting_for_slot.discard(session_id)
         await self._record_audit_event(session_id, "cancel_requested", actor="user")
+        await self._record_timeline_event(
+            session_id,
+            "external",
+            "cancel",
+            "用户请求取消",
+            {},
+            status="cancelled",
+        )
         await self._set_cancel_requested(session_id, True)
         await self.clear_queued_message(session_id)
 
@@ -1194,10 +1588,13 @@ class SessionApplicationService:
             await asyncio.sleep(0.1)
 
         # Step 3: Send /rewind to Claude Code to undo the last turn
+        rewind_sdk_sid = ""
         if self._claude_agent_gateway.is_connected(session_id):
             try:
-                async for _ in self._claude_agent_gateway.send_query(session_id, "/rewind"):
-                    pass
+                async for msg_dict in self._claude_agent_gateway.send_query(session_id, "/rewind"):
+                    sdk_sid = msg_dict.get("sdk_session_id")
+                    if sdk_sid:
+                        rewind_sdk_sid = sdk_sid
                 logger.info("[session=%s] /rewind sent successfully", session_id)
             except Exception as e:
                 logger.warning("[session=%s] /rewind failed: %s", session_id, e)
@@ -1216,6 +1613,21 @@ class SessionApplicationService:
                     if msg.message_type.value == "user":
                         prompt = msg.content.get("text", "")
                         break
+
+            if rewind_sdk_sid:
+                try:
+                    await self._accept_or_reject_sdk_session_id(session, rewind_sdk_sid, "rewind")
+                except Exception:
+                    logger.error("[session=%s] /rewind SDK session_id rejected", session_id, exc_info=True)
+                finally:
+                    try:
+                        await self._save_session(session, commit=True)
+                    except Exception:
+                        logger.warning(
+                            "[session=%s] failed to persist /rewind sdk_session_id update",
+                            session_id,
+                            exc_info=True,
+                        )
 
             # Broadcast rewind: full session state + messages + original prompt
             all_messages = [
@@ -1244,6 +1656,62 @@ class SessionApplicationService:
             session_id,
             "cancel_completed",
             payload={"restored_prompt_length": len(prompt)},
+        )
+
+    async def rewind_to_message(self, session_id: str, message_index: int) -> None:
+        """Rewind session to a specific user message index.
+
+        1. Counts how many /rewind commands to send (number of user messages after target).
+        2. Calls domain rewind_to.
+        3. Sends N /rewind commands to Claude CLI.
+        4. Persists and broadcasts updated state.
+        """
+        session = await self._session_repository.find_by_id(session_id)
+        if session is None:
+            raise ValueError(f"Session not found: {session_id}")
+
+        # Count user messages after (and including) the target index
+        from domain.session.model.message_type import MessageType
+        rewind_count = sum(
+            1 for msg in session.messages[message_index:]
+            if msg.message_type == MessageType.USER
+        )
+
+        prompt = session.rewind_to(message_index)
+        await self._save_session(session, commit=True)
+
+        # Send /rewind to Claude CLI for each turn to undo
+        if self._claude_agent_gateway.is_connected(session_id):
+            rewind_sdk_sid = ""
+            for _ in range(rewind_count):
+                try:
+                    async for msg_dict in self._claude_agent_gateway.send_query(session_id, "/rewind"):
+                        sdk_sid = msg_dict.get("sdk_session_id")
+                        if sdk_sid:
+                            rewind_sdk_sid = sdk_sid
+                except Exception as e:
+                    logger.warning("[session=%s] /rewind failed: %s", session_id, e)
+                    break
+
+            if rewind_sdk_sid:
+                try:
+                    await self._accept_or_reject_sdk_session_id(session, rewind_sdk_sid, "rewind")
+                    await self._save_session(session, commit=True)
+                except Exception:
+                    logger.error("[session=%s] rewind_to SDK session_id rejected", session_id, exc_info=True)
+
+        all_messages = [
+            {"type": msg.message_type.value, "content": msg.content}
+            for msg in session.messages
+        ]
+        await self._connection_manager.broadcast(
+            session_id,
+            {
+                "event": "cancel_rewind",
+                "prompt": prompt,
+                "session": self._session_to_dict(session),
+                "messages": all_messages,
+            },
         )
 
     # ── Message queue (latest-wins) ───────────────────────────
@@ -1331,11 +1799,22 @@ class SessionApplicationService:
                 actor="user",
                 payload={"response_keys": sorted(response_data.keys())},
             )
+            await self._record_timeline_event(
+                session_id,
+                "external",
+                "permission_response",
+                "用户响应权限请求",
+                {"response_keys": sorted(response_data.keys())},
+            )
         return resolved
 
     async def commit(self) -> None:
         """Commit the underlying DB session."""
         await self._session_repository.commit()
+
+    async def rollback(self) -> None:
+        """Rollback the underlying DB session."""
+        await self._session_repository.rollback()
 
     async def close(self) -> None:
         """Close the underlying DB session."""
@@ -1471,34 +1950,28 @@ class SessionApplicationService:
         )
 
         try:
-            # Gateway compact() sends /compact as a query — collect all response messages
-            compact_messages: list[dict] = []
             compact_usage: dict = {"input_tokens": 0, "output_tokens": 0}
+            compact_sdk_sid = ""
 
             async for msg_dict in self._claude_agent_gateway.compact(session_id):
-                msg_type_str = msg_dict.get("message_type", "")
-                if msg_type_str:
-                    compact_messages.append(msg_dict)
                 if "input_tokens" in msg_dict and "output_tokens" in msg_dict:
                     compact_usage = {
                         "input_tokens": msg_dict["input_tokens"],
                         "output_tokens": msg_dict["output_tokens"],
                     }
-
-            messages = [
-                Message.create(
-                    message_type=MessageType(m["message_type"]),
-                    content=m["content"],
-                )
-                for m in compact_messages
-            ]
+                sdk_sid = msg_dict.get("sdk_session_id")
+                if sdk_sid:
+                    compact_sdk_sid = sdk_sid
 
             usage = Usage(
                 input_tokens=compact_usage["input_tokens"],
                 output_tokens=compact_usage["output_tokens"],
             )
 
-            session.complete_compact(messages, usage)
+            if compact_sdk_sid:
+                await self._accept_or_reject_sdk_session_id(session, compact_sdk_sid, "compact")
+
+            session.complete_compact(usage)
 
             refreshed = await self._refresh_context_usage(session)
             if not refreshed and compact_usage["input_tokens"] > 0:

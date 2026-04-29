@@ -22,3 +22,7 @@ class SessionRunStepRepository(ABC):
     @abstractmethod
     async def commit(self) -> None:
         ...
+
+    @abstractmethod
+    async def rollback(self) -> None:
+        ...

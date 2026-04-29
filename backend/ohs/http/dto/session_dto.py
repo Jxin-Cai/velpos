@@ -73,6 +73,7 @@ class SessionResponse(BaseModel):
     status: str
     message_count: int
     usage: dict[str, int]
+    last_input_tokens: int = 0
     project_dir: str
     name: str
     sdk_session_id: str = ""
@@ -96,6 +97,7 @@ class SessionResponse(BaseModel):
             status=summary["status"],
             message_count=summary["message_count"],
             usage=summary["usage"],
+            last_input_tokens=summary.get("last_input_tokens", 0),
             project_dir=summary["project_dir"],
             name=summary["name"],
             sdk_session_id=summary.get("sdk_session_id", ""),
@@ -133,8 +135,10 @@ class SessionDetailResponse(BaseModel):
     status: str
     message_count: int
     usage: dict[str, int]
+    last_input_tokens: int = 0
     project_dir: str
     name: str
+    sdk_session_id: str = ""
     updated_time: str | None
     git_branch: str = ""
     messages: list[dict[str, Any]]
@@ -149,8 +153,10 @@ class SessionDetailResponse(BaseModel):
             status=summary["status"],
             message_count=summary["message_count"],
             usage=summary["usage"],
+            last_input_tokens=summary.get("last_input_tokens", 0),
             project_dir=summary["project_dir"],
             name=summary["name"],
+            sdk_session_id=summary.get("sdk_session_id", ""),
             updated_time=summary["updated_time"],
             git_branch=summary.get("git_branch", ""),
             messages=[SessionAssembler.message_to_dict(msg) for msg in session.messages],

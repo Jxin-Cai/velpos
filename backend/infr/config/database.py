@@ -41,8 +41,8 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
         except PendingRollbackError:
             logger.warning("DB session in invalid transaction state, rolling back")
             await session.rollback()
-        except OperationalError as e:
-            logger.error("DB commit failed (connection lost): %s", e)
+        except OperationalError:
+            logger.error("DB commit failed (connection lost)", exc_info=True)
             await session.rollback()
             raise
         except Exception:

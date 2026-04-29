@@ -9,6 +9,7 @@ load_dotenv()
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,13 +38,47 @@ from ohs.http.usage_router import router as usage_router
 from ohs.http.memory_router import router as memory_router
 from ohs.ws.session_ws import router as ws_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-)
-# Suppress noisy httpx/httpcore request-level logs (e.g. WeChat long-poll)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+class _LogContextDefaults(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        for field in ("session_id", "sdk_session_id", "run_id"):
+            if not hasattr(record, field):
+                setattr(record, field, "-")
+        return True
+
+
+def _configure_logging(*, force: bool = False) -> None:
+    log_format = "%(asctime)s [%(levelname)s] %(name)s [session=%(session_id)s sdk=%(sdk_session_id)s run=%(run_id)s] - %(message)s"
+    formatter = logging.Formatter(log_format)
+    context_filter = _LogContextDefaults()
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    console_handler.addFilter(context_filter)
+
+    repo_root = Path(__file__).resolve().parent.parent
+    log_dir = repo_root / ".log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    error_handler = RotatingFileHandler(
+        log_dir / "backend-error.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+    error_handler.addFilter(context_filter)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[console_handler, error_handler],
+        force=force,
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+_configure_logging()
 logger = logging.getLogger("velpos")
 
 
@@ -72,6 +107,7 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.session_audit_event_model  # noqa: F401
     import infr.repository.session_branch_model  # noqa: F401
     import infr.repository.session_run_step_model  # noqa: F401
+    import infr.repository.session_timeline_event_model  # noqa: F401
     import infr.repository.usage_governance_model  # noqa: F401
     import infr.repository.project_command_policy_model  # noqa: F401
     import infr.repository.project_memory_entry_model  # noqa: F401
@@ -218,13 +254,7 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(attempt)
 
     # Re-apply logging config — Alembic fileConfig resets root logger to WARN
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        force=True,
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    _configure_logging(force=True)
 
     registered = [ct.value for ct in im_channel_registry.registered_types]
     logger.info("IM channels registered: %s", registered)

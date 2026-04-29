@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onUnmounted, nextTick } from 'vue'
-import { applyVbReviews, useSession } from '@entities/session'
+import { applyVbReviews, fetchSessionTimelineEvents, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
 import { createWsConnection, createGlobalEventConnection } from '@shared/api/wsClient'
@@ -31,10 +31,13 @@ const {
   setMessagesFor,
   setRunStepsFor,
   upsertRunStepFor,
+  setTimelineEventsFor,
+  upsertTimelineEventFor,
   setStatusFor,
   setQueuedFor,
   setErrorFor,
   removeState,
+  setRestoredPrompt,
 } = useSession()
 
 const { projects } = useProject()
@@ -207,6 +210,15 @@ async function loadLatestRunSteps(sessionId) {
   }
 }
 
+async function loadTimelineEvents(sessionId) {
+  try {
+    const data = await fetchSessionTimelineEvents(sessionId, 500)
+    setTimelineEventsFor(sessionId, data?.events || [])
+  } catch (e) {
+    console.debug('[VP] load timeline events failed:', e?.message || e)
+  }
+}
+
 function setupUnifiedHandler(connection, sessionId) {
   connection.onEvent((data) => {
     const isCurrent = (currentSessionId.value === sessionId)
@@ -233,6 +245,7 @@ function setupUnifiedHandler(connection, sessionId) {
           markDone(sessionId)
         }
         loadLatestRunSteps(sessionId)
+        loadTimelineEvents(sessionId)
         break
 
       case 'message':
@@ -291,6 +304,10 @@ function setupUnifiedHandler(connection, sessionId) {
       case 'run_step_completed':
       case 'run_step_failed':
         upsertRunStepFor(sessionId, data.step)
+        break
+
+      case 'timeline_event':
+        upsertTimelineEventFor(sessionId, data.timeline_event)
         break
 
       case 'user_choice_request':
@@ -367,6 +384,9 @@ function setupUnifiedHandler(connection, sessionId) {
         setQueuedFor(sessionId, false)
         updateSessionInList(sessionId, data.session)
         markDone(sessionId)
+        if (data.prompt && sessionId === currentSessionId.value) {
+          setRestoredPrompt(data.prompt)
+        }
         break
 
       case 'status': {
@@ -458,7 +478,17 @@ onMounted(async () => {
     ready.value = true
   } catch (e) {
     initError.value = e.message || 'Failed to load sessions'
+    ready.value = true
   }
+
+  // Fade out splash screen after app is ready
+  nextTick(() => {
+    const splash = document.getElementById('vp-splash')
+    if (splash) {
+      splash.classList.add('fade-out')
+      splash.addEventListener('transitionend', () => splash.remove(), { once: true })
+    }
+  })
 
   // Listen for Claude Code session import events to scroll to new position
   window.addEventListener('vp-session-imported', handleSessionImported)
@@ -530,7 +560,32 @@ useGlobalHotkeys({
       <header class="app-header">
         <div class="header-left">
           <div class="logo">
-            <span class="logo-icon">VP</span>
+            <svg class="logo-svg" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="logo-fl" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#4a9eff"/>
+                  <stop offset="100%" stop-color="#a78bfa"/>
+                </linearGradient>
+                <linearGradient id="logo-fr" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#a78bfa"/>
+                  <stop offset="100%" stop-color="#c084fc"/>
+                </linearGradient>
+                <linearGradient id="logo-fb" x1="0%" y1="100%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#3b5998"/>
+                  <stop offset="100%" stop-color="#7c3aed"/>
+                </linearGradient>
+                <linearGradient id="logo-ft" x1="50%" y1="0%" x2="50%" y2="100%">
+                  <stop offset="0%" stop-color="#c4b5fd"/>
+                  <stop offset="100%" stop-color="#a78bfa"/>
+                </linearGradient>
+              </defs>
+              <polygon fill="url(#logo-fl)" points="256,56 108,200 148,400 256,296"/>
+              <polygon fill="url(#logo-fr)" points="256,56 404,200 364,400 256,296"/>
+              <polygon fill="url(#logo-fb)" points="148,400 256,456 256,296"/>
+              <polygon fill="#7c3aed" opacity="0.8" points="364,400 256,456 256,296"/>
+              <polygon fill="url(#logo-ft)" opacity="0.5" points="256,56 200,148 256,180 312,148"/>
+              <line x1="256" y1="80" x2="256" y2="440" stroke="#67e8f9" stroke-width="3" opacity="0.9"/>
+            </svg>
             <span class="logo-text">Velpos</span>
           </div>
         </div>
@@ -590,7 +645,32 @@ useGlobalHotkeys({
             </svg>
           </button>
           <div class="logo">
-            <span class="logo-icon">VP</span>
+            <svg class="logo-svg" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="hdr-fl" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#4a9eff"/>
+                  <stop offset="100%" stop-color="#a78bfa"/>
+                </linearGradient>
+                <linearGradient id="hdr-fr" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#a78bfa"/>
+                  <stop offset="100%" stop-color="#c084fc"/>
+                </linearGradient>
+                <linearGradient id="hdr-fb" x1="0%" y1="100%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#3b5998"/>
+                  <stop offset="100%" stop-color="#7c3aed"/>
+                </linearGradient>
+                <linearGradient id="hdr-ft" x1="50%" y1="0%" x2="50%" y2="100%">
+                  <stop offset="0%" stop-color="#c4b5fd"/>
+                  <stop offset="100%" stop-color="#a78bfa"/>
+                </linearGradient>
+              </defs>
+              <polygon fill="url(#hdr-fl)" points="256,56 108,200 148,400 256,296"/>
+              <polygon fill="url(#hdr-fr)" points="256,56 404,200 364,400 256,296"/>
+              <polygon fill="url(#hdr-fb)" points="148,400 256,456 256,296"/>
+              <polygon fill="#7c3aed" opacity="0.8" points="364,400 256,456 256,296"/>
+              <polygon fill="url(#hdr-ft)" opacity="0.5" points="256,56 200,148 256,180 312,148"/>
+              <line x1="256" y1="80" x2="256" y2="440" stroke="#67e8f9" stroke-width="3" opacity="0.9"/>
+            </svg>
             <span class="logo-text">Velpos</span>
           </div>
         </div>
@@ -599,8 +679,8 @@ useGlobalHotkeys({
           <WorkingSessionsButton @navigate="handleNotificationNavigate" />
           <GitManagerButton @click="gitManagerVisible = true" />
           <SettingsButton @click="settingsDialogVisible = true" />
-          <WorkspaceButton :active="workspaceVisible" @click="workspaceVisible = true" />
-          <TerminalButton @click="terminalDrawerVisible = true" />
+          <WorkspaceButton :active="workspaceVisible" @click="workspaceVisible = !workspaceVisible" />
+          <TerminalButton :active="terminalDrawerVisible" @click="terminalDrawerVisible = !terminalDrawerVisible" />
           <ThemeSwitcher />
         </div>
       </header>
@@ -770,16 +850,10 @@ useGlobalHotkeys({
   gap: 10px;
 }
 
-.logo-icon {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 14px;
-  color: var(--text-on-accent);
-  background: linear-gradient(135deg, var(--accent), var(--purple));
-  padding: 3px 6px;
-  border-radius: var(--radius-sm);
-  letter-spacing: 1px;
-  box-shadow: var(--shadow-active);
+.logo-svg {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
 }
 
 .logo-text {

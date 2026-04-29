@@ -1,12 +1,13 @@
 import { ref, computed, reactive } from 'vue'
 
 // ── Per-session state map ──
-// key: sessionId → { session, messages, status, error, queryHistory, runSteps, queued, _nextMsgId }
+// key: sessionId → { session, messages, status, error, queryHistory, runSteps, timelineEvents, queued, _nextMsgId }
 const _stateMap = reactive(new Map())
 
 // ── Global state (not per-session) ──
 const sessions = ref([])
 const currentSessionId = ref(null)
+const restoredPrompt = ref('')
 
 // ── Internal helpers ──
 
@@ -20,6 +21,7 @@ function _ensureState(sessionId) {
       error: null,
       queryHistory: [],
       runSteps: [],
+      timelineEvents: [],
       queued: false,
       _nextMsgId: 0,
     })
@@ -64,6 +66,11 @@ const queryHistory = computed(() => {
 const runSteps = computed(() => {
   const state = _stateMap.get(currentSessionId.value)
   return state ? state.runSteps : []
+})
+
+const timelineEvents = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state ? state.timelineEvents : []
 })
 
 const queued = computed(() => {
@@ -170,6 +177,29 @@ function upsertRunStepFor(sessionId, step) {
   state.runSteps.sort((a, b) => String(a.started_time || '').localeCompare(String(b.started_time || '')))
 }
 
+function setTimelineEventsFor(sessionId, events = []) {
+  const state = _ensureState(sessionId)
+  if (!state) return
+  state.timelineEvents.length = 0
+  state.timelineEvents.push(...events)
+}
+
+function upsertTimelineEventFor(sessionId, event) {
+  const state = _ensureState(sessionId)
+  if (!state || !event?.id) return
+  const index = state.timelineEvents.findIndex(e => e.id === event.id)
+  if (index >= 0) {
+    state.timelineEvents[index] = { ...state.timelineEvents[index], ...event }
+  } else {
+    state.timelineEvents.push(event)
+  }
+  state.timelineEvents.sort((a, b) => {
+    const runCmp = String(a.run_id || '').localeCompare(String(b.run_id || ''))
+    if (runCmp !== 0) return runCmp
+    return (a.seq || 0) - (b.seq || 0)
+  })
+}
+
 function setStatusFor(sessionId, s) {
   const state = _ensureState(sessionId)
   if (!state) return
@@ -197,6 +227,10 @@ function ensureState(sessionId) {
 
 function removeState(sessionId) {
   _stateMap.delete(sessionId)
+}
+
+function setRestoredPrompt(text) {
+  restoredPrompt.value = text || ''
 }
 
 // ── Current-session convenience wrappers (backward-compatible) ──
@@ -269,6 +303,8 @@ export function useSession() {
     recovery,
     queryHistory,
     runSteps,
+    timelineEvents,
+    restoredPrompt,
     // Global state
     sessions,
     currentSessionId,
@@ -292,10 +328,13 @@ export function useSession() {
     setMessagesFor,
     setRunStepsFor,
     upsertRunStepFor,
+    setTimelineEventsFor,
+    upsertTimelineEventFor,
     setStatusFor,
     setQueuedFor,
     setErrorFor,
     ensureState,
     removeState,
+    setRestoredPrompt,
   }
 }

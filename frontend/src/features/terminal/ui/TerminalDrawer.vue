@@ -1,6 +1,8 @@
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { executeCommand } from '../api/terminalApi'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
 import { useDialogManager } from '@shared/lib/useDialogManager'
 
 const props = defineProps({
@@ -26,100 +28,213 @@ useDialog('terminal', visibleWrapper)
 const drawerHeight = ref(parseInt(localStorage.getItem('pf_terminal_height')) || 360)
 const tabs = ref([createTab(1)])
 const activeTabId = ref(tabs.value[0].id)
-const outputRef = ref(null)
+const terminalContainerRef = ref(null)
 let nextTabNo = 2
-let _resizeOnMove = null
-let _resizeOnUp = null
+let resizeOnMove = null
+let resizeOnUp = null
 
 const activeTab = computed(() => tabs.value.find(tab => tab.id === activeTabId.value) || tabs.value[0])
-const promptStr = computed(() => {
-  const dir = props.projectDir || '~'
-  return props.gitBranch ? `${dir} (${props.gitBranch}) >` : `${dir} >`
+const activeStatus = computed(() => activeTab.value?.status || 'idle')
+const terminalLocation = computed(() => {
+  const cwd = activeTab.value?.cwd || props.projectDir || '~'
+  return props.gitBranch ? `${cwd} (${props.gitBranch})` : cwd
 })
 
 function createTab(no) {
   return {
     id: `terminal-${Date.now()}-${no}`,
     title: `term ${no}`,
-    commandInput: '',
-    entries: [],
-    executing: false,
+    status: 'idle',
+    terminalId: '',
+    cwd: props.projectDir || '',
+    shell: '',
+    ws: null,
+    xterm: null,
+    fitAddon: null,
   }
+}
+
+function terminalWsUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws/terminal`
+}
+
+function createXterm(tab) {
+  if (tab.xterm) return
+  const xterm = new Terminal({
+    cursorBlink: true,
+    fontSize: 12,
+    fontFamily: 'var(--font-mono), Menlo, Monaco, "Courier New", monospace',
+    theme: {
+      background: '#090d14',
+      foreground: '#d6deeb',
+      cursor: '#d6deeb',
+    },
+    convertEol: false,
+    scrollback: 10000,
+  })
+  const fitAddon = new FitAddon()
+  xterm.loadAddon(fitAddon)
+  tab.xterm = xterm
+  tab.fitAddon = fitAddon
+
+  xterm.onData((data) => {
+    sendInput(tab, data)
+  })
+
+  xterm.onResize(({ cols, rows }) => {
+    if (tab.ws?.readyState === WebSocket.OPEN) {
+      tab.ws.send(JSON.stringify({ action: 'resize', cols, rows }))
+    }
+  })
+}
+
+function mountXterm(tab) {
+  if (!terminalContainerRef.value || !tab.xterm) return
+  if (tab.xterm.element) return
+  const wrapper = document.createElement('div')
+  wrapper.className = 'xterm-tab-wrapper'
+  wrapper.style.height = '100%'
+  wrapper.style.display = tab.id === activeTabId.value ? '' : 'none'
+  wrapper.dataset.tabId = tab.id
+  terminalContainerRef.value.appendChild(wrapper)
+  tab.xterm.open(wrapper)
+  nextTick(() => tab.fitAddon?.fit())
+}
+
+function connectTab(tab) {
+  if (!props.visible || tab.ws?.readyState === WebSocket.OPEN || tab.ws?.readyState === WebSocket.CONNECTING) return
+  tab.status = 'connecting'
+
+  createXterm(tab)
+
+  const ws = new WebSocket(terminalWsUrl())
+  tab.ws = ws
+
+  ws.onopen = () => {
+    const fitAddon = tab.fitAddon
+    let cols = 80, rows = 24
+    if (fitAddon && tab.xterm?.element) {
+      fitAddon.fit()
+      cols = tab.xterm.cols
+      rows = tab.xterm.rows
+    }
+    ws.send(JSON.stringify({ cwd: props.projectDir || null, cols, rows }))
+  }
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data)
+    if (message.event === 'ready') {
+      tab.status = 'connected'
+      tab.terminalId = message.terminal_id || ''
+      tab.cwd = message.cwd || tab.cwd
+      tab.shell = message.shell || ''
+      return
+    }
+    if (message.event === 'output') {
+      tab.xterm?.write(message.data || '')
+      return
+    }
+    if (message.event === 'closed') {
+      tab.status = 'closed'
+    }
+  }
+  ws.onerror = () => {
+    tab.status = 'error'
+  }
+  ws.onclose = () => {
+    tab.status = tab.status === 'error' ? 'error' : 'closed'
+    tab.ws = null
+  }
+}
+
+function ensureActiveTerminal() {
+  const tab = activeTab.value
+  if (!tab) return
+  createXterm(tab)
+  nextTick(() => {
+    mountXterm(tab)
+    connectTab(tab)
+    nextTick(() => {
+      tab.fitAddon?.fit()
+      tab.xterm?.focus()
+    })
+  })
 }
 
 function addTab() {
   const tab = createTab(nextTabNo++)
   tabs.value.push(tab)
   activeTabId.value = tab.id
-  focusInput()
+  nextTick(() => ensureActiveTerminal())
+}
+
+function closeTabConnection(tab) {
+  if (tab?.ws?.readyState === WebSocket.OPEN) {
+    tab.ws.send(JSON.stringify({ action: 'close' }))
+  }
+  tab?.ws?.close()
+  if (tab?.xterm?.element) {
+    const wrapper = tab.xterm.element.closest('.xterm-tab-wrapper')
+    tab.xterm.dispose()
+    wrapper?.remove()
+  }
+  tab.xterm = null
+  tab.fitAddon = null
 }
 
 function closeTab(tabId) {
   if (tabs.value.length === 1) return
   const index = tabs.value.findIndex(tab => tab.id === tabId)
-  tabs.value = tabs.value.filter(tab => tab.id !== tabId)
+  const tab = tabs.value[index]
+  closeTabConnection(tab)
+  tabs.value = tabs.value.filter(item => item.id !== tabId)
   if (activeTabId.value === tabId) {
     activeTabId.value = tabs.value[Math.max(index - 1, 0)]?.id || tabs.value[0].id
   }
 }
 
 function clearActiveTab() {
-  if (activeTab.value?.executing) return
-  activeTab.value.entries = []
+  activeTab.value?.xterm?.clear()
+}
+
+function sendInput(tab, data) {
+  if (!tab) return
+  if (tab.ws?.readyState !== WebSocket.OPEN) {
+    connectTab(tab)
+    return
+  }
+  tab.ws.send(JSON.stringify({ action: 'input', data }))
+}
+
+function fitTerminal() {
+  const tab = activeTab.value
+  if (tab?.fitAddon && tab.xterm?.element) {
+    tab.fitAddon.fit()
+  }
 }
 
 function startResize(e) {
   e.preventDefault()
-  _resizeOnMove = (ev) => {
+  resizeOnMove = (ev) => {
     const h = window.innerHeight - ev.clientY
     drawerHeight.value = Math.max(220, Math.min(h, window.innerHeight * 0.75))
     emitHeight()
+    fitTerminal()
   }
-  _resizeOnUp = () => {
+  resizeOnUp = () => {
     localStorage.setItem('pf_terminal_height', drawerHeight.value)
-    window.removeEventListener('mousemove', _resizeOnMove)
-    window.removeEventListener('mouseup', _resizeOnUp)
-    _resizeOnMove = null
-    _resizeOnUp = null
+    window.removeEventListener('mousemove', resizeOnMove)
+    window.removeEventListener('mouseup', resizeOnUp)
+    resizeOnMove = null
+    resizeOnUp = null
+    fitTerminal()
   }
-  window.addEventListener('mousemove', _resizeOnMove)
-  window.addEventListener('mouseup', _resizeOnUp)
-}
-
-async function handleSubmit() {
-  const tab = activeTab.value
-  const cmd = tab.commandInput.trim()
-  if (!cmd || tab.executing) return
-  tab.commandInput = ''
-  tab.executing = true
-  try {
-    const result = await executeCommand(cmd, 30, props.projectDir || null)
-    tab.entries.push({
-      command: cmd,
-      stdout: result.stdout || '',
-      stderr: result.stderr || '',
-      return_code: result.return_code,
-      duration_ms: result.duration_ms,
-    })
-  } catch (err) {
-    tab.entries.push({
-      command: cmd,
-      stdout: '',
-      stderr: err.message || 'Command execution failed',
-      return_code: -1,
-      duration_ms: 0,
-    })
-  } finally {
-    tab.executing = false
-  }
+  window.addEventListener('mousemove', resizeOnMove)
+  window.addEventListener('mouseup', resizeOnUp)
 }
 
 function emitHeight() {
   emit('height-change', props.visible ? drawerHeight.value : 0)
-}
-
-function focusInput() {
-  nextTick(() => document.querySelector('.terminal-input')?.focus())
 }
 
 function handleKeydown(e) {
@@ -128,24 +243,49 @@ function handleKeydown(e) {
 
 watch(() => props.visible, (val) => {
   emitHeight()
-  if (val) focusInput()
+  if (val) ensureActiveTerminal()
 })
 
-watch(drawerHeight, emitHeight)
-watch(() => activeTab.value?.entries.length, () => {
-  nextTick(() => {
-    if (outputRef.value) outputRef.value.scrollTop = outputRef.value.scrollHeight
-  })
+watch(activeTabId, (newId, oldId) => {
+  if (terminalContainerRef.value) {
+    const wrappers = terminalContainerRef.value.querySelectorAll('.xterm-tab-wrapper')
+    wrappers.forEach(w => {
+      w.style.display = w.dataset.tabId === newId ? '' : 'none'
+    })
+  }
+  if (props.visible) {
+    nextTick(() => {
+      const tab = activeTab.value
+      if (tab?.xterm?.element) {
+        tab.fitAddon?.fit()
+        tab.xterm.focus()
+      } else {
+        ensureActiveTerminal()
+      }
+    })
+  }
 })
 
-onMounted(() => document.addEventListener('keydown', handleKeydown))
+watch(drawerHeight, () => {
+  emitHeight()
+  nextTick(() => fitTerminal())
+})
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+  emitHeight()
+  if (props.visible) ensureActiveTerminal()
+})
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
   emit('height-change', 0)
-  if (_resizeOnMove) {
-    window.removeEventListener('mousemove', _resizeOnMove)
-    window.removeEventListener('mouseup', _resizeOnUp)
+  if (resizeOnMove) {
+    window.removeEventListener('mousemove', resizeOnMove)
+    window.removeEventListener('mouseup', resizeOnUp)
+  }
+  for (const tab of tabs.value) {
+    closeTabConnection(tab)
   }
 })
 </script>
@@ -168,39 +308,20 @@ onBeforeUnmount(() => {
           @click="activeTabId = tab.id"
         >
           <span>{{ tab.title }}</span>
-          <span v-if="tab.executing" class="tab-running"></span>
+          <span v-if="tab.status === 'connecting'" class="tab-running"></span>
+          <span v-else class="tab-status" :class="`status-${tab.status}`"></span>
           <button class="tab-close" :disabled="tabs.length === 1" @click.stop="closeTab(tab.id)">×</button>
         </button>
         <button class="tab-add" title="New terminal" aria-label="New terminal" @click="addTab">+</button>
-        <button class="btn-clear" :disabled="activeTab?.executing" @click="clearActiveTab">Clear</button>
+        <button class="btn-clear" @click="clearActiveTab">Clear</button>
         <button class="btn-close" aria-label="Close terminal" @click="$emit('close')">×</button>
       </div>
-      <div class="terminal-env-banner" v-if="projectDir">
-        <span class="env-cwd">{{ projectDir }}</span>
-        <span v-if="gitBranch" class="env-branch">{{ gitBranch }}</span>
+      <div class="terminal-env-banner">
+        <span class="env-cwd">{{ terminalLocation }}</span>
+        <span v-if="activeTab?.shell" class="env-shell">{{ activeTab.shell }}</span>
+        <span class="env-status" :class="`status-text-${activeStatus}`">{{ activeStatus }}</span>
       </div>
-      <div class="terminal-output" ref="outputRef">
-        <div v-for="(entry, i) in activeTab.entries" :key="i" class="terminal-entry">
-          <div class="terminal-command">{{ promptStr }} {{ entry.command }}</div>
-          <div v-if="entry.stdout" class="terminal-stdout">{{ entry.stdout }}</div>
-          <div v-if="entry.stderr" class="terminal-stderr">{{ entry.stderr }}</div>
-          <div class="terminal-meta">
-            <span :class="entry.return_code === 0 ? 'rc-success' : 'rc-error'">exit {{ entry.return_code }}</span>
-            <span class="terminal-duration">{{ entry.duration_ms }}ms</span>
-          </div>
-        </div>
-        <div v-if="!activeTab.entries.length" class="terminal-empty">No commands executed in this terminal yet</div>
-      </div>
-      <div class="terminal-input-area">
-        <span class="terminal-prompt">{{ promptStr }}</span>
-        <input
-          class="terminal-input"
-          v-model="activeTab.commandInput"
-          :disabled="activeTab.executing"
-          :placeholder="activeTab.executing ? 'Executing...' : 'Type a command...'"
-          @keydown.enter="handleSubmit"
-        />
-      </div>
+      <div ref="terminalContainerRef" class="terminal-container"></div>
     </section>
   </transition>
 </template>
@@ -288,7 +409,7 @@ onBeforeUnmount(() => {
 .terminal-tab.active,
 .terminal-tab:hover,
 .tab-add:hover,
-.btn-clear:hover:not(:disabled),
+.btn-clear:hover,
 .btn-close:hover {
   background: var(--layer-active);
   border-color: var(--accent);
@@ -296,14 +417,24 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-sm);
 }
 
-.tab-running {
+.tab-running,
+.tab-status {
   width: 6px;
   height: 6px;
   border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.tab-running {
   background: var(--status-warning);
   box-shadow: 0 0 12px var(--status-warning-bg);
   animation: pulse 1.6s ease-in-out infinite;
 }
+
+.status-connected { background: var(--green); }
+.status-closed { background: var(--text-muted); }
+.status-error { background: var(--red); }
+.status-idle { background: var(--text-muted); }
 
 .tab-close {
   border: none;
@@ -330,11 +461,6 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
-.btn-clear:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 .terminal-env-banner {
   display: flex;
   align-items: center;
@@ -350,79 +476,28 @@ onBeforeUnmount(() => {
 }
 
 .env-cwd { color: var(--purple); font-weight: 500; }
-.env-branch { color: var(--green); font-weight: 500; }
+.env-shell { color: var(--green); }
+.env-status { margin-left: auto; }
+.status-text-error { color: var(--red); }
+.status-text-connected { color: var(--green); }
 
-.terminal-output {
+.terminal-container {
   flex: 1;
-  overflow-y: auto;
-  padding: 12px 16px;
+  min-height: 0;
   background: #090d14;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
+  padding: 4px;
 }
 
-.terminal-entry { margin-bottom: 12px; }
-.terminal-command { color: var(--green); font-weight: 500; }
-.terminal-stdout,
-.terminal-stderr { white-space: pre-wrap; word-break: break-all; }
-.terminal-stdout { color: var(--text-primary); }
-.terminal-stderr { color: var(--red); }
-.terminal-meta { margin-top: 2px; font-size: 10px; display: flex; gap: 8px; }
-.rc-success { color: var(--green); }
-.rc-error { color: var(--red); }
-.terminal-duration,
-.terminal-empty { color: var(--text-muted); }
-.terminal-empty { padding: 40px; text-align: center; }
-
-.terminal-input-area {
-  display: flex;
-  align-items: center;
-  padding: 9px 16px;
-  border-top: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  flex-shrink: 0;
-  gap: 8px;
+.terminal-container :deep(.xterm) {
+  height: 100%;
 }
 
-.terminal-prompt {
-  color: var(--green);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
+.terminal-container :deep(.xterm-viewport) {
+  overflow-y: auto !important;
 }
-
-.terminal-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  outline: none;
-}
-
-.terminal-input::placeholder { color: var(--text-muted); }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-@media (max-width: 768px) {
-  .terminal-dock {
-    left: 0;
-    right: 0;
-    border-left: none;
-    border-right: none;
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .tab-running {
-    animation: none;
-  }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
 }
 </style>

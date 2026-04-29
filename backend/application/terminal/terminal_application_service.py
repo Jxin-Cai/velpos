@@ -15,17 +15,26 @@ class TerminalApplicationService:
         self._terminal_gateway = terminal_gateway
 
     async def execute_command(self, command: ExecuteTerminalCommand) -> dict[str, Any]:
-        """Execute a shell command inside the container.
-
-        Delegates to the terminal gateway and returns the result dict
-        containing stdout, stderr, and exit_code.
-        """
         return await self._terminal_gateway.execute(
             command=command.command,
             timeout=command.timeout,
             cwd=command.cwd,
         )
 
+    async def create_pty(self, cwd: str | None = None, cols: int = 120, rows: int = 30) -> dict[str, Any]:
+        return await self._terminal_gateway.create_pty(cwd=cwd, cols=cols, rows=rows)
+
+    async def read_pty(self, terminal_id: str) -> str:
+        return await self._terminal_gateway.read_pty(terminal_id)
+
+    async def write_pty(self, terminal_id: str, data: str) -> None:
+        await self._terminal_gateway.write_pty(terminal_id, data)
+
+    async def resize_pty(self, terminal_id: str, cols: int, rows: int) -> None:
+        await self._terminal_gateway.resize_pty(terminal_id, cols, rows)
+
+    async def close_pty(self, terminal_id: str) -> None:
+        await self._terminal_gateway.close_pty(terminal_id)
+
     async def open_path(self, path: str) -> dict[str, Any]:
-        """Open a file or directory using the system default handler."""
         return await self._terminal_gateway.open_path(path)

@@ -4,6 +4,10 @@ defineProps({
     type: Boolean,
     default: false,
   },
+  active: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['click'])
@@ -12,6 +16,7 @@ const emit = defineEmits(['click'])
 <template>
   <button
     class="terminal-btn"
+    :class="{ active }"
     :disabled="disabled"
     @click="emit('click')"
     title="Terminal"
@@ -46,7 +51,8 @@ const emit = defineEmits(['click'])
     transform var(--transition-fast);
 }
 
-.terminal-btn:hover:not(:disabled) {
+.terminal-btn:hover:not(:disabled),
+.terminal-btn.active:not(:disabled) {
   background: var(--layer-active);
   color: var(--accent);
   border-color: var(--accent);
@@ -64,3 +70,4 @@ const emit = defineEmits(['click'])
 }
 
 </style>
+

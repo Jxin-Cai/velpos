@@ -130,6 +130,10 @@ class WorkspaceFileAtRefResponse(WorkspaceFileContentResponse):
     missing: bool = False
 
 
+class WorkspaceExportRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=200, description="Workspace file or directory paths to export")
+
+
 class GitBranchesResponse(BaseModel):
     current: str
     branches: list[str]

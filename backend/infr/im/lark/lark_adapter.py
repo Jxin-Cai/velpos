@@ -295,6 +295,7 @@ class LarkAdapter(ImChannelAdapter):
 
         if client is not None and ws_loop is not None and not ws_loop.is_closed():
             try:
+                setattr(client, "_velpos_expected_close", True)
                 future = asyncio.run_coroutine_threadsafe(client._disconnect(), ws_loop)
                 future.result(timeout=5)
             except Exception:
@@ -355,6 +356,10 @@ class LarkAdapter(ImChannelAdapter):
                     _loop.create_task(self_ws._handle_message(msg))
             except Exception as e:
                 from lark_oapi.core.log import logger as sdk_logger
+                if getattr(self_ws, "_velpos_expected_close", False) or "1000 (OK)" in str(e):
+                    sdk_logger.info(self_ws._fmt_log("receive message loop closed, err: {}", e))
+                    await self_ws._disconnect()
+                    return
                 sdk_logger.error(self_ws._fmt_log("receive message loop exit, err: {}", e))
                 await self_ws._disconnect()
                 if self_ws._auto_reconnect:

@@ -17,8 +17,12 @@ class SessionRunStepRepositoryImpl(SessionRunStepRepository):
         self._session = session
 
     async def save(self, step: SessionRunStep) -> None:
-        await self._session.merge(self._to_model(step))
-        await self._session.flush()
+        try:
+            await self._session.merge(self._to_model(step))
+            await self._session.flush()
+        except Exception:
+            await self._session.rollback()
+            raise
 
     async def find_by_run_id(self, session_id: str, run_id: str) -> list[SessionRunStep]:
         stmt = (
@@ -39,11 +43,22 @@ class SessionRunStepRepositoryImpl(SessionRunStepRepository):
             .order_by(SessionRunStepModel.started_time.desc())
             .limit(1)
         )
-        result = await self._session.execute(stmt)
+        try:
+            result = await self._session.execute(stmt)
+        except Exception:
+            await self._session.rollback()
+            raise
         return result.scalar_one_or_none() or ""
 
     async def commit(self) -> None:
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
 
     @staticmethod
     def _to_model(step: SessionRunStep) -> SessionRunStepModel:

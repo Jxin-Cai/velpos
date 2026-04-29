@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -429,6 +431,70 @@ class ProjectApplicationService:
                 "missing": True,
             }
         return self._workspace_content_response(rel_path, stdout)
+
+    async def export_workspace_selection(
+        self,
+        project_id: str,
+        paths: list[str],
+    ) -> tuple[str, bytes]:
+        project = await self.get_project(project_id)
+        root = Path(project.dir_path).resolve()
+        normalized_paths = [path.strip().strip("/") for path in paths if path and path.strip()]
+        if not normalized_paths:
+            raise BusinessException("No files selected", "NO_WORKSPACE_SELECTION")
+
+        targets: list[Path] = []
+        for path in normalized_paths:
+            target = self._resolve_workspace_path(root, path)
+            if not target.exists():
+                raise BusinessException(f"Workspace path not found: {path}", "WORKSPACE_PATH_NOT_FOUND")
+            targets.append(target)
+
+        def build_zip() -> bytes:
+            buffer = io.BytesIO()
+            written: set[str] = set()
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                for target in targets:
+                    if target.is_file():
+                        self._write_workspace_zip_file(root, target, archive, written)
+                    elif target.is_dir():
+                        if self._should_skip_workspace_path(root, target):
+                            continue
+                        rel_dir = target.relative_to(root).as_posix().rstrip("/")
+                        if rel_dir and rel_dir not in written:
+                            archive.writestr(f"{rel_dir}/", b"")
+                            written.add(rel_dir)
+                        for child in target.rglob("*"):
+                            if child.is_file():
+                                self._write_workspace_zip_file(root, child, archive, written)
+            return buffer.getvalue()
+
+        content = await asyncio.to_thread(build_zip)
+        if not content:
+            raise BusinessException("Selected paths contain no files", "EMPTY_WORKSPACE_SELECTION")
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", project.name).strip("-._") or "workspace"
+        return f"{safe_name}-export.zip", content
+
+    def _should_skip_workspace_path(self, root: Path, path: Path) -> bool:
+        return any(part in {".git", "node_modules", "__pycache__", ".venv", "dist"} for part in path.relative_to(root).parts)
+
+    def _write_workspace_zip_file(
+        self,
+        root: Path,
+        path: Path,
+        archive: zipfile.ZipFile,
+        written: set[str],
+    ) -> None:
+        resolved = path.resolve()
+        if not self._is_inside_project(root, resolved):
+            return
+        rel_path = resolved.relative_to(root).as_posix()
+        if self._should_skip_workspace_path(root, resolved):
+            return
+        if rel_path in written:
+            return
+        archive.write(resolved, rel_path)
+        written.add(rel_path)
 
     def _workspace_content_response(self, rel_path: str, raw: bytes) -> dict[str, Any]:
         max_size = 200_000

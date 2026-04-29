@@ -40,8 +40,11 @@ export function listModels() {
   return get('/sessions/meta/models')
 }
 
-export function listSessionArtifacts(sessionId) {
-  return get(`/sessions/${sessionId}/artifacts`)
+export function fetchSessionTimelineEvents(sessionId, limit = 500, eventTypes = []) {
+  const query = new URLSearchParams()
+  query.set('limit', String(limit))
+  if (eventTypes.length) query.set('event_types', eventTypes.join(','))
+  return get(`/sessions/${sessionId}/timeline-events?${query.toString()}`)
 }
 
 export function compactSession(sessionId) {

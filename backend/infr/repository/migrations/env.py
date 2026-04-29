@@ -30,6 +30,7 @@ import infr.repository.scheduled_task_model  # noqa: F401
 import infr.repository.session_audit_event_model  # noqa: F401
 import infr.repository.session_branch_model  # noqa: F401
 import infr.repository.session_run_step_model  # noqa: F401
+import infr.repository.session_timeline_event_model  # noqa: F401
 import infr.repository.im_binding_model  # noqa: F401
 import infr.repository.channel_profile_model  # noqa: F401
 import infr.repository.project_model  # noqa: F401

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 
 from application.project.command.create_project_command import CreateProjectCommand
 from application.project.command.init_plugin_command import InitPluginCommand
@@ -28,6 +30,7 @@ from ohs.http.dto.project_dto import (
     ResetPluginRequest,
     WorkspaceFileContentResponse,
     WorkspaceFileDiffResponse,
+    WorkspaceExportRequest,
     WorkspaceFileAtRefResponse,
     WorkspaceFileHistoryItemResponse,
     WorkspaceFileHistoryResponse,
@@ -201,6 +204,20 @@ async def read_workspace_file_at_ref(
 ) -> ApiResponse[WorkspaceFileAtRefResponse]:
     data = await service.read_workspace_file_at_ref(project_id, path, ref)
     return ApiResponse.success(WorkspaceFileAtRefResponse(**data))
+
+
+@router.post("/{project_id}/workspace/export", summary="Export selected workspace files")
+async def export_workspace_selection(
+    project_id: str,
+    request: WorkspaceExportRequest,
+    service: ServiceDep,
+) -> StreamingResponse:
+    filename, content = await service.export_workspace_selection(project_id, request.paths)
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{project_id}/git/branches", summary="List git branches")

@@ -12,18 +12,12 @@ defineProps({
     <div class="thinking-bar">
       <div class="bar-fill"></div>
     </div>
-    <span class="thinking-text">Claude is working...</span>
   </div>
 </template>
 
 <style scoped>
 .thinking-indicator {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 0;
-  color: var(--text-muted);
-  font-size: 12px;
+  padding: 0;
 }
 
 .thinking-bar {
@@ -44,11 +38,5 @@ defineProps({
 @keyframes slide {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(350%); }
-}
-
-.thinking-text {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.3px;
 }
 </style>

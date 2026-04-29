@@ -242,6 +242,26 @@ class Session:
 
         return prompt
 
+    def rewind_to(self, user_message_index: int) -> str:
+        """Rewind to the specified user message index (removes it and everything after).
+
+        Requires IDLE status. Returns the removed user message's prompt text.
+        Raises ValueError if not IDLE or index is invalid.
+        """
+        if self._status != SessionStatus.IDLE:
+            raise ValueError("Session must be idle to rewind")
+        from domain.session.model.message_type import MessageType
+        if user_message_index < 0 or user_message_index >= len(self._messages):
+            raise ValueError(f"Invalid message index: {user_message_index}")
+        msg = self._messages[user_message_index]
+        if msg.message_type != MessageType.USER:
+            raise ValueError(f"Message at index {user_message_index} is not a user message")
+        prompt = msg.content.get("text", "")
+        self._messages = self._messages[:user_message_index]
+        self._continue_conversation = True
+        self._updated_time = datetime.now()
+        return prompt
+
     def fail_query(self, error_message: str) -> None:
         """Transition status from RUNNING to ERROR.
 
@@ -404,27 +424,30 @@ class Session:
             raise ValueError("Cannot compact: session is not idle")
         self._status = SessionStatus.COMPACTING
 
-    def complete_compact(self, messages: list[Message], usage: Usage) -> None:
+    def complete_compact(self, usage: Usage) -> None:
         """Complete the compact operation.
 
         Transitions status from COMPACTING to IDLE.
-        Replaces _messages with the provided messages.
+        Appends a compact marker message (preserving full history).
         Replaces _usage with the provided usage.
         Sets _continue_conversation to True.
         Updates _updated_time to the current time.
 
         Only allowed from COMPACTING state.
         Raises ValueError if session is not compacting.
-        Raises ValueError if messages is None.
         Raises ValueError if usage is None.
         """
         if self._status != SessionStatus.COMPACTING:
             raise ValueError("Session is not compacting")
-        if messages is None:
-            raise ValueError("messages must not be None")
         if usage is None:
             raise ValueError("usage must not be None")
-        self._messages = list(messages)
+        from domain.session.model.message_type import MessageType
+
+        marker = Message.create(
+            message_type=MessageType.SYSTEM,
+            content={"subtype": "── Conversation compacted ──", "marker": "compact"},
+        )
+        self._messages.append(marker)
         self._usage = usage
         self._continue_conversation = True
         self._status = SessionStatus.IDLE

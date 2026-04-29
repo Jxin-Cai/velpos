@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { downloadWorkspaceSelection } from '@entities/project/api/projectApi'
 import hljs from 'highlight.js/lib/common'
 import { useGlobalHotkeys } from '../../../shared/lib/useGlobalHotkeys'
 import { useWorkspace } from '../model/useWorkspace'
@@ -43,6 +44,11 @@ const versionCursor = ref(0)
 const versionContents = ref({})
 const diffCursor = ref(-1)
 const historyRows = ref([])
+const selectedNodeKeys = ref(new Set())
+const lastSelectedRowIndex = ref(-1)
+const exportLoading = ref(false)
+const copyStatus = ref('')
+let copyStatusTimer = null
 let historyTransitionTimer = null
 let historyAnchorFrame = null
 
@@ -55,7 +61,17 @@ const drawerWidth = computed(() => {
   return contentOpen.value ? 900 : 360
 })
 
-const treeRows = computed(() => flattenTree(buildTree(files.value), expandedDirs.value))
+const treeNodes = computed(() => buildTree(files.value))
+const treeRows = computed(() => flattenTree(treeNodes.value, expandedDirs.value))
+const selectedNodes = computed(() => collectSelectedNodes(treeNodes.value, selectedNodeKeys.value))
+const selectedPaths = computed(() => selectedNodes.value.map((node) => node.path).filter(Boolean))
+const hasWorkspaceSelection = computed(() => selectedPaths.value.length > 0)
+const selectionSummary = computed(() => {
+  const count = selectedPaths.value.length
+  if (count === 0) return 'No selection'
+  if (count === 1) return selectedPaths.value[0]
+  return `${count} items selected`
+})
 const versionNodes = computed(() => {
   if (!selectedFile.value) return []
   const currentLabel = selectedDiff.value?.patch ? 'Uncommitted' : 'Current'
@@ -89,13 +105,15 @@ const compareToTitle = computed(() => formatVersionTitle(compareToNode.value, 'C
 watch(() => props.visible, (visible) => {
   emitWidth()
   if (visible && projectId.value) refreshFiles()
-  if (!visible) {
-    closeContent()
-  }
 })
 
-watch(projectId, () => {
-  if (props.visible && projectId.value) refreshFiles()
+watch(projectId, (newProjectId, oldProjectId) => {
+  if (newProjectId !== oldProjectId) {
+    resetContentState()
+    clearWorkspaceSelection()
+    clearSelection()
+  }
+  if (props.visible && newProjectId) refreshFiles()
 })
 
 watch(drawerWidth, emitWidth)
@@ -123,7 +141,89 @@ async function selectFile(path) {
   emitWidth()
 }
 
-function closeContent() {
+function setSelectedNodeKeys(keys) {
+  selectedNodeKeys.value = new Set(keys)
+}
+
+function handleTreeRowClick(node, index, event) {
+  const currentKeys = selectedNodeKeys.value
+  if (event.shiftKey && lastSelectedRowIndex.value >= 0) {
+    const start = Math.min(lastSelectedRowIndex.value, index)
+    const end = Math.max(lastSelectedRowIndex.value, index)
+    const next = new Set(currentKeys)
+    for (let i = start; i <= end; i += 1) {
+      const row = treeRows.value[i]
+      if (row?.path) next.add(row.key)
+    }
+    setSelectedNodeKeys(next)
+  } else if (event.metaKey || event.ctrlKey) {
+    const next = new Set(currentKeys)
+    if (next.has(node.key)) next.delete(node.key)
+    else next.add(node.key)
+    setSelectedNodeKeys(next)
+    lastSelectedRowIndex.value = index
+  } else {
+    setSelectedNodeKeys(node.path ? [node.key] : [])
+    lastSelectedRowIndex.value = index
+  }
+
+  if (node.type === 'file' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+    selectFile(node.path)
+  }
+}
+
+function clearWorkspaceSelection() {
+  setSelectedNodeKeys([])
+  lastSelectedRowIndex.value = -1
+}
+
+function selectedAbsolutePaths() {
+  const root = (props.project?.dir_path || '').replace(/\/$/, '')
+  return selectedPaths.value.map((path) => (root ? `${root}/${path}` : path))
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`
+}
+
+function showCopyStatus(message) {
+  copyStatus.value = message
+  if (copyStatusTimer) clearTimeout(copyStatusTimer)
+  copyStatusTimer = setTimeout(() => { copyStatus.value = '' }, 1600)
+}
+
+async function copyText(text, message) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    showCopyStatus(message)
+  } catch (e) {
+    showCopyStatus(e.message || 'Copy failed')
+  }
+}
+
+async function copySelectedPaths() {
+  await copyText(selectedAbsolutePaths().join('\n'), 'Paths copied')
+}
+
+async function copySelectedCpCommand() {
+  const sources = selectedAbsolutePaths().map(shellQuote).join(' ')
+  await copyText(`cp -R ${sources} ./`, 'cp command copied')
+}
+
+async function downloadSelectionZip() {
+  if (!projectId.value || !hasWorkspaceSelection.value || exportLoading.value) return
+  exportLoading.value = true
+  try {
+    await downloadWorkspaceSelection(projectId.value, selectedPaths.value)
+  } catch (e) {
+    showCopyStatus(e.message || 'Export failed')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
+function resetContentState() {
   contentOpen.value = false
   contentFullscreen.value = false
   compareMode.value = false
@@ -134,6 +234,10 @@ function closeContent() {
   pendingSelection.value = null
   reviewComment.value = ''
   reviews.value = []
+}
+
+function closeContent() {
+  resetContentState()
   clearSelection()
   emitWidth()
 }
@@ -194,6 +298,16 @@ function flattenTree(nodes, expanded) {
   }
   for (const node of nodes) visit(node)
   return rows
+}
+
+function collectSelectedNodes(nodes, keys) {
+  const selected = []
+  function visit(node) {
+    if (keys.has(node.key) && node.path) selected.push(node)
+    for (const child of node.children || []) visit(child)
+  }
+  for (const node of nodes) visit(node)
+  return selected
 }
 
 function toggleDir(node) {
@@ -366,7 +480,14 @@ function startHistoryTransition(previousContent, nextContent, anchor) {
 }
 
 function handleKeydown(event) {
-  if (event.key === 'Escape' && props.visible) {
+  if (!props.visible) return
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c' && hasWorkspaceSelection.value) {
+    if (isEditableTarget(event.target) || window.getSelection()?.toString()) return
+    event.preventDefault()
+    copySelectedPaths().catch(() => {})
+    return
+  }
+  if (event.key === 'Escape') {
     emit('close')
   }
 }
@@ -377,6 +498,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
+  if (copyStatusTimer) clearTimeout(copyStatusTimer)
   clearHistoryTransition()
 })
 
@@ -605,7 +727,7 @@ function nextDifference() {
 <template>
   <Teleport to="body">
     <Transition name="workspace-slide">
-      <aside v-if="visible" class="workspace-drawer" role="dialog" aria-label="Workspace files">
+      <aside v-show="visible" class="workspace-drawer" role="dialog" aria-label="Workspace files">
         <header class="workspace-header">
           <div>
             <h2>Workspace</h2>
@@ -623,19 +745,33 @@ function nextDifference() {
           <button class="secondary-btn" :disabled="loading" @click="refreshFiles">Refresh</button>
         </div>
 
+        <div v-if="hasWorkspaceSelection" class="selection-toolbar">
+          <span class="selection-summary" :title="selectionSummary">{{ selectionSummary }}</span>
+          <div class="selection-actions">
+            <button class="secondary-btn" :disabled="exportLoading" @click="downloadSelectionZip">
+              {{ exportLoading ? 'Exporting...' : 'Download Zip' }}
+            </button>
+            <button class="secondary-btn" @click="copySelectedPaths">Copy paths</button>
+            <button class="secondary-btn" @click="copySelectedCpCommand">Copy cp</button>
+            <button class="icon-btn small-icon" aria-label="Clear selection" @click="clearWorkspaceSelection">×</button>
+          </div>
+          <span v-if="copyStatus" class="copy-status">{{ copyStatus }}</span>
+        </div>
+
         <div v-if="loading" class="workspace-empty">Loading files...</div>
         <div v-else-if="error" class="workspace-error">{{ error }}</div>
         <div v-else-if="!treeRows.length" class="workspace-empty">No files</div>
         <div v-else class="tree-list">
           <button
-            v-for="node in treeRows"
+            v-for="(node, index) in treeRows"
             :key="node.key"
             class="tree-row"
-            :class="{ active: selectedFile?.path === node.path, changed: node.is_changed }"
+            :class="{ active: selectedFile?.path === node.path, selected: selectedNodeKeys.has(node.key), changed: node.is_changed }"
             :style="{ paddingLeft: `${12 + node.depth * 14}px` }"
-            @click="node.type === 'dir' ? toggleDir(node) : selectFile(node.path)"
+            @click="handleTreeRowClick(node, index, $event)"
+            @dblclick="node.type === 'dir' && toggleDir(node)"
           >
-            <span v-if="node.type === 'dir'" class="tree-caret">{{ expandedDirs.has(node.key) ? '▾' : '▸' }}</span>
+            <span v-if="node.type === 'dir'" class="tree-caret" @click.stop="toggleDir(node)">{{ expandedDirs.has(node.key) ? '▾' : '▸' }}</span>
             <span v-else class="tree-caret"></span>
             <span class="tree-icon">{{ node.type === 'dir' ? 'dir' : 'file' }}</span>
             <span class="tree-name">{{ node.name }}</span>
@@ -647,7 +783,8 @@ function nextDifference() {
 
     <Transition name="content-slide">
       <section
-        v-if="contentOpen && selectedFile"
+        v-if="selectedFile"
+        v-show="visible && contentOpen"
         class="file-content-panel"
         :class="{ fullscreen: contentFullscreen }"
         aria-label="File content"
@@ -902,6 +1039,37 @@ function nextDifference() {
   outline: none;
 }
 
+.selection-toolbar {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  flex-shrink: 0;
+}
+
+.selection-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.copy-status {
+  color: var(--accent);
+  font-size: 11px;
+}
+
 .tree-list {
   flex: 1;
   overflow: auto;
@@ -923,9 +1091,14 @@ function nextDifference() {
 }
 
 .tree-row:hover,
-.tree-row.active {
+.tree-row.active,
+.tree-row.selected {
   background: var(--layer-active);
   color: var(--text-primary);
+}
+
+.tree-row.selected {
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .tree-row.changed .tree-name {

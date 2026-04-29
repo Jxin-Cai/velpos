@@ -13,7 +13,7 @@ class ClaudeAgentGateway(ABC):
         model: str,
         prompt: str,
         cwd: str = "",
-        sdk_session_id: str = "",
+        sdk_session_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Connect to Claude and send initial query, returning a persistent message stream.
 
@@ -26,9 +26,11 @@ class ClaudeAgentGateway(ABC):
             model: Claude model name.
             prompt: Initial user prompt text.
             cwd: Working directory for Claude Agent SDK.
-            sdk_session_id: Previous SDK session UUID for resume support. A value in
-                the form fork:<sdk-session-id> means the connection should fork from
-                that source Claude Code session before running the prompt.
+            sdk_session_id: Resume selector. None means gateway may use its in-memory
+                cache; an empty string forces a fresh Claude Code session; a real UUID
+                resumes that session. A value in the form fork:<sdk-session-id> means
+                the connection should fork from that source Claude Code session before
+                running the prompt.
 
         Yields:
             dict with message_type, content, and optionally input_tokens/output_tokens
@@ -108,7 +110,7 @@ class ClaudeAgentGateway(ABC):
         session_id: str,
         model: str,
         cwd: str = "",
-        sdk_session_id: str = "",
+        sdk_session_id: str | None = None,
     ) -> None:
         """Open a persistent SDK connection without sending a query.
 
@@ -119,9 +121,11 @@ class ClaudeAgentGateway(ABC):
             session_id: Session identifier for client lifecycle management.
             model: Claude model name.
             cwd: Working directory for Claude Agent SDK.
-            sdk_session_id: Previous SDK session UUID for resume support. A value in
-                the form fork:<sdk-session-id> means the connection should fork from
-                that source Claude Code session before running the prompt.
+            sdk_session_id: Resume selector. None means gateway may use its in-memory
+                cache; an empty string forces a fresh Claude Code session; a real UUID
+                resumes that session. A value in the form fork:<sdk-session-id> means
+                the connection should fork from that source Claude Code session before
+                running the prompt.
         """
         ...
 
@@ -162,7 +166,7 @@ class ClaudeAgentGateway(ABC):
         pass
 
     @abstractmethod
-    async def compact(self, session_id: str) -> dict[str, Any]:
+    async def compact(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
         """Compact session context via Claude Agent SDK.
 
         Calls the SDK compact functionality to reduce session token usage.
@@ -171,11 +175,8 @@ class ClaudeAgentGateway(ABC):
         Args:
             session_id: Session identifier.
 
-        Returns:
-            dict with keys:
-                - messages: list[dict] -- compacted message list, each with
-                  message_type and content keys
-                - usage: dict with input_tokens and output_tokens
+        Yields:
+            dict with message_type, content, usage fields, and optionally sdk_session_id.
 
         Raises:
             RuntimeError: If no SDK client is connected for the session.
