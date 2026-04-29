@@ -12,7 +12,7 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
     <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" /></noscript>
     <style>
-      /* Splash screen — pure CSS, zero JS dependency */
+      /* Splash screen — cinematic launch experience */
       .vp-splash {
         position: fixed;
         inset: 0;
@@ -20,78 +20,184 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 24px;
-        background: #282c34;
+        gap: 28px;
+        background: radial-gradient(ellipse 80% 60% at 50% 40%, #1a1d2e, #090d14);
         z-index: 9999;
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
-        transition: opacity 0.3s ease;
+        opacity: 1;
+        transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        overflow: hidden;
       }
       .vp-splash.fade-out {
         opacity: 0;
         pointer-events: none;
       }
+
+      /* Ambient light rays behind logo */
+      .vp-splash::before {
+        content: '';
+        position: absolute;
+        width: 420px;
+        height: 420px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(97, 175, 239, 0.08) 0%, rgba(198, 120, 221, 0.06) 40%, transparent 70%);
+        animation: vp-ambient 4s ease-in-out infinite alternate;
+      }
+      .vp-splash::after {
+        content: '';
+        position: absolute;
+        width: 600px;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(97, 175, 239, 0.15), rgba(198, 120, 221, 0.12), transparent);
+        animation: vp-scanline 3s ease-in-out infinite;
+        top: 50%;
+      }
+
       .vp-splash-logo {
+        position: relative;
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 16px;
+        animation: vp-logo-enter 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
       }
       .vp-splash-icon {
-        font-family: 'JetBrains Mono', ui-monospace, monospace;
-        font-weight: 700;
-        font-size: 18px;
-        color: #282c34;
-        background: linear-gradient(135deg, #61afef, #c678dd);
-        padding: 6px 10px;
-        border-radius: 6px;
-        letter-spacing: 1px;
+        width: 52px;
+        height: 52px;
+        filter: drop-shadow(0 0 20px rgba(97, 175, 239, 0.3)) drop-shadow(0 0 40px rgba(167, 139, 250, 0.15));
+        animation: vp-crystal-breathe 3s ease-in-out infinite;
       }
       .vp-splash-text {
         font-weight: 600;
-        font-size: 18px;
-        color: #abb2bf;
-        letter-spacing: -0.3px;
+        font-size: 22px;
+        color: #e2e8f0;
+        letter-spacing: -0.5px;
+        background: linear-gradient(135deg, #e2e8f0 0%, #a78bfa 50%, #61afef 100%);
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: vp-text-shimmer 4s ease-in-out infinite;
       }
+
+      /* Loader — dual-ring orbital */
       .vp-splash-loader {
-        width: 120px;
-        height: 2px;
-        background: #3e4451;
-        border-radius: 2px;
-        overflow: hidden;
+        position: relative;
+        width: 48px;
+        height: 48px;
+        animation: vp-fade-in 0.6s ease-out 0.3s both;
       }
-      .vp-splash-loader-bar {
-        width: 40%;
-        height: 100%;
-        background: linear-gradient(90deg, #61afef, #c678dd);
-        border-radius: 2px;
-        animation: vp-slide 1.2s ease-in-out infinite;
+      .vp-splash-loader::before,
+      .vp-splash-loader::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 2px solid transparent;
       }
-      @keyframes vp-slide {
-        0% { transform: translateX(-100%); }
-        50% { transform: translateX(200%); }
-        100% { transform: translateX(-100%); }
+      .vp-splash-loader::before {
+        border-top-color: #61afef;
+        border-right-color: rgba(97, 175, 239, 0.3);
+        animation: vp-orbit 1.2s linear infinite;
       }
+      .vp-splash-loader::after {
+        inset: 6px;
+        border-bottom-color: #a78bfa;
+        border-left-color: rgba(167, 139, 250, 0.3);
+        animation: vp-orbit 1.8s linear infinite reverse;
+      }
+
+      /* Subtle tagline */
+      .vp-splash-tagline {
+        font-size: 11px;
+        color: rgba(171, 178, 191, 0.5);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        animation: vp-fade-in 0.6s ease-out 0.5s both;
+      }
+
+      @keyframes vp-logo-enter {
+        from { opacity: 0; transform: translateY(16px) scale(0.92); filter: blur(4px); }
+        to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+      }
+      @keyframes vp-fade-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes vp-crystal-breathe {
+        0%, 100% { transform: scale(1) rotate(0deg); filter: drop-shadow(0 0 20px rgba(97, 175, 239, 0.3)) drop-shadow(0 0 40px rgba(167, 139, 250, 0.15)); }
+        50% { transform: scale(1.04) rotate(1deg); filter: drop-shadow(0 0 28px rgba(97, 175, 239, 0.45)) drop-shadow(0 0 56px rgba(167, 139, 250, 0.25)); }
+      }
+      @keyframes vp-text-shimmer {
+        0%, 100% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+      }
+      @keyframes vp-orbit {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes vp-ambient {
+        from { transform: scale(1); opacity: 0.6; }
+        to { transform: scale(1.15); opacity: 1; }
+      }
+      @keyframes vp-scanline {
+        0%, 100% { opacity: 0; transform: translateY(-40px); }
+        50% { opacity: 1; transform: translateY(40px); }
+      }
+
       /* Respect user theme preference for splash */
       @media (prefers-color-scheme: light) {
-        .vp-splash { background: #ffffff; }
-        .vp-splash-icon { color: #ffffff; }
-        .vp-splash-text { color: #18181b; }
-        .vp-splash-loader { background: #e4e4e7; }
+        .vp-splash { background: radial-gradient(ellipse 80% 60% at 50% 40%, #f0f4ff, #f8f9fc); }
+        .vp-splash-text { color: #1e1e2e; -webkit-text-fill-color: unset; background: none; }
+        .vp-splash::before { background: radial-gradient(circle, rgba(97, 175, 239, 0.05) 0%, rgba(198, 120, 221, 0.04) 40%, transparent 70%); }
+        .vp-splash::after { background: linear-gradient(90deg, transparent, rgba(97, 175, 239, 0.08), rgba(198, 120, 221, 0.06), transparent); }
+        .vp-splash-loader::before { border-top-color: #3b82f6; border-right-color: rgba(59, 130, 246, 0.3); }
+        .vp-splash-loader::after { border-bottom-color: #8b5cf6; border-left-color: rgba(139, 92, 246, 0.3); }
+        .vp-splash-tagline { color: rgba(30, 30, 46, 0.4); }
+      }
+
+      /* Reduce motion for accessibility */
+      @media (prefers-reduced-motion: reduce) {
+        .vp-splash-icon, .vp-splash::before, .vp-splash::after { animation: none; }
+        .vp-splash-loader::before, .vp-splash-loader::after { animation-duration: 3s; }
+        .vp-splash-text { animation: none; }
       }
     </style>
   </head>
   <body>
-    <div id="app">
-      <!-- Splash screen: visible until Vue mounts and replaces #app content -->
-      <div class="vp-splash" id="vp-splash">
-        <div class="vp-splash-logo">
-          <span class="vp-splash-icon">VP</span>
-          <span class="vp-splash-text">Velpos</span>
-        </div>
-        <div class="vp-splash-loader">
-          <div class="vp-splash-loader-bar"></div>
-        </div>
+    <!-- Splash screen: lives outside #app so Vue mount doesn't destroy it -->
+    <div class="vp-splash" id="vp-splash">
+      <div class="vp-splash-logo">
+        <svg class="vp-splash-icon" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="sfl" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#4a9eff"/>
+              <stop offset="100%" stop-color="#a78bfa"/>
+            </linearGradient>
+            <linearGradient id="sfr" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#a78bfa"/>
+              <stop offset="100%" stop-color="#c084fc"/>
+            </linearGradient>
+            <linearGradient id="sfb" x1="0%" y1="100%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#3b5998"/>
+              <stop offset="100%" stop-color="#7c3aed"/>
+            </linearGradient>
+            <linearGradient id="sft" x1="50%" y1="0%" x2="50%" y2="100%">
+              <stop offset="0%" stop-color="#c4b5fd"/>
+              <stop offset="100%" stop-color="#a78bfa"/>
+            </linearGradient>
+          </defs>
+          <polygon fill="url(#sfl)" points="256,56 108,200 148,400 256,296"/>
+          <polygon fill="url(#sfr)" points="256,56 404,200 364,400 256,296"/>
+          <polygon fill="url(#sfb)" points="148,400 256,456 256,296"/>
+          <polygon fill="#7c3aed" opacity="0.8" points="364,400 256,456 256,296"/>
+          <polygon fill="url(#sft)" opacity="0.5" points="256,56 200,148 256,180 312,148"/>
+          <line x1="256" y1="80" x2="256" y2="440" stroke="#67e8f9" stroke-width="3" opacity="0.9"/>
+        </svg>
+        <span class="vp-splash-text">Velpos</span>
       </div>
+      <div class="vp-splash-loader"></div>
+      <span class="vp-splash-tagline">Agent Control Interface</span>
     </div>
+    <div id="app"></div>
     <script type="module" src="/src/app/main.js"></script>
   </body>
 </html>

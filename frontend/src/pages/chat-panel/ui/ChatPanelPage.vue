@@ -2,10 +2,10 @@
 import { ref, computed, inject, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useDialogManager } from '@shared/lib/useDialogManager'
-import { useSession, listModels, listSessionArtifacts, createSessionBranch, listSessionBranches, compareSessions, convergeSessionBranches } from '@entities/session'
+import { useSession, listModels, createSessionBranch, listSessionBranches, compareSessions, convergeSessionBranches } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, useSendMessage } from '@features/send-message'
-import { CancelButton, useCancelQuery } from '@features/cancel-query'
+import { useCancelQuery } from '@features/cancel-query'
 import { MessageList, ThinkingIndicator } from '@features/message-display'
 import { ClearContextButton, useClearContext } from '@features/clear-context'
 import { CommandPaletteButton, CommandPalettePopover, useCommandPalette } from '@features/command-palette'
@@ -23,6 +23,7 @@ import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 const {
   session, messages, status, queued, waitingForSlot, recovery, currentSessionId,
   queryHistory, setCurrentSessionId, updateSession, setError, addSession,
+  restoredPrompt, setRestoredPrompt,
 } = useSession()
 const { projects, updateProjectInList } = useProject()
 
@@ -54,17 +55,31 @@ function toggleDebug() {
   localStorage.setItem('pf_debug_mode', debugMode.value)
 }
 
-// Filter messages: when debug is off, hide tool_use blocks, tool_result messages, and system messages
-// Exception: keep TodoWrite tool_use blocks — they render as visual progress
+function isTodoWriteBlock(block) {
+  return block?.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos
+}
+
+const latestTodoWriteBlock = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const blocks = messages.value[i]?.content?.blocks || []
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      if (isTodoWriteBlock(blocks[j])) return blocks[j]
+    }
+  }
+  return null
+})
+
 const displayMessages = computed(() => {
   if (debugMode.value) return messages.value
+  const currentPlanBlock = latestTodoWriteBlock.value
   return messages.value
-    .filter(msg => msg.type !== 'tool_result' && msg.type !== 'system')
+    .filter(msg => msg.type !== 'tool_result' && (msg.type !== 'system' || msg.content?.marker === 'compact'))
     .map(msg => {
       if (msg.type === 'assistant' && msg.content?.blocks) {
         const filtered = msg.content.blocks.filter(
           b => b.type !== 'tool_result'
-            && (b.type !== 'tool_use' || (b.name === 'TodoWrite' && b.input?.todos))
+            && b.type !== 'thinking'
+            && (b.type !== 'tool_use' || b === currentPlanBlock)
         )
         if (filtered.length === 0) return null
         return { ...msg, content: { ...msg.content, blocks: filtered } }
@@ -97,6 +112,8 @@ const {
 
 const messageInputRef = ref(null)
 const canceling = ref(false)
+const lastEscAt = ref(0)
+const showRewindPicker = ref(false)
 const showMediaMenu = ref(false)
 const videoEl = ref(null)
 const showVideoPreview = ref(false)
@@ -241,8 +258,6 @@ watch(currentSessionId, (newId) => {
     fetchImStatus(newId)
     fetchImChannels()
     invalidateCmdCache()
-    showArtifacts.value = false
-    artifacts.value = []
   }
 })
 
@@ -258,32 +273,29 @@ function handleImPrompt(prompt) {
 
 // History popover
 const showHistory = ref(false)
-const showArtifacts = ref(false)
-const artifacts = ref([])
-const artifactLoading = ref(false)
+const usageBtnRef = ref(null)
+const historyPanelPos = ref({ left: 0, bottom: 0 })
 useDialog('history', showHistory)
 
-async function handleArtifactsClick() {
-  showArtifacts.value = !showArtifacts.value
-  showHistory.value = false
+function toggleUsagePanel() {
   showModelMenu.value = false
   showPermMenu.value = false
-  if (!showArtifacts.value || !currentSessionId.value) return
-  artifactLoading.value = true
-  try {
-    const res = await listSessionArtifacts(currentSessionId.value)
-    artifacts.value = res?.artifacts || []
-  } catch {
-    artifacts.value = []
-  } finally {
-    artifactLoading.value = false
+  showHistory.value = !showHistory.value
+  if (showHistory.value && usageBtnRef.value) {
+    const rect = usageBtnRef.value.getBoundingClientRect()
+    historyPanelPos.value = {
+      left: rect.left,
+      bottom: window.innerHeight - rect.top + 8,
+    }
   }
 }
 
-function handleArtifactOpen(path) {
-  openPath(path)
-  showArtifacts.value = false
-}
+const historyPanelStyle = computed(() => ({
+  position: 'fixed',
+  left: historyPanelPos.value.left + 'px',
+  bottom: historyPanelPos.value.bottom + 'px',
+  zIndex: 9999,
+}))
 
 function formatDuration(ms) {
   if (!ms) return '-'
@@ -302,6 +314,7 @@ function formatCacheHit(usage) {
   if (input <= 0) return '0.00%'
   return `${((cacheRead / input) * 100).toFixed(2)}%`
 }
+
 
 const totalUsage = computed(() => {
   // Context = last query's input_tokens (= current context window size, not cumulative)
@@ -340,11 +353,29 @@ function handleModelSelect(modelValue) {
 // Permission mode switching
 const showPermMenu = ref(false)
 const currentPermMode = ref('bypassPermissions')
+let _permSyncedForSession = null
 
-// Sync permission mode from backend when session changes
+function _permStorageKey(sessionId) {
+  return sessionId ? `pf_perm_mode_${sessionId}` : null
+}
+
+// localStorage is authoritative (user's explicit choice).
+// Backend value is only used as seed when no local record exists.
 watch(session, (s) => {
-  if (s?.permission_mode) {
+  if (!s) return
+  const key = _permStorageKey(s.session_id)
+  const stored = key && localStorage.getItem(key)
+  if (stored) {
+    if (currentPermMode.value !== stored) {
+      currentPermMode.value = stored
+    }
+    if (_permSyncedForSession !== s.session_id && wsConnection.value) {
+      wsConnection.value.send({ action: 'set_permission_mode', mode: stored })
+      _permSyncedForSession = s.session_id
+    }
+  } else if (s.permission_mode) {
     currentPermMode.value = s.permission_mode
+    if (key) localStorage.setItem(key, s.permission_mode)
   }
 }, { immediate: true })
 const permModes = [
@@ -372,6 +403,8 @@ function getPermColorClass(value) {
 function handlePermSelect(mode) {
   showPermMenu.value = false
   currentPermMode.value = mode
+  const key = _permStorageKey(currentSessionId.value)
+  if (key) localStorage.setItem(key, mode)
   if (wsConnection.value) {
     wsConnection.value.send({ action: 'set_permission_mode', mode })
   }
@@ -420,7 +453,22 @@ useGlobalHotkeys({
       showProjectCopyMenu.value = false
       return false
     }
-    // 让事件继续传播，可能需要关闭其他弹窗或取消查询
+    if (showRewindPicker.value) {
+      showRewindPicker.value = false
+      return false
+    }
+    const now = Date.now()
+    if (isRunning.value) {
+      handleCancel()
+      lastEscAt.value = now
+      return false
+    }
+    if (now - lastEscAt.value < 900) {
+      lastEscAt.value = 0
+      showRewindPicker.value = !showRewindPicker.value
+      return false
+    }
+    lastEscAt.value = now
     return true
   },
   priority: 10 // 高于全局拦截器的优先级
@@ -487,6 +535,13 @@ watch(isRunning, (running) => {
   if (!running) canceling.value = false
 })
 
+watch(restoredPrompt, (prompt) => {
+  if (prompt && messageInputRef.value) {
+    messageInputRef.value.setInput(prompt)
+    setRestoredPrompt('')
+  }
+})
+
 function handleCancel() {
   if (canceling.value || !isRunning.value) return
   const sent = useCancelQuery(wsConnection.value).cancelQuery()
@@ -495,6 +550,26 @@ function handleCancel() {
   } else {
     setError('Not connected')
   }
+}
+
+const rewindableMessages = computed(() => {
+  return messages.value
+    .map((msg, idx) => ({ msg, idx }))
+    .filter(({ msg }) => msg.type === 'user')
+    .map(({ msg, idx }) => ({
+      index: idx,
+      text: msg.content?.text || '',
+    }))
+    .reverse()
+})
+
+function handleRewindTo(messageIndex) {
+  showRewindPicker.value = false
+  if (!wsConnection.value || wsConnection.value.getReadyState() !== WebSocket.OPEN) {
+    setError('Not connected')
+    return
+  }
+  wsConnection.value.send({ action: 'rewind_to', message_index: messageIndex })
 }
 
 function handleClear() {
@@ -722,6 +797,13 @@ function handleEvolutionDraftCreated() {
 // Project copy menu
 const showProjectCopyMenu = ref(false)
 const copiedChip = ref('')  // 'session' or 'project-path' or 'project-name'
+const claudeResumeSessionId = computed(() => session.value?.sdk_session_id || '')
+const claudeResumeCommand = computed(() => {
+  if (!claudeResumeSessionId.value) return ''
+  const dir = projectDir.value
+  const resume = `claude --resume ${claudeResumeSessionId.value}`
+  return dir ? `cd '${dir}' && ${resume}` : resume
+})
 
 function copyToClipboard(text, chipName) {
   navigator.clipboard.writeText(text).then(() => {
@@ -732,8 +814,11 @@ function copyToClipboard(text, chipName) {
   })
 }
 
-function copySessionId() {
-  copyToClipboard(currentSessionId.value, 'session')
+function copySessionResumeCommand() {
+  window.dispatchEvent(new CustomEvent('vp-scroll-to-session', { detail: { sessionId: currentSessionId.value } }))
+  if (claudeResumeCommand.value) {
+    copyToClipboard(claudeResumeCommand.value, 'session')
+  }
 }
 
 function copyProjectPath() {
@@ -760,7 +845,6 @@ function handleClickOutside() {
   showBranchMenu.value = false
   showMediaMenu.value = false
   showTaskPanel.value = false
-  showArtifacts.value = false
 }
 
 // Plugin management
@@ -807,9 +891,11 @@ function formatCost(value) {
 
 <template>
   <div class="chat-panel" @click="handleClickOutside">
+    <div v-if="isRunning" class="top-running-indicator">
+      <ThinkingIndicator :visible="true" />
+    </div>
     <MessageList :messages="displayMessages">
       <template #footer>
-        <ThinkingIndicator :visible="isRunning" />
         <div v-if="showRecoveryHint" class="recovery-indicator">
           <span class="recovery-badge">Recovered</span>
           <span>{{ recoveryHintText }}</span>
@@ -822,9 +908,32 @@ function formatCost(value) {
           <span class="queue-dot"></span>
           Your message is queued — will run after current task
         </div>
-        <CancelButton :visible="isRunning" :pending="canceling || isCancelRequested" @cancel="handleCancel" />
       </template>
     </MessageList>
+    <!-- Rewind picker overlay -->
+    <Transition name="dropdown-fade">
+      <div v-if="showRewindPicker" class="rewind-overlay" @click.self="showRewindPicker = false">
+        <div class="rewind-picker">
+          <div class="rewind-header">
+            <span>回退到...</span>
+            <button class="rewind-close" @click="showRewindPicker = false">&times;</button>
+          </div>
+          <div class="rewind-list">
+            <button
+              v-for="item in rewindableMessages"
+              :key="item.index"
+              class="rewind-item"
+              @click="handleRewindTo(item.index)"
+            >
+              <span class="rewind-item-text">{{ item.text }}</span>
+            </button>
+            <div v-if="rewindableMessages.length === 0" class="rewind-empty">
+              没有可回退的消息
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
     <div class="input-section">
       <CommandPalettePopover
         :visible="cmdVisible"
@@ -843,18 +952,23 @@ function formatCost(value) {
         <div class="toolbar-group">
         <button
           class="toolbar-btn"
-          :class="{ 'toolbar-btn--active': debugMode }"
+          :class="{ 'toolbar-btn--active': debugMode, 'debug-toggle--active': debugMode }"
+          :aria-pressed="debugMode"
           @click="toggleDebug"
-          title="Toggle debug mode — show/hide tool calls and system messages"
+          :title="debugMode ? 'Debug is on — tool calls and system messages are visible' : 'Debug is off — only user-facing messages are visible'"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2z"/>
-            <path d="M8 2v2"/>
-            <path d="M16 2v2"/>
-            <rect x="4" y="4" width="16" height="14" rx="2"/>
-            <line x1="9" y1="9" x2="9.01" y2="9"/>
-            <line x1="15" y1="9" x2="15.01" y2="9"/>
-            <path d="M9.5 13a3.5 3.5 0 0 0 5 0"/>
+            <path d="M8 2l1.88 1.88"/>
+            <path d="M14.12 3.88 16 2"/>
+            <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>
+            <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/>
+            <path d="M12 20v-9"/>
+            <path d="M6.53 9C4.6 8.8 3 7.1 3 5"/>
+            <path d="M6 13H2"/>
+            <path d="M3 21c0-2.1 1.7-3.9 3.8-4"/>
+            <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/>
+            <path d="M22 13h-4"/>
+            <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
           </svg>
           <span class="toolbar-btn-label">Debug</span>
         </button>
@@ -923,7 +1037,7 @@ function formatCost(value) {
           <button
             class="toolbar-btn"
             :class="{ 'toolbar-btn--active': isVoiceRecording || isVideoCapturing }"
-            :disabled="isRunning || (!voiceSupported && !videoSupported)"
+            :disabled="!voiceSupported && !videoSupported"
             @click="showMediaMenu = !showMediaMenu"
             title="Media input"
           >
@@ -969,7 +1083,7 @@ function formatCost(value) {
           </div>
         </div>
         <CommandPaletteButton
-          :disabled="isRunning || !currentSessionId"
+          :disabled="!currentSessionId"
           @click="handleCommandsClick"
         />
         <ClearContextButton
@@ -980,30 +1094,27 @@ function formatCost(value) {
         <!-- History button -->
         <div class="dropdown-wrapper" @click.stop>
           <button
+            ref="usageBtnRef"
             class="toolbar-btn"
             :disabled="!currentSessionId"
-            @click="showHistory = !showHistory; showModelMenu = false; showPermMenu = false"
-            title="Query history"
+            @click="toggleUsagePanel"
+            title="Usage and agent timeline"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 6 12 12 16 14"/>
             </svg>
-            <span class="toolbar-btn-label">History</span>
+            <span class="toolbar-btn-label">Usage</span>
             <span v-if="queryHistory.length" class="toolbar-badge">{{ queryHistory.length }}</span>
           </button>
           <Transition name="dropdown-fade">
-          <div v-if="showHistory" class="history-panel">
+          <div v-if="showHistory" class="history-panel" :style="historyPanelStyle">
             <div class="history-header">
             <div class="history-header-main">
               <span class="history-title">Query History</span>
               <span class="history-total">
                 Context: {{ formatTokens(totalUsage.context) }} / Output: {{ formatTokens(totalUsage.output) }}
               </span>
-            </div>
-            <div v-if="usageSummary || projectUsageSummary" class="history-usage-row">
-              <span v-if="usageSummary" class="history-usage-chip">Session {{ (usageSummary.total_tokens || 0).toLocaleString() }} tok</span>
-              <span v-if="projectUsageSummary" class="history-usage-chip">Today {{ formatCost(projectUsageSummary.estimated_cost_usd) }}</span>
             </div>
             </div>
             <div class="history-list">
@@ -1095,14 +1206,15 @@ function formatCost(value) {
           </div>
           <button
             class="dash-chip dash-session-id"
-            :title="'Session: ' + currentSessionId + ' — Click to locate'"
-            @click.stop="$emit('locate-session')"
+            :class="{ 'dash-chip--copied': copiedChip === 'session' }"
+            :title="claudeResumeCommand ? `${claudeResumeCommand} — Click to locate & copy` : 'Click to locate session'"
+            @click.stop="copySessionResumeCommand"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
               <line x1="9" y1="3" x2="9" y2="21"/>
             </svg>
-            {{ currentSessionId }}
+            {{ copiedChip === 'session' ? 'Copied!' : currentSessionId }}
           </button>
           <div class="dropdown-wrapper" @click.stop>
             <button
@@ -1198,59 +1310,24 @@ function formatCost(value) {
           <div class="dropdown-wrapper" @click.stop>
             <button
               class="dash-chip dash-agent"
+              :class="{ 'dash-chip--open': showTaskPanel, 'dash-agent--running': hasActiveTasks || planTaskCounts.in_progress > 0 }"
+              :aria-expanded="showTaskPanel"
               @click="showTaskPanel = !showTaskPanel"
-              :title="`Plan: ${planTaskCounts.completed}/${planTaskCounts.total} | Tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
+              :title="`Current plan: ${planTaskCounts.completed}/${planTaskCounts.total} · Runtime tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
             >
               <span v-if="hasActiveTasks || planTaskCounts.in_progress > 0" class="agent-dot"></span>
               <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-              <template v-if="hasPlanTasks">Plan {{ planTaskCounts.completed }}/{{ planTaskCounts.total }}</template>
-              <template v-else-if="taskCounts.total > 0">Tasks {{ taskCounts.running > 0 ? taskCounts.running : taskCounts.total }}</template>
-              <template v-else>Plan</template>
+              <span class="dash-chip-main">Plan</span>
+              <span v-if="hasPlanTasks" class="dash-chip-count">{{ planTaskCounts.completed }}/{{ planTaskCounts.total }}</span>
+              <span v-else-if="taskCounts.total > 0" class="dash-chip-count">{{ taskCounts.running > 0 ? taskCounts.running + ' running' : taskCounts.total + ' tasks' }}</span>
+              <span v-if="planTaskCounts.in_progress > 0" class="dash-chip-state">active</span>
             </button>
             <TaskProgressPanel
               v-if="showTaskPanel"
               @close="showTaskPanel = false"
             />
-          </div>
-          <div class="dropdown-wrapper" @click.stop>
-            <button
-              class="dash-chip dash-artifacts"
-              :disabled="!currentSessionId"
-              @click="handleArtifactsClick"
-              title="Session artifacts"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-                <line x1="12" y1="22.08" x2="12" y2="12"/>
-              </svg>
-              Artifacts
-              <span v-if="artifacts.length" class="tool-count">{{ artifacts.length }}</span>
-            </button>
-            <Transition name="dropdown-fade">
-            <div v-if="showArtifacts" class="artifact-panel">
-              <div class="artifact-header">
-                <span class="history-title">Artifacts</span>
-              </div>
-              <div class="artifact-list">
-                <div v-if="artifactLoading" class="dropdown-empty">Loading...</div>
-                <div v-else-if="artifacts.length === 0" class="dropdown-empty">No artifacts found</div>
-                <button
-                  v-else
-                  v-for="artifact in artifacts"
-                  :key="artifact.id"
-                  class="artifact-item"
-                  :title="artifact.path"
-                  @click="handleArtifactOpen(artifact.path)"
-                >
-                  <span class="artifact-name">{{ artifact.label }}</span>
-                  <span class="artifact-path">{{ artifact.path }}</span>
-                </button>
-              </div>
-            </div>
-            </Transition>
           </div>
         </div>
         <div v-if="lastQueryDuration || totalToolCalls > 0 || (projectUsageSummary?.budget_status?.state && projectUsageSummary.budget_status.state !== 'none')" class="dash-row tool-summary-row">
@@ -1482,6 +1559,15 @@ function formatCost(value) {
   background: transparent;
 }
 
+.top-running-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
 .recovery-indicator {
   display: flex;
   align-items: center;
@@ -1607,6 +1693,13 @@ function formatCost(value) {
 }
 
 .toolbar-btn--active {
+  color: var(--accent);
+  background: var(--layer-active);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-active);
+}
+
+.debug-toggle--active {
   color: var(--accent);
   background: var(--layer-active);
   border-color: var(--accent);
@@ -2140,12 +2233,8 @@ function formatCost(value) {
   padding: 8px clamp(18px, 2.4vw, 32px) 0;
 }
 
-/* History panel */
+/* History panel — fixed position to escape stacking context */
 .history-panel {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  z-index: 50;
   width: 360px;
   max-height: 380px;
   background: var(--glass-bg-strong);
@@ -2173,24 +2262,6 @@ function formatCost(value) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.history-usage-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.history-usage-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--layer-glass);
-  border: 1px solid var(--glass-border);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-family: var(--font-mono);
 }
 
 .history-title {
@@ -2275,72 +2346,6 @@ function formatCost(value) {
   padding-left: 34px;
 }
 
-.artifact-panel {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  z-index: 50;
-  width: 360px;
-  max-height: 320px;
-  background: var(--glass-bg-strong);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-glass);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-}
-
-.artifact-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--glass-border);
-  background: var(--layer-glass);
-}
-
-.artifact-list {
-  overflow-y: auto;
-  padding: 4px;
-}
-
-.artifact-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  text-align: left;
-  cursor: pointer;
-  font-family: var(--font-sans);
-}
-
-.artifact-item:hover {
-  background: var(--layer-active);
-}
-
-.artifact-name {
-  font-size: 12px;
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
-.artifact-path {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .dash-usage,
 .dash-cost,
 .dash-budget,
@@ -2356,11 +2361,6 @@ function formatCost(value) {
 .budget-exceeded {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 45%, var(--border));
-}
-
-.dash-artifacts {
-  color: var(--purple);
-  background: var(--purple-dim);
 }
 
 /* Session Dashboard */
@@ -2516,13 +2516,12 @@ button.dash-chip[disabled] {
 }
 
 .dash-project {
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .dash-session-id {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
-  opacity: 0.8;
   cursor: pointer;
 }
 
@@ -2600,7 +2599,40 @@ button.dash-chip[disabled] {
 
 .dash-agent {
   color: var(--green);
-  gap: 4px;
+  gap: 5px;
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--green) 34%, var(--glass-border));
+}
+
+.dash-agent--running,
+.dash-chip--open {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 18%, var(--layer-active));
+  border-color: color-mix(in srgb, var(--green) 72%, var(--glass-border));
+  box-shadow: var(--shadow-sm);
+}
+
+.dash-chip-main {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dash-chip-count {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--green);
+  background: var(--green-dim);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-chip-state {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .agent-dot {
@@ -2901,5 +2933,92 @@ button.dash-chip[disabled] {
   .dialog-fade-leave-to .compare-dialog {
     transform: none;
   }
+}
+
+/* Rewind picker */
+.rewind-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+}
+
+.rewind-picker {
+  width: min(420px, 90%);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.rewind-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rewind-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.rewind-close:hover {
+  color: var(--text);
+}
+
+.rewind-list {
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.rewind-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.rewind-item:hover {
+  background: var(--hover);
+}
+
+.rewind-item-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.rewind-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 </style>
