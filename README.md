@@ -77,7 +77,7 @@ This is especially useful for teams where the operators are **product owners, su
 - **Task progress** — render `TodoWrite` progress inline, show run steps, and surface timeline events while Claude Code is working
 - **Built-in terminal** — run commands inside the current project directory with a drawer-style terminal based on xterm
 - **Workspace history** — inspect recent workspace changes, browse file versions, and compare message/code differences across branches
-- **Memory management** — edit `CLAUDE.md`, memory files, and project memory entries from the UI
+- **Project rules** — edit `CLAUDE.md` versions and project rules from the UI, with version diff comparison
 - **Settings center** — manage Claude Code settings, channel profiles, model mappings, permission modes, and user input preferences in one place
 
 ### Governance and Collaboration
@@ -89,7 +89,7 @@ This is especially useful for teams where the operators are **product owners, su
 - **Parallel sessions** — branch a conversation into multiple sessions, optionally isolate each branch in a Git worktree, compare message/code differences, and ask Claude to analyze the trade-offs
 - **Branch convergence** — keep one target session, delete the alternatives, and merge committed worktree changes back into the base branch with safety checks
 - **Usage governance** — track token usage and budget policy state for session-level visibility
-- **Evolution proposals** — capture improvement proposals and project evolution ideas as first-class records
+- **Evolution** — extract reusable lessons from sessions and generate `CLAUDE.md` versions or rule drafts
 
 <br/>
 
@@ -105,7 +105,7 @@ The April 2026 development cycle focused on making Velpos practical for day-to-d
 | Scheduling | Project Clock can run recurring tasks, route output to a chosen IM channel, auto-unbind sessions, and clean up successful one-shot sessions | Repetitive project operations can be delegated safely |
 | Branching | Parallel session branches, optional worktree isolation, branch comparison, and convergence flows were added | Teams can explore multiple solutions and keep the winning branch |
 | Workspace | Workspace panel now shows richer project history, file/version comparison, and session-aware Git branch display | Users can review what changed without leaving the browser |
-| Memory and evolution | Project memory entries, `CLAUDE.md` revision flow, and evolution proposals were added | Project knowledge and improvement ideas become manageable artifacts |
+| Memory and evolution | `CLAUDE.md` revision simplified to Edit→Save→Apply, version diff comparison added, Evolution can generate rule drafts | Faster iteration on project instructions with clear change visibility |
 | Input and shortcuts | Global shortcuts, session navigation, permission-mode cycling, hotkey hints, IME-safe input, and configurable Enter behavior were added | Faster keyboard-driven operation with fewer accidental sends |
 | UI polish | Sidebar, dialogs, settings, terminal, notification, message list, and startup visuals were refined | The console feels more consistent and easier to operate |
 
@@ -158,7 +158,7 @@ Velpos also protects IME composition, so selecting Chinese/Japanese/Korean candi
 
 ### Dialogs
 
-All dialogs (Settings, Scheduler, Memory, Evolution, Plugin, Agent, Git, IM) respond to `ESC` to close. The hotkey system uses priority-based dispatch — dialogs always take precedence over global handlers.
+All dialogs (Settings, Scheduler, Rules, Evolution, Plugin, Agent, Git, IM) respond to `ESC` to close. The hotkey system uses priority-based dispatch — dialogs always take precedence over global handlers.
 
 <br/>
 
@@ -347,12 +347,12 @@ The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http:
 | **Terminal** | Open the built-in terminal, run commands in the project directory, and keep terminal work alongside the chat context |
 | **Workspace** | Review project history, inspect generated files, compare versions, and understand how session branches changed the code |
 | **Plugins & Agents** | Install MCP plugins, refresh marketplace-backed packaged agents, and load project-level agents for specialized work |
-| **Memory** | Edit `CLAUDE.md`, project memory entries, and revision records directly in the UI |
+| **Rules** | Edit `CLAUDE.md` versions and project rules directly in the UI, with version diff comparison |
 | **Git** | Manage global Git identity and SSH keys used by Claude Code sessions |
 | **IM Integration** | Bind sessions to **Lark**, **WeChat**, **QQ**, or **OpenIM** for two-way sync and remote operation |
 | **Scheduled tasks** | Run recurring project work, route notifications through a selected IM channel instance, auto-unbind after completion, and optionally clean up successful one-shot sessions |
 | **Parallel branches** | Create multiple session branches, isolate them with worktrees, compare message/code diffs, ask Claude to analyze trade-offs, and converge on one target session |
-| **Evolution** | Record project improvement proposals so recurring ideas do not disappear inside chat history |
+| **Evolution** | Extract reusable lessons from sessions and generate `CLAUDE.md` versions or rule drafts |
 
 ### Typical Workflow
 
