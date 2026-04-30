@@ -9,7 +9,11 @@ from domain.memory.model.claude_md_revision_state import ClaudeMdRevisionState
 
 
 _ALLOWED_TRANSITIONS = {
-    ClaudeMdRevisionState.DRAFT: {ClaudeMdRevisionState.PROPOSED, ClaudeMdRevisionState.REJECTED},
+    ClaudeMdRevisionState.DRAFT: {
+        ClaudeMdRevisionState.PROPOSED,
+        ClaudeMdRevisionState.APPLIED,
+        ClaudeMdRevisionState.REJECTED,
+    },
     ClaudeMdRevisionState.PROPOSED: {ClaudeMdRevisionState.APPROVED, ClaudeMdRevisionState.REJECTED},
     ClaudeMdRevisionState.APPROVED: {
         ClaudeMdRevisionState.APPLIED,

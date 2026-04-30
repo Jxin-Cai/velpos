@@ -314,24 +314,31 @@ async def websocket_endpoint(
                     })
 
             elif action == "rewind_to":
+                message_id = data.get("message_id")
                 message_index = data.get("message_index")
-                if message_index is None:
+                if not message_id and message_index is None:
                     await websocket.send_json({
                         "event": "error",
-                        "message": "message_index is required",
+                        "message": "message_id or message_index is required",
                     })
                 else:
-                    try:
-                        safe_create_task(service.rewind_to_message(session_id, int(message_index)))
-                        await websocket.send_json({
-                            "event": "info",
-                            "message": "Rewinding...",
-                        })
-                    except Exception as e:
-                        await websocket.send_json({
-                            "event": "error",
-                            "message": str(e),
-                        })
+                    async def _rewind_background(target_message_id=message_id, target_message_index=message_index) -> None:
+                        try:
+                            if target_message_id:
+                                await service.rewind_to_message_id(session_id, str(target_message_id))
+                            else:
+                                await service.rewind_to_message(session_id, int(target_message_index))
+                        except Exception as e:
+                            await websocket.send_json({
+                                "event": "error",
+                                "message": str(e),
+                            })
+
+                    safe_create_task(_rewind_background())
+                    await websocket.send_json({
+                        "event": "info",
+                        "message": "Rewinding...",
+                    })
 
             elif action == "get_status":
                 current_session = await service.get_session(session_id)

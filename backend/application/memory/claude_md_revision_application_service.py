@@ -118,8 +118,8 @@ class ClaudeMdRevisionApplicationService:
         expected_file_hash: str,
     ) -> ClaudeMdApplyResult:
         revision = await self._get_revision(revision_id)
-        if revision.state != ClaudeMdRevisionState.APPROVED:
-            raise BusinessException("Only approved CLAUDE.md revisions can be applied")
+        if revision.state not in {ClaudeMdRevisionState.DRAFT, ClaudeMdRevisionState.APPROVED}:
+            raise BusinessException("Only draft or approved CLAUDE.md revisions can be applied")
         if revision.base_revision_id != expected_base_revision_id:
             raise BusinessException("Revision base does not match expected base")
 

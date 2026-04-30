@@ -3,9 +3,6 @@ import {
   readClaudeMd,
   createClaudeMdDraft,
   updateClaudeMdRevision,
-  proposeClaudeMdRevision,
-  approveClaudeMdRevision,
-  rejectClaudeMdRevision,
   deleteClaudeMdRevision,
   applyClaudeMdRevision,
   listRules,
@@ -56,7 +53,11 @@ export function useMemoryManager() {
       fileHash.value = data.file_hash || ''
       activeRevision.value = data.active_revision || null
       versions.value = data.versions || []
-      selectedRevision.value = activeRevision.value || versions.value[0] || null
+      const selectedId = selectedRevision.value?.id
+      selectedRevision.value = versions.value.find(item => item.id === selectedId)
+        || activeRevision.value
+        || versions.value[0]
+        || null
     } catch (e) {
       content.value = ''
       error.value = e.message || 'Failed to load CLAUDE.md'
@@ -72,7 +73,8 @@ export function useMemoryManager() {
     try {
       const data = await listRules(projectDir)
       rules.value = data.rules || []
-      selectedRule.value = rules.value[0] || null
+      const selectedPath = selectedRule.value?.path
+      selectedRule.value = rules.value.find(rule => rule.path === selectedPath) || rules.value[0] || null
     } catch (e) {
       rules.value = []
       selectedRule.value = null
@@ -100,6 +102,20 @@ export function useMemoryManager() {
           pathsText: formatRulePaths(target.paths || []),
         }
       : { path: '', content: '', pathsText: '' }
+    error.value = ''
+  }
+
+  function startRuleDraft(draft = {}) {
+    selectedRule.value = draft.path
+      ? rules.value.find(rule => rule.path === draft.path) || null
+      : null
+    ruleEditing.value = true
+    ruleDraft.value = {
+      path: draft.path || '',
+      content: draft.content || '',
+      pathsText: formatRulePaths(draft.paths || []),
+    }
+    error.value = ''
   }
 
   function cancelRuleEdit() {
@@ -187,25 +203,10 @@ export function useMemoryManager() {
       selectedRevision.value = revision
       editing.value = false
     } catch (e) {
-      error.value = e.message || 'Failed to save draft'
+      error.value = e.message || 'Failed to save version'
     } finally {
       saving.value = false
     }
-  }
-
-  async function proposeSelected() {
-    if (!selectedRevision.value) return
-    await transitionSelected(() => proposeClaudeMdRevision(selectedRevision.value.id))
-  }
-
-  async function approveSelected() {
-    if (!selectedRevision.value) return
-    await transitionSelected(() => approveClaudeMdRevision(selectedRevision.value.id))
-  }
-
-  async function rejectSelected(reason = '') {
-    if (!selectedRevision.value) return
-    await transitionSelected(() => rejectClaudeMdRevision(selectedRevision.value.id, reason))
   }
 
   async function deleteSelectedRevision(projectDir = '') {
@@ -242,7 +243,7 @@ export function useMemoryManager() {
       upsertRevision(data.revision)
       selectedRevision.value = data.revision
       if (data.conflict) {
-        conflictMessage.value = 'CLAUDE.md changed on disk. Please reload and create a new draft.'
+        conflictMessage.value = 'CLAUDE.md changed on disk. Please reload and create a new version.'
       } else {
         await loadClaudeMd(projectDir)
       }
@@ -251,20 +252,6 @@ export function useMemoryManager() {
       await loadClaudeMd(projectDir)
     } finally {
       applying.value = false
-    }
-  }
-
-  async function transitionSelected(fn) {
-    saving.value = true
-    error.value = ''
-    try {
-      const data = await fn()
-      upsertRevision(data.revision)
-      selectedRevision.value = data.revision
-    } catch (e) {
-      error.value = e.message || 'Failed to update revision'
-    } finally {
-      saving.value = false
     }
   }
 
@@ -325,6 +312,7 @@ export function useMemoryManager() {
     loadRules,
     selectRule,
     startRuleEdit,
+    startRuleDraft,
     cancelRuleEdit,
     saveRule,
     removeRule,
@@ -332,9 +320,6 @@ export function useMemoryManager() {
     startEdit,
     cancelEdit,
     save,
-    proposeSelected,
-    approveSelected,
-    rejectSelected,
     deleteSelectedRevision,
     applySelected,
     reset,

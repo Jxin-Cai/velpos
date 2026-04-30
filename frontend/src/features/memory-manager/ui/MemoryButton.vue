@@ -9,7 +9,7 @@ const emit = defineEmits(['click'])
   <button
     class="toolbar-btn"
     :disabled="disabled"
-    title="Project Instructions — View and edit CLAUDE.md and rules"
+    title="Project Rules — View and edit CLAUDE.md and rules"
     @click="emit('click')"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -18,7 +18,7 @@ const emit = defineEmits(['click'])
       <line x1="8" y1="7" x2="16" y2="7"/>
       <line x1="8" y1="11" x2="14" y2="11"/>
     </svg>
-    <span class="toolbar-btn-label">Instructions</span>
+    <span class="toolbar-btn-label">Rule</span>
   </button>
 </template>
 

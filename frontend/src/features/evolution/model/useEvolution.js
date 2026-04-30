@@ -7,7 +7,25 @@ const saving = ref(false)
 const error = ref('')
 const proposal = ref(null)
 const lessons = ref([])
-const revision = ref(null)
+const createdDraft = ref(null)
+
+function buildRuleDraftContent(items) {
+  return items
+    .map((item, index) => {
+      const title = String(item.title || '').trim() || `Rule ${index + 1}`
+      const body = String(item.content || '').trim()
+      return `## ${title}\n\n${body}`
+    })
+    .join('\n\n')
+    .trim()
+}
+
+function parseRulePaths(text = '') {
+  return text
+    .split('\n')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
 
 export function useEvolution() {
   function open() {
@@ -22,7 +40,7 @@ export function useEvolution() {
   async function extract({ projectId = '', projectDir = '', sessionId = '' }) {
     loading.value = true
     error.value = ''
-    revision.value = null
+    createdDraft.value = null
     try {
       const data = await extractEvolutionLessons({
         project_id: projectId,
@@ -48,17 +66,20 @@ export function useEvolution() {
     lessons.value.splice(index, 1)
   }
 
-  async function createDraft(projectDir) {
+  function selectedLessons() {
+    return lessons.value
+      .filter(item => item.enabled !== false && String(item.content || '').trim())
+      .map(({ enabled, ...item }) => item)
+  }
+
+  async function createClaudeDraft(projectDir) {
     if (!proposal.value) return null
     saving.value = true
     error.value = ''
     try {
-      const selected = lessons.value
-        .filter(item => item.enabled !== false && String(item.content || '').trim())
-        .map(({ enabled, ...item }) => item)
-      const data = await createEvolutionClaudeMdDraft(proposal.value.id, projectDir, selected)
+      const data = await createEvolutionClaudeMdDraft(proposal.value.id, projectDir, selectedLessons())
       proposal.value = data.proposal || proposal.value
-      revision.value = data.revision || null
+      createdDraft.value = { type: 'claude', revision: data.revision || null }
       return data
     } catch (e) {
       error.value = e.message || 'Failed to create CLAUDE.md draft'
@@ -68,10 +89,31 @@ export function useEvolution() {
     }
   }
 
+  async function createRuleDraft({ path = '', pathsText = '' } = {}) {
+    const selected = selectedLessons()
+    if (!selected.length) return null
+    saving.value = true
+    error.value = ''
+    try {
+      const ruleDraft = {
+        path: String(path || '').trim(),
+        paths: parseRulePaths(pathsText),
+        content: buildRuleDraftContent(selected),
+      }
+      createdDraft.value = { type: 'rule', ruleDraft }
+      return createdDraft.value
+    } catch (e) {
+      error.value = e.message || 'Failed to create rule draft'
+      return null
+    } finally {
+      saving.value = false
+    }
+  }
+
   function reset() {
     proposal.value = null
     lessons.value = []
-    revision.value = null
+    createdDraft.value = null
     error.value = ''
   }
 
@@ -82,13 +124,14 @@ export function useEvolution() {
     error,
     proposal,
     lessons,
-    revision,
+    createdDraft,
     open,
     close,
     extract,
     updateLesson,
     removeLesson,
-    createDraft,
+    createClaudeDraft,
+    createRuleDraft,
     reset,
   }
 }

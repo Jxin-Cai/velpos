@@ -1,5 +1,5 @@
 <script setup>
-import { watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useEvolution } from '../model/useEvolution'
 import { useDialogManager } from '@shared/lib/useDialogManager'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
@@ -19,10 +19,34 @@ const visibleWrapper = {
 }
 useDialog('evolution', visibleWrapper)
 
-const { loading, saving, error, lessons, revision, extract, updateLesson, removeLesson, createDraft, reset } = useEvolution()
+const target = ref('claude')
+const rulePath = ref('')
+const rulePathsText = ref('')
+const canCreate = computed(() => {
+  if (loading.value || saving.value || lessons.value.length === 0) return false
+  if (target.value === 'rule') return Boolean(rulePath.value.trim())
+  return true
+})
+
+const {
+  loading,
+  saving,
+  error,
+  lessons,
+  createdDraft,
+  extract,
+  updateLesson,
+  removeLesson,
+  createClaudeDraft,
+  createRuleDraft,
+  reset,
+} = useEvolution()
 
 watch(() => props.visible, (v) => {
   if (v) {
+    target.value = 'claude'
+    rulePath.value = ''
+    rulePathsText.value = ''
     reset()
     extract({ projectId: props.projectId, projectDir: props.projectDir, sessionId: props.sessionId })
   }
@@ -41,9 +65,17 @@ useGlobalHotkeys({
 })
 
 async function handleCreateDraft() {
-  const data = await createDraft(props.projectDir)
+  if (target.value === 'rule') {
+    const data = await createRuleDraft({ path: rulePath.value, pathsText: rulePathsText.value })
+    if (data?.ruleDraft) {
+      emit('draft-created', { type: 'rule', ruleDraft: data.ruleDraft })
+    }
+    return
+  }
+
+  const data = await createClaudeDraft(props.projectDir)
   if (data?.revision) {
-    emit('draft-created', data.revision)
+    emit('draft-created', { type: 'claude', revision: data.revision })
   }
 }
 </script>
@@ -56,23 +88,44 @@ async function handleCreateDraft() {
           <div class="evolution-header">
             <div>
               <h3>Evolution</h3>
-              <p>Extract reusable lessons and create a CLAUDE.md draft</p>
+              <p>Extract reusable lessons from this session and turn them into a CLAUDE.md version or rule draft</p>
             </div>
             <button class="close-btn" @click="emit('close')">×</button>
           </div>
 
           <div v-if="error" class="notice">{{ error }}</div>
-          <div v-if="revision" class="success">
-            Draft created: v{{ revision.version_no }}. Open Memory to review, propose, approve and apply.
+          <div v-if="createdDraft?.type === 'claude'" class="success">
+            Version created: v{{ createdDraft.revision?.version_no }}. Open Rule to review and apply.
+          </div>
+          <div v-else-if="createdDraft?.type === 'rule'" class="success">
+            Rule draft created. Open Rule to review and save.
           </div>
 
           <div class="evolution-body">
+            <div class="target-panel">
+              <button class="target-btn" :class="{ active: target === 'claude' }" @click="target = 'claude'">CLAUDE.md</button>
+              <button class="target-btn" :class="{ active: target === 'rule' }" @click="target = 'rule'">Rule</button>
+            </div>
+
+            <div v-if="target === 'rule'" class="rule-config">
+              <input
+                v-model="rulePath"
+                class="rule-input"
+                placeholder="Rule path, e.g. frontend.md or vue/components.md"
+              />
+              <textarea
+                v-model="rulePathsText"
+                class="rule-input rule-paths"
+                placeholder="paths globs, one per line. Empty means global."
+              ></textarea>
+            </div>
+
             <div class="evolution-actions">
               <button class="secondary-btn" :disabled="loading" @click="extract({ projectId, projectDir, sessionId })">
                 {{ loading ? 'Extracting...' : 'Re-extract' }}
               </button>
-              <button class="primary-btn" :disabled="saving || loading || lessons.length === 0" @click="handleCreateDraft">
-                {{ saving ? 'Creating...' : 'Generate CLAUDE.md Draft' }}
+              <button class="primary-btn" :disabled="!canCreate" @click="handleCreateDraft">
+                {{ saving ? 'Creating...' : target === 'rule' ? 'Generate Rule Draft' : 'Generate CLAUDE.md Version' }}
               </button>
             </div>
 
@@ -117,11 +170,17 @@ async function handleCreateDraft() {
 .evolution-dialog { width: 860px; max-width: 94vw; max-height: 84vh; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); overflow: hidden; display: flex; flex-direction: column; }
 .evolution-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .evolution-header h3 { margin: 0; font-size: 15px; color: var(--text-primary); }
-.evolution-header p { margin: 3px 0 0; font-size: 12px; color: var(--text-muted); }
+.evolution-header p { margin: 3px 0 0; font-size: 12px; color: var(--text-muted); max-width: 560px; }
 .close-btn { border: none; background: transparent; color: var(--text-muted); font-size: 24px; cursor: pointer; }
 .notice { padding: 8px 18px; color: var(--danger, #ef4444); background: var(--bg-tertiary); border-bottom: 1px solid var(--border); font-size: 12px; }
 .success { padding: 8px 18px; color: var(--success, #22c55e); background: var(--bg-tertiary); border-bottom: 1px solid var(--border); font-size: 12px; }
 .evolution-body { padding: 14px; overflow-y: auto; min-height: 460px; }
+.target-panel { display: flex; gap: 8px; margin-bottom: 12px; }
+.target-btn { border: 1px solid var(--border); background: transparent; color: var(--text-secondary); border-radius: var(--radius-sm); padding: 7px 12px; cursor: pointer; }
+.target-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.rule-config { display: grid; gap: 8px; margin-bottom: 12px; }
+.rule-input { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-primary); color: var(--text-primary); padding: 8px 10px; font-family: var(--font-sans); }
+.rule-paths { min-height: 72px; resize: vertical; }
 .evolution-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 12px; }
 .primary-btn, .secondary-btn { border-radius: var(--radius-sm); padding: 7px 12px; cursor: pointer; }
 .primary-btn { background: var(--accent); border: 1px solid var(--accent); color: var(--text-on-accent); }
