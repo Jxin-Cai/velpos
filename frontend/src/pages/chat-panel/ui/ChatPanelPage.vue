@@ -114,6 +114,10 @@ const messageInputRef = ref(null)
 const canceling = ref(false)
 const lastEscAt = ref(0)
 const showRewindPicker = ref(false)
+const rewindPickerRef = ref(null)
+const rewindSearchRef = ref(null)
+const rewindSearchQuery = ref('')
+const rewindActiveIndex = ref(0)
 const showMediaMenu = ref(false)
 const videoEl = ref(null)
 const showVideoPreview = ref(false)
@@ -553,23 +557,96 @@ function handleCancel() {
 }
 
 const rewindableMessages = computed(() => {
-  return messages.value
-    .map((msg, idx) => ({ msg, idx }))
-    .filter(({ msg }) => msg.type === 'user')
-    .map(({ msg, idx }) => ({
-      index: idx,
-      text: msg.content?.text || '',
-    }))
-    .reverse()
+  const items = []
+  let backendIndex = 0
+
+  for (const msg of messages.value) {
+    const currentBackendIndex = msg.type === 'interactive' ? null : backendIndex++
+    if (msg.type !== 'user') continue
+
+    const text = msg.content?.text || ''
+    items.push({
+      key: msg.content?.message_id || `idx-${currentBackendIndex}`,
+      index: currentBackendIndex,
+      messageId: msg.content?.message_id || '',
+      text,
+      label: `#${items.length + 1}`,
+    })
+  }
+
+  return items.reverse()
 })
 
-function handleRewindTo(messageIndex) {
+const filteredRewindMessages = computed(() => {
+  const query = rewindSearchQuery.value.trim().toLowerCase()
+  if (!query) return rewindableMessages.value
+  return rewindableMessages.value.filter(item => item.text.toLowerCase().includes(query))
+})
+
+watch(showRewindPicker, async (visible) => {
+  if (!visible) return
+  rewindSearchQuery.value = ''
+  rewindActiveIndex.value = 0
+  await nextTick()
+  if (rewindSearchRef.value) {
+    rewindSearchRef.value.focus()
+  } else {
+    rewindPickerRef.value?.focus()
+  }
+})
+
+watch(rewindSearchQuery, () => {
+  rewindActiveIndex.value = 0
+})
+
+watch(filteredRewindMessages, (items) => {
+  if (rewindActiveIndex.value >= items.length) {
+    rewindActiveIndex.value = Math.max(0, items.length - 1)
+  }
+})
+
+function closeRewindPicker() {
   showRewindPicker.value = false
+}
+
+function handleRewindKeydown(event) {
+  const items = filteredRewindMessages.value
+
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeRewindPicker()
+    return
+  }
+
+  if (items.length === 0) return
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    rewindActiveIndex.value = (rewindActiveIndex.value + 1) % items.length
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    rewindActiveIndex.value = (rewindActiveIndex.value - 1 + items.length) % items.length
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    handleRewindTo(items[rewindActiveIndex.value])
+  }
+}
+
+function handleRewindTo(item) {
+  if (!item) return
+  closeRewindPicker()
   if (!wsConnection.value || wsConnection.value.getReadyState() !== WebSocket.OPEN) {
     setError('Not connected')
     return
   }
-  wsConnection.value.send({ action: 'rewind_to', message_index: messageIndex })
+
+  const payload = { action: 'rewind_to' }
+  if (item.messageId) {
+    payload.message_id = item.messageId
+  } else {
+    payload.message_index = item.index
+  }
+  wsConnection.value.send(payload)
 }
 
 function handleClear() {
@@ -788,9 +865,14 @@ function handleVideoCapture() {
   }
 }
 
-function handleEvolutionDraftCreated() {
+function handleEvolutionDraftCreated(payload = {}) {
   evolutionDialogVisible.value = false
   memoryDialogVisible.value = true
+  if (payload.type === 'rule' && payload.ruleDraft) {
+    window.dispatchEvent(new CustomEvent('vp-memory-open-rule-draft', { detail: payload.ruleDraft }))
+    return
+  }
+  window.dispatchEvent(new CustomEvent('vp-memory-open-tab', { detail: { tab: 'claude' } }))
   window.dispatchEvent(new CustomEvent('vp-memory-refresh'))
 }
 
@@ -799,10 +881,12 @@ const showProjectCopyMenu = ref(false)
 const copiedChip = ref('')  // 'session' or 'project-path' or 'project-name'
 const claudeResumeSessionId = computed(() => session.value?.sdk_session_id || '')
 const claudeResumeCommand = computed(() => {
-  if (!claudeResumeSessionId.value) return ''
   const dir = projectDir.value
-  const resume = `claude --resume ${claudeResumeSessionId.value}`
-  return dir ? `cd '${dir}' && ${resume}` : resume
+  if (claudeResumeSessionId.value) {
+    const resume = `claude --resume ${claudeResumeSessionId.value}`
+    return dir ? `cd '${dir}' && ${resume}` : resume
+  }
+  return dir ? `cd '${dir}'` : ''
 })
 
 function copyToClipboard(text, chipName) {
@@ -912,23 +996,51 @@ function formatCost(value) {
     </MessageList>
     <!-- Rewind picker overlay -->
     <Transition name="dropdown-fade">
-      <div v-if="showRewindPicker" class="rewind-overlay" @click.self="showRewindPicker = false">
-        <div class="rewind-picker">
+      <div v-if="showRewindPicker" class="rewind-overlay" @click.self="closeRewindPicker">
+        <div
+          ref="rewindPickerRef"
+          class="rewind-picker"
+          tabindex="-1"
+          @keydown="handleRewindKeydown"
+        >
           <div class="rewind-header">
-            <span>回退到...</span>
-            <button class="rewind-close" @click="showRewindPicker = false">&times;</button>
+            <div>
+              <div class="rewind-title">回退到历史输入</div>
+              <div class="rewind-subtitle">选择后会撤回该输入及之后的上下文，并恢复到输入框</div>
+            </div>
+            <button class="rewind-close" type="button" aria-label="关闭回退面板" @click="closeRewindPicker">×</button>
+          </div>
+          <div class="rewind-search-wrapper">
+            <svg class="rewind-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              ref="rewindSearchRef"
+              v-model="rewindSearchQuery"
+              class="rewind-search"
+              type="text"
+              placeholder="搜索历史输入..."
+            />
           </div>
           <div class="rewind-list">
             <button
-              v-for="item in rewindableMessages"
-              :key="item.index"
+              v-for="(item, index) in filteredRewindMessages"
+              :key="item.key"
               class="rewind-item"
-              @click="handleRewindTo(item.index)"
+              :class="{ 'rewind-item--active': index === rewindActiveIndex }"
+              type="button"
+              @click="handleRewindTo(item)"
+              @mouseenter="rewindActiveIndex = index"
             >
-              <span class="rewind-item-text">{{ item.text }}</span>
+              <span class="rewind-item-meta">
+                <span class="rewind-item-label">{{ item.label }}</span>
+                <span class="rewind-item-type">用户输入</span>
+              </span>
+              <span class="rewind-item-text">{{ item.text || '空输入' }}</span>
             </button>
-            <div v-if="rewindableMessages.length === 0" class="rewind-empty">
-              没有可回退的消息
+            <div v-if="filteredRewindMessages.length === 0" class="rewind-empty">
+              {{ rewindSearchQuery ? '没有匹配的历史输入' : '没有可回退的输入' }}
             </div>
           </div>
         </div>
@@ -1524,6 +1636,7 @@ function formatCost(value) {
 
     <MemoryDialog
       :visible="memoryDialogVisible"
+      :project-id="currentProject?.id || ''"
       :project-dir="currentProject?.dir_path || ''"
       @close="memoryDialogVisible = false"
       @evolve="evolutionDialogVisible = true"
@@ -2943,82 +3056,180 @@ button.dash-chip[disabled] {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(2px);
+  padding: 24px;
+  background: var(--overlay-glass);
+  backdrop-filter: blur(8px) saturate(var(--glass-saturate));
 }
 
 .rewind-picker {
-  width: min(420px, 90%);
-  max-height: 60vh;
+  width: min(620px, 100%);
+  max-height: min(680px, 78vh);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  background: linear-gradient(145deg, var(--glass-bg-strong), var(--glass-bg));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-glass);
   overflow: hidden;
+}
+
+.rewind-picker:focus {
+  outline: none;
 }
 
 .rewind-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rewind-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.rewind-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .rewind-close {
-  background: none;
-  border: none;
-  font-size: 18px;
-  color: var(--text-muted);
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
   cursor: pointer;
+  font-size: 20px;
   line-height: 1;
-  padding: 0 4px;
+  transition: all var(--transition-fast);
 }
 
 .rewind-close:hover {
-  color: var(--text);
+  border-color: var(--glass-border);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.rewind-search-wrapper {
+  position: relative;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rewind-search-icon {
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.rewind-search {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px 0 34px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.rewind-search::placeholder {
+  color: var(--text-muted);
+}
+
+.rewind-search:focus {
+  border-color: var(--border-active);
+  box-shadow: var(--shadow-active);
 }
 
 .rewind-list {
+  max-height: 430px;
   overflow-y: auto;
-  padding: 8px;
+  padding: 10px;
 }
 
 .rewind-item {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   width: 100%;
-  text-align: left;
-  padding: 10px 12px;
-  border: none;
-  background: none;
-  border-radius: var(--radius-sm);
+  margin: 0 0 6px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: inherit;
   cursor: pointer;
-  transition: background var(--transition-fast);
+  text-align: left;
+  transition: all var(--transition-fast);
 }
 
-.rewind-item:hover {
-  background: var(--hover);
+.rewind-item:hover,
+.rewind-item--active {
+  border-color: var(--glass-border);
+  background: var(--accent-dim);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.rewind-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rewind-item-label,
+.rewind-item-type {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rewind-item-label {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.rewind-item-type {
+  background: var(--glass-highlight);
+  color: var(--text-secondary);
 }
 
 .rewind-item-text {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 12px;
-  color: var(--text);
-  line-height: 1.5;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.55;
+  word-break: break-word;
 }
 
 .rewind-empty {
-  padding: 24px;
+  padding: 32px 16px;
   text-align: center;
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 </style>

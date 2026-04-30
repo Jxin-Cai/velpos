@@ -156,7 +156,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             setting_sources=["user", "project"],
             cwd=cwd if cwd else None,
             resume=prev_sdk_sid,
-            continue_conversation=bool(prev_sdk_sid),
             fork_session=fork_session,
             can_use_tool=self._create_can_use_tool_callback(session_id),
             stderr=stderr_cb,
@@ -648,6 +647,36 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             await client.set_permission_mode(perm_mode)
         except Exception:
             logger.debug("set_permission_mode after open_connection failed (non-critical): session=%s", session_id)
+
+    async def open_fresh_connection(
+        self,
+        session_id: str,
+        model: str,
+        cwd: str = "",
+    ) -> None:
+        """Open a fresh SDK connection (no resume) for a new session."""
+        await self.disconnect(session_id)
+
+        perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
+
+        client, _ = await self._try_connect(
+            session_id=session_id,
+            model=model,
+            perm_mode=perm_mode,
+            cwd=cwd,
+            prev_sdk_sid=None,
+        )
+        self._clients[session_id] = client
+        self._connected_models[session_id] = model
+        self._set_state(session_id, "connected")
+        self._touch(session_id)
+        if cwd:
+            self._session_cwds[session_id] = cwd
+
+        try:
+            await client.set_permission_mode(perm_mode)
+        except Exception:
+            logger.debug("set_permission_mode after open_fresh_connection failed (non-critical): session=%s", session_id)
 
     async def get_context_usage(self, session_id: str) -> dict[str, Any] | None:
         client = self._clients.get(session_id)

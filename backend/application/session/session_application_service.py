@@ -143,10 +143,38 @@ class SessionApplicationService:
         WebSocket handlers and background tasks reuse a long-lived DB session.
         In those paths we must commit after writes so row locks are released
         promptly instead of being held until the WebSocket disconnects.
+
+        If the underlying connection is dead (OperationalError/InterfaceError),
+        replaces the DB session with a fresh one from the pool and retries once.
         """
-        await self._session_repository.save(session)
-        if commit:
-            await self._session_repository.commit()
+        from sqlalchemy.exc import InterfaceError, OperationalError
+
+        try:
+            await self._session_repository.save(session)
+            if commit:
+                await self._session_repository.commit()
+        except (OperationalError, InterfaceError, OSError):
+            logger.warning(
+                "[session=%s] DB connection lost during save, reconnecting",
+                session.session_id if hasattr(session, 'session_id') else '?',
+                exc_info=True,
+            )
+            await self._reconnect_db_session()
+            await self._session_repository.save(session)
+            if commit:
+                await self._session_repository.commit()
+
+    async def _reconnect_db_session(self) -> None:
+        """Replace the underlying DB session with a fresh one from the pool."""
+        from infr.config.database import async_session_factory
+        from infr.repository.session_repository_impl import SessionRepositoryImpl
+
+        try:
+            await self._session_repository.close()
+        except Exception:
+            pass
+        new_db_session = async_session_factory()
+        self._session_repository = SessionRepositoryImpl(new_db_session)
 
     @staticmethod
     def _is_fork_sdk_session_id(sdk_session_id: str) -> bool:
@@ -194,7 +222,11 @@ class SessionApplicationService:
             return False
 
         if not self._is_fork_sdk_session_id(new_sdk_session_id):
-            owner = await self._session_repository.find_by_sdk_session_id(new_sdk_session_id)
+            try:
+                owner = await self._session_repository.find_by_sdk_session_id(new_sdk_session_id)
+            except Exception:
+                await self._reconnect_db_session()
+                owner = await self._session_repository.find_by_sdk_session_id(new_sdk_session_id)
             if owner is not None and owner.session_id != session.session_id:
                 session.update_sdk_session_id("")
                 await self._record_audit_event(
@@ -710,7 +742,36 @@ class SessionApplicationService:
             session.session_id, "bypassPermissions"
         )
 
+        safe_create_task(self._bind_sdk_session(session.session_id, session.model, project_dir))
+
         return session
+
+    async def _bind_sdk_session(self, session_id: str, model: str, cwd: str) -> None:
+        """Connect a fresh CLI and capture sdk_session_id from the first query."""
+        from infr.config.database import async_session_factory
+        from infr.repository.session_repository_impl import SessionRepositoryImpl
+
+        session_lock = await self._lock_for_session(session_id)
+        async with session_lock:
+            try:
+                await self._claude_agent_gateway.open_fresh_connection(session_id, model, cwd)
+                sdk_session_id = ""
+                async for msg_dict in self._claude_agent_gateway.send_query(session_id, "/status"):
+                    sid = msg_dict.get("sdk_session_id")
+                    if sid:
+                        sdk_session_id = sid
+                if sdk_session_id:
+                    async with async_session_factory() as db:
+                        repo = SessionRepositoryImpl(db)
+                        session = await repo.find_by_id(session_id)
+                        if session:
+                            session.update_sdk_session_id(sdk_session_id)
+                            await repo.save(session)
+                            await db.commit()
+                    self._claude_agent_gateway.schedule_idle_disconnect(session_id)
+                    logger.info("[session=%s] SDK session bound on create: %s", session_id, sdk_session_id)
+            except Exception:
+                logger.warning("[session=%s] SDK session pre-bind failed", session_id, exc_info=True)
 
     async def get_session(self, session_id: str) -> Session:
         """Get session details by session_id."""
@@ -1658,6 +1719,18 @@ class SessionApplicationService:
             payload={"restored_prompt_length": len(prompt)},
         )
 
+    async def rewind_to_message_id(self, session_id: str, message_id: str) -> None:
+        session = await self._session_repository.find_by_id(session_id)
+        if session is None:
+            raise ValueError(f"Session not found: {session_id}")
+
+        for index, msg in enumerate(session.messages):
+            if msg.message_type == MessageType.USER and msg.content.get("message_id") == message_id:
+                await self.rewind_to_message(session_id, index)
+                return
+
+        raise ValueError(f"User message not found: {message_id}")
+
     async def rewind_to_message(self, session_id: str, message_index: int) -> None:
         """Rewind session to a specific user message index.
 
@@ -1671,7 +1744,6 @@ class SessionApplicationService:
             raise ValueError(f"Session not found: {session_id}")
 
         # Count user messages after (and including) the target index
-        from domain.session.model.message_type import MessageType
         rewind_count = sum(
             1 for msg in session.messages[message_index:]
             if msg.message_type == MessageType.USER
