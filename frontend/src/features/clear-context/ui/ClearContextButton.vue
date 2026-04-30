@@ -57,6 +57,8 @@ onBeforeUnmount(() => {
     }"
     :disabled="disabled || clearing"
     @click="handleClick"
+    data-tooltip="Clear"
+    title="Clear context"
   >
     <template v-if="clearing">Clearing...</template>
     <template v-else-if="confirming">Confirm?</template>
@@ -68,7 +70,6 @@ onBeforeUnmount(() => {
         <path d="M14 11v6" />
         <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
       </svg>
-      Clear
     </template>
   </button>
 </template>
@@ -76,15 +77,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .clear-ctx-btn {
   position: relative;
-  overflow: hidden;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
   color: var(--text-secondary);
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
-  padding: 4px 9px;
-  min-height: 32px;
+  padding: 6px 8px;
+  min-height: 30px;
   border-radius: var(--radius-md);
   font-size: 11px;
   cursor: pointer;
@@ -100,22 +100,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.clear-ctx-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
-  transform: translateX(-120%);
-  transition: transform 420ms ease;
-}
-
-.clear-ctx-btn:hover:not(:disabled)::before {
-  transform: translateX(120%);
-}
-
-.clear-ctx-btn > * {
-  position: relative;
-}
 
 .clear-ctx-btn:hover:not(:disabled) {
   color: var(--accent);
@@ -149,5 +133,36 @@ onBeforeUnmount(() => {
 .clear-ctx-btn:active:not(:disabled) {
   transform: scale(0.96);
   transition-duration: 100ms;
+}
+
+.clear-ctx-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  z-index: 100;
+}
+
+.clear-ctx-btn[data-tooltip]:hover:not(:disabled)::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+.clear-ctx-btn--confirming[data-tooltip]::after {
+  display: none;
 }
 </style>

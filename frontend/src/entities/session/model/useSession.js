@@ -99,6 +99,7 @@ function updateSessionFor(sessionId, data) {
 function addMessageTo(sessionId, msg) {
   const state = _ensureState(sessionId)
   if (!state) return
+  if (!msg.timestamp) msg.timestamp = Date.now()
   _assignIdFor(state, msg)
   state.messages.push(msg)
   // Collect result messages into queryHistory

@@ -9,6 +9,7 @@ const emit = defineEmits(['click'])
   <button
     class="toolbar-btn"
     :disabled="disabled"
+    data-tooltip="Rule"
     title="Project Rules — View and edit CLAUDE.md and rules"
     @click="emit('click')"
   >
@@ -18,22 +19,20 @@ const emit = defineEmits(['click'])
       <line x1="8" y1="7" x2="16" y2="7"/>
       <line x1="8" y1="11" x2="14" y2="11"/>
     </svg>
-    <span class="toolbar-btn-label">Rule</span>
   </button>
 </template>
 
 <style scoped>
 .toolbar-btn {
   position: relative;
-  overflow: hidden;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
   color: var(--text-secondary);
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
-  padding: 4px 9px;
-  min-height: 32px;
+  padding: 6px 8px;
+  min-height: 30px;
   border-radius: var(--radius-md);
   font-size: 11px;
   cursor: pointer;
@@ -47,20 +46,6 @@ const emit = defineEmits(['click'])
     transform var(--transition-fast);
   font-family: var(--font-sans);
   white-space: nowrap;
-}
-.toolbar-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
-  transform: translateX(-120%);
-  transition: transform 420ms ease;
-}
-.toolbar-btn:hover:not(:disabled)::before {
-  transform: translateX(120%);
-}
-.toolbar-btn > * {
-  position: relative;
 }
 .toolbar-btn:hover:not(:disabled) {
   color: var(--accent);
@@ -76,7 +61,29 @@ const emit = defineEmits(['click'])
   transform: scale(0.96);
   transition-duration: 100ms;
 }
-.toolbar-btn-label {
+.toolbar-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
   font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  z-index: 100;
+}
+.toolbar-btn[data-tooltip]:hover:not(:disabled)::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
 }
 </style>

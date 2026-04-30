@@ -14,28 +14,27 @@ const emit = defineEmits(['click'])
     class="cmd-btn"
     :disabled="disabled"
     @click="emit('click')"
+    data-tooltip="Skills"
     title="View available commands"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" y1="19" x2="20" y2="19" />
     </svg>
-    <span>Skills</span>
   </button>
 </template>
 
 <style scoped>
 .cmd-btn {
   position: relative;
-  overflow: hidden;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
   color: var(--text-secondary);
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
-  padding: 4px 9px;
-  min-height: 32px;
+  padding: 6px 8px;
+  min-height: 30px;
   border-radius: var(--radius-md);
   font-size: 11px;
   cursor: pointer;
@@ -83,5 +82,32 @@ const emit = defineEmits(['click'])
 .cmd-btn:active:not(:disabled) {
   transform: scale(0.96);
   transition-duration: 100ms;
+}
+
+.cmd-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  z-index: 100;
+}
+
+.cmd-btn[data-tooltip]:hover:not(:disabled)::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
 }
 </style>

@@ -42,6 +42,7 @@ const recoveryHintText = computed(() => {
   return ''
 })
 const debugMode = ref(localStorage.getItem('pf_debug_mode') === 'true')
+const runtimePanelVisible = ref(localStorage.getItem('pf_runtime_panel') === 'true')
 
 // Current project for this session
 const currentProject = computed(() => {
@@ -53,6 +54,11 @@ const currentProject = computed(() => {
 function toggleDebug() {
   debugMode.value = !debugMode.value
   localStorage.setItem('pf_debug_mode', debugMode.value)
+}
+
+function toggleRuntimePanel() {
+  runtimePanelVisible.value = !runtimePanelVisible.value
+  localStorage.setItem('pf_runtime_panel', runtimePanelVisible.value)
 }
 
 function isTodoWriteBlock(block) {
@@ -69,7 +75,9 @@ const latestTodoWriteBlock = computed(() => {
   return null
 })
 
-const displayMessages = computed(() => {
+const MESSAGE_PAGE_SIZE = 25
+
+const allFilteredMessages = computed(() => {
   if (debugMode.value) return messages.value
   const currentPlanBlock = latestTodoWriteBlock.value
   return messages.value
@@ -88,6 +96,14 @@ const displayMessages = computed(() => {
     })
     .filter(Boolean)
 })
+
+const visibleCount = ref(MESSAGE_PAGE_SIZE)
+const displayMessages = computed(() => allFilteredMessages.value.slice(-visibleCount.value))
+const hasMoreMessages = computed(() => visibleCount.value < allFilteredMessages.value.length)
+
+function loadMoreMessages() {
+  visibleCount.value = Math.min(visibleCount.value + MESSAGE_PAGE_SIZE, allFilteredMessages.value.length)
+}
 const projectDir = computed(() => session.value?.project_dir || '')
 const projectDirName = computed(() => {
   const dir = projectDir.value
@@ -119,6 +135,8 @@ const rewindSearchRef = ref(null)
 const rewindSearchQuery = ref('')
 const rewindActiveIndex = ref(0)
 const showMediaMenu = ref(false)
+const mediaBtnRef = ref(null)
+const mediaMenuPos = ref({ left: 0, bottom: 0 })
 const videoEl = ref(null)
 const showVideoPreview = ref(false)
 const videoPreviewPosition = ref({ x: 0, y: 0 })
@@ -258,6 +276,7 @@ function handleCompact() {
 // Fetch IM status and channels when session changes
 watch(currentSessionId, (newId) => {
   canceling.value = false
+  visibleCount.value = MESSAGE_PAGE_SIZE
   if (newId) {
     fetchImStatus(newId)
     fetchImChannels()
@@ -531,11 +550,21 @@ async function handleBranchSelect(branch) {
   showBranchMenu.value = false
 }
 
+const pendingSend = ref(false)
+let pendingSendTimer = null
+
 function handleSend(textOrData) {
   useSendMessage(wsConnection.value).sendPrompt(textOrData)
+  pendingSend.value = true
+  clearTimeout(pendingSendTimer)
+  pendingSendTimer = setTimeout(() => { pendingSend.value = false }, 5000)
 }
 
 watch(isRunning, (running) => {
+  if (running || !running) {
+    pendingSend.value = false
+    clearTimeout(pendingSendTimer)
+  }
   if (!running) canceling.value = false
 })
 
@@ -800,6 +829,24 @@ function handleAnalyzeCompare() {
   closeCompareResult()
 }
 
+function toggleMediaMenu() {
+  showMediaMenu.value = !showMediaMenu.value
+  if (showMediaMenu.value && mediaBtnRef.value) {
+    const rect = mediaBtnRef.value.getBoundingClientRect()
+    mediaMenuPos.value = {
+      left: rect.left,
+      bottom: window.innerHeight - rect.top + 8,
+    }
+  }
+}
+
+const mediaMenuStyle = computed(() => ({
+  position: 'fixed',
+  left: mediaMenuPos.value.left + 'px',
+  bottom: mediaMenuPos.value.bottom + 'px',
+  zIndex: 9999,
+}))
+
 function handleMediaVoice() {
   showMediaMenu.value = false
   toggleVoiceInput((text) => messageInputRef.value?.appendText(text))
@@ -935,8 +982,32 @@ function handleClickOutside() {
 
 // Session stats for bottom status bar
 const { gitBranch, lastQueryDuration, contextUsage, toolStats, activeSubagents, usageSummary, projectUsageSummary } = useSessionStats()
-const { allTasks, taskCounts, hasActiveTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
+const { allTasks, taskCounts, hasActiveTasks, planTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
 const showTaskPanel = ref(false)
+
+// Runtime panel: current activity from latest assistant message blocks
+const runtimeActivity = computed(() => {
+  // Scan from the end to find the latest assistant message with blocks
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const msg = messages.value[i]
+    if (msg.type !== 'assistant' || !msg.content?.blocks) continue
+    const blocks = msg.content.blocks
+    // Find the last meaningful block (tool_use or thinking)
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const block = blocks[j]
+      if (block.type === 'tool_use') {
+        return { type: 'tool', name: block.name, detail: block.input?.command || block.input?.file_path || block.input?.query || '' }
+      }
+      if (block.type === 'thinking') {
+        const text = block.thinking || ''
+        const firstLine = text.split('\n').find(l => l.trim()) || ''
+        return { type: 'thinking', detail: firstLine.slice(0, 80) }
+      }
+    }
+    break
+  }
+  return null
+})
 
 function formatDurationShort(ms) {
   if (!ms) return '-'
@@ -950,6 +1021,50 @@ function formatDurationShort(ms) {
 
 const topTools = computed(() => toolStats.value.slice(0, 5))
 const totalToolCalls = computed(() => toolStats.value.reduce((sum, t) => sum + t.count, 0))
+
+// Session elapsed time (live ticking)
+const sessionElapsed = ref('')
+let sessionElapsedTimer = null
+
+const sessionStartTime = computed(() => {
+  // Use first message timestamp if available
+  if (messages.value.length > 0 && messages.value[0].timestamp) {
+    return messages.value[0].timestamp
+  }
+  // Fallback: use first query history timestamp
+  if (queryHistory.value.length > 0 && queryHistory.value[0].timestamp) {
+    return queryHistory.value[0].timestamp
+  }
+  // Fallback: session exists but no time info — use now as start
+  if (currentSessionId.value && messages.value.length > 0) {
+    return Date.now()
+  }
+  return null
+})
+
+function updateSessionElapsed() {
+  const start = sessionStartTime.value
+  if (!start) { sessionElapsed.value = ''; return }
+  const diff = Date.now() - start
+  const totalMin = Math.floor(diff / 60000)
+  if (totalMin < 1) { sessionElapsed.value = '<1m'; return }
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  sessionElapsed.value = h > 0 ? `${h}h${m}m` : `${m}m`
+}
+
+watch(currentSessionId, () => {
+  updateSessionElapsed()
+}, { immediate: true })
+
+onMounted(() => {
+  updateSessionElapsed()
+  sessionElapsedTimer = setInterval(updateSessionElapsed, 30000)
+})
+
+onUnmounted(() => {
+  clearInterval(sessionElapsedTimer)
+})
 
 // Context color: green < 70%, yellow 70-85%, red > 85% (aligned with claude-hud)
 const contextColorClass = computed(() => {
@@ -975,10 +1090,10 @@ function formatCost(value) {
 
 <template>
   <div class="chat-panel" @click="handleClickOutside">
-    <div v-if="isRunning" class="top-running-indicator">
+    <div v-if="isRunning || pendingSend" class="top-running-indicator">
       <ThinkingIndicator :visible="true" />
     </div>
-    <MessageList :messages="displayMessages">
+    <MessageList :messages="displayMessages" :has-more="hasMoreMessages" @load-more="loadMoreMessages">
       <template #footer>
         <div v-if="showRecoveryHint" class="recovery-indicator">
           <span class="recovery-badge">Recovered</span>
@@ -1058,6 +1173,27 @@ function formatCost(value) {
         @policy-change="handleCommandPolicyChange"
         @close="closePanel"
       />
+      <!-- Runtime Panel (above toolbar) -->
+      <Transition name="runtime-slide">
+      <div v-if="runtimePanelVisible" class="runtime-panel">
+        <div class="runtime-content">
+          <template v-if="(isRunning || pendingSend) && runtimeActivity">
+            <span class="runtime-dot"></span>
+            <span v-if="runtimeActivity.type === 'tool'" class="runtime-tool">{{ runtimeActivity.name }}</span>
+            <span v-if="runtimeActivity.type === 'tool' && runtimeActivity.detail" class="runtime-detail">{{ runtimeActivity.detail }}</span>
+            <span v-if="runtimeActivity.type === 'thinking'" class="runtime-thinking">Thinking</span>
+            <span v-if="runtimeActivity.type === 'thinking' && runtimeActivity.detail" class="runtime-detail">{{ runtimeActivity.detail }}</span>
+          </template>
+          <template v-else-if="isRunning || pendingSend">
+            <span class="runtime-dot"></span>
+            <span class="runtime-label">Processing...</span>
+          </template>
+          <template v-else>
+            <span class="runtime-idle">Idle</span>
+          </template>
+        </div>
+      </div>
+      </Transition>
       <!-- Toolbar above input -->
       <div class="input-toolbar">
         <!-- Group 1: Debug -->
@@ -1067,6 +1203,7 @@ function formatCost(value) {
           :class="{ 'toolbar-btn--active': debugMode, 'debug-toggle--active': debugMode }"
           :aria-pressed="debugMode"
           @click="toggleDebug"
+          data-tooltip="Debug"
           :title="debugMode ? 'Debug is on — tool calls and system messages are visible' : 'Debug is off — only user-facing messages are visible'"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1082,7 +1219,21 @@ function formatCost(value) {
             <path d="M22 13h-4"/>
             <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
           </svg>
-          <span class="toolbar-btn-label">Debug</span>
+        </button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'toolbar-btn--active': runtimePanelVisible }"
+          :aria-pressed="runtimePanelVisible"
+          @click="toggleRuntimePanel"
+          data-tooltip="Runtime"
+          title="Runtime — show current activity"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+            <polyline points="7 10 10 13 17 8"/>
+          </svg>
         </button>
         </div>
         <!-- Group 2: Configuration -->
@@ -1092,6 +1243,7 @@ function formatCost(value) {
           :class="{ 'toolbar-btn--active': currentAgentInfo }"
           :disabled="!currentSessionId || !currentProject"
           @click="agentDialogVisible = true"
+          data-tooltip="Agent"
           :title="currentAgentInfo ? `Agent: ${currentAgentInfo.id}` : 'Select Agent'"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1100,12 +1252,12 @@ function formatCost(value) {
             <line x1="9" y1="13" x2="9.01" y2="13"/>
             <line x1="15" y1="13" x2="15.01" y2="13"/>
           </svg>
-          <span class="toolbar-btn-label">{{ currentAgentInfo ? currentAgentInfo.id : 'Agent' }}</span>
         </button>
         <button
           class="toolbar-btn"
           :disabled="!currentSessionId"
           @click="pluginDialogVisible = true"
+          data-tooltip="Plugin"
           title="Plugin management"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1120,7 +1272,6 @@ function formatCost(value) {
             <line x1="1" y1="9" x2="4" y2="9"/>
             <line x1="1" y1="14" x2="4" y2="14"/>
           </svg>
-          <span class="toolbar-btn-label">Plugin</span>
         </button>
         <MemoryButton
           :disabled="!currentSessionId || !projectDir"
@@ -1130,6 +1281,7 @@ function formatCost(value) {
           class="toolbar-btn multi-session-trigger"
           :disabled="isRunning || !currentSessionId || messages.length === 0"
           @click="openMultiSessionDialog"
+          data-tooltip="Multi-session"
           title="Create a new session from selected context"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1139,7 +1291,6 @@ function formatCost(value) {
             <path d="M8.5 8.5 11 15"/>
             <path d="M15.5 8.5 13 15"/>
           </svg>
-          <span class="toolbar-btn-label">Multi-session</span>
           <span v-if="parallelBranchCount" class="toolbar-badge multi-session-badge">{{ parallelBranchCount }}</span>
         </button>
         </div>
@@ -1147,10 +1298,12 @@ function formatCost(value) {
         <div class="toolbar-group">
         <div class="dropdown-wrapper" @click.stop>
           <button
+            ref="mediaBtnRef"
             class="toolbar-btn"
             :class="{ 'toolbar-btn--active': isVoiceRecording || isVideoCapturing }"
             :disabled="!voiceSupported && !videoSupported"
-            @click="showMediaMenu = !showMediaMenu"
+            @click="toggleMediaMenu"
+            data-tooltip="Media"
             title="Media input"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1158,10 +1311,9 @@ function formatCost(value) {
               <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
               <path d="M21 8l-5 4 5 4V8z"/>
             </svg>
-            <span class="toolbar-btn-label">Media</span>
           </button>
           <Transition name="dropdown-fade">
-          <div v-if="showMediaMenu" class="dropdown-menu media-menu">
+          <div v-if="showMediaMenu" class="dropdown-menu media-menu" :style="mediaMenuStyle">
             <button class="dropdown-item media-item" :disabled="!voiceSupported" @click="handleMediaVoice">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -1210,13 +1362,13 @@ function formatCost(value) {
             class="toolbar-btn"
             :disabled="!currentSessionId"
             @click="toggleUsagePanel"
+            data-tooltip="Usage"
             title="Usage and agent timeline"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 6 12 12 16 14"/>
             </svg>
-            <span class="toolbar-btn-label">Usage</span>
             <span v-if="queryHistory.length" class="toolbar-badge">{{ queryHistory.length }}</span>
           </button>
           <Transition name="dropdown-fade">
@@ -1328,6 +1480,13 @@ function formatCost(value) {
             </svg>
             {{ copiedChip === 'session' ? 'Copied!' : currentSessionId }}
           </button>
+          <span v-if="sessionElapsed" class="dash-chip dash-elapsed" title="Session duration">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            {{ sessionElapsed }}
+          </span>
           <div class="dropdown-wrapper" @click.stop>
             <button
               class="dash-chip dash-model"
@@ -1422,18 +1581,17 @@ function formatCost(value) {
           <div class="dropdown-wrapper" @click.stop>
             <button
               class="dash-chip dash-agent"
-              :class="{ 'dash-chip--open': showTaskPanel, 'dash-agent--running': hasActiveTasks || planTaskCounts.in_progress > 0 }"
+              :class="{ 'dash-chip--open': showTaskPanel, 'dash-agent--running': planTaskCounts.in_progress > 0 }"
               :aria-expanded="showTaskPanel"
               @click="showTaskPanel = !showTaskPanel"
-              :title="`Current plan: ${planTaskCounts.completed}/${planTaskCounts.total} · Runtime tasks: ${taskCounts.running} running, ${taskCounts.completed} done`"
+              :title="`Plan: ${planTaskCounts.completed}/${planTaskCounts.total}`"
             >
-              <span v-if="hasActiveTasks || planTaskCounts.in_progress > 0" class="agent-dot"></span>
+              <span v-if="planTaskCounts.in_progress > 0" class="agent-dot"></span>
               <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
               <span class="dash-chip-main">Plan</span>
               <span v-if="hasPlanTasks" class="dash-chip-count">{{ planTaskCounts.completed }}/{{ planTaskCounts.total }}</span>
-              <span v-else-if="taskCounts.total > 0" class="dash-chip-count">{{ taskCounts.running > 0 ? taskCounts.running + ' running' : taskCounts.total + ' tasks' }}</span>
               <span v-if="planTaskCounts.in_progress > 0" class="dash-chip-state">active</span>
             </button>
             <TaskProgressPanel
@@ -1442,14 +1600,7 @@ function formatCost(value) {
             />
           </div>
         </div>
-        <div v-if="lastQueryDuration || totalToolCalls > 0 || (projectUsageSummary?.budget_status?.state && projectUsageSummary.budget_status.state !== 'none')" class="dash-row tool-summary-row">
-          <span class="dash-chip dash-last-query" v-if="lastQueryDuration" :title="'Last query: ' + formatDurationShort(lastQueryDuration)">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <polyline points="12 6 12 12 16 14"/>
-            </svg>
-            Last {{ formatDurationShort(lastQueryDuration) }}
-          </span>
+        <div v-if="totalToolCalls > 0 || (projectUsageSummary?.budget_status?.state && projectUsageSummary.budget_status.state !== 'none')" class="dash-row tool-summary-row">
           <span class="dash-chip dash-budget" v-if="projectUsageSummary?.budget_status?.state && projectUsageSummary.budget_status.state !== 'none'" :class="'budget-' + projectUsageSummary.budget_status.state">
             Budget {{ projectUsageSummary.budget_status.state }}
           </span>
@@ -1732,7 +1883,84 @@ function formatCost(value) {
   width: 100%;
   margin: 0;
   padding: 10px clamp(18px, 2.4vw, 32px) 0;
-  overflow-x: auto;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.runtime-panel {
+  padding: 6px clamp(18px, 2.4vw, 32px);
+}
+
+.runtime-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--glass-bg) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 40%, transparent);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  overflow: hidden;
+}
+
+.runtime-dot {
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: queue-pulse 1.5s ease-in-out infinite;
+}
+
+.runtime-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-tool {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.runtime-thinking {
+  color: var(--purple);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.runtime-detail {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-idle {
+  color: var(--text-muted);
+}
+
+.runtime-slide-enter-active,
+.runtime-slide-leave-active {
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.runtime-slide-enter-from,
+.runtime-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.runtime-slide-enter-to,
+.runtime-slide-leave-from {
+  max-height: 50px;
+  opacity: 1;
 }
 
 .toolbar-group {
@@ -1747,15 +1975,14 @@ function formatCost(value) {
 
 .toolbar-btn {
   position: relative;
-  overflow: hidden;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
   color: var(--text-secondary);
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
-  padding: 4px 9px;
-  min-height: 32px;
+  padding: 6px 8px;
+  min-height: 30px;
   border-radius: var(--radius-md);
   font-size: 11px;
   cursor: pointer;
@@ -1769,23 +1996,6 @@ function formatCost(value) {
     transform var(--transition-fast);
   font-family: var(--font-sans);
   white-space: nowrap;
-}
-
-.toolbar-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
-  transform: translateX(-120%);
-  transition: transform 420ms ease;
-}
-
-.toolbar-btn:hover:not(:disabled)::before {
-  transform: translateX(120%);
-}
-
-.toolbar-btn > * {
-  position: relative;
 }
 
 .toolbar-btn:hover:not(:disabled) {
@@ -1821,6 +2031,37 @@ function formatCost(value) {
 
 .toolbar-btn-label {
   font-weight: 500;
+}
+
+.toolbar-btn[data-tooltip] {
+  position: relative;
+}
+
+.toolbar-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  z-index: 100;
+}
+
+.toolbar-btn[data-tooltip]:hover:not(:disabled)::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
 }
 
 .toolbar-badge {
@@ -2636,6 +2877,11 @@ button.dash-chip[disabled] {
   color: var(--text-secondary);
   font-size: 10px;
   cursor: pointer;
+}
+
+.dash-elapsed {
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .dash-chip--copied {
