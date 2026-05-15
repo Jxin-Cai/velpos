@@ -23,7 +23,7 @@ import TeamRuntimePanel from '@features/agent-teams/ui/TeamRuntimePanel.vue'
 import WorkerSessionBreadcrumb from '@features/agent-teams/ui/WorkerSessionBreadcrumb.vue'
 
 const {
-  session, messages, status, queued, canceling, waitingForSlot, recovery, currentSessionId,
+  session, messages, status, queued, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
   queryHistory, setCurrentSessionId, updateSession, setError, setCanceling, addSession,
   restoredPrompt, setRestoredPrompt,
 } = useSession()
@@ -1155,6 +1155,12 @@ function formatCost(value) {
           <span class="queue-dot cancel-dot"></span>
           Cancelling...
         </div>
+        <Transition name="cancel-hint-fade">
+          <div v-if="cancelledHint && !canceling" class="queue-indicator cancelled-indicator">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            已取消
+          </div>
+        </Transition>
         <div v-if="waitingForSlot" class="queue-indicator">
           <span class="queue-dot"></span>
           Waiting for an available execution slot
@@ -1236,6 +1242,10 @@ function formatCost(value) {
           <template v-if="canceling">
             <span class="runtime-dot cancel-dot"></span>
             <span class="runtime-label" style="color: var(--warning, #e89a3c)">Cancelling...</span>
+          </template>
+          <template v-else-if="cancelledHint">
+            <svg class="runtime-cancelled-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="runtime-label" style="color: var(--yellow)">Cancelled</span>
           </template>
           <template v-else-if="(isRunning || pendingSend) && runtimeActivity">
             <span class="runtime-dot"></span>
@@ -2014,6 +2024,35 @@ function formatCost(value) {
 
 .cancel-dot {
   background: var(--warning, #e89a3c);
+}
+
+.cancelled-indicator {
+  color: var(--yellow);
+}
+
+.cancelled-indicator svg {
+  color: var(--yellow);
+  flex-shrink: 0;
+}
+
+.runtime-cancelled-icon {
+  color: var(--yellow);
+  flex-shrink: 0;
+}
+
+.cancel-hint-fade-enter-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.cancel-hint-fade-leave-active {
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+.cancel-hint-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.cancel-hint-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 @keyframes queue-pulse {

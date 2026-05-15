@@ -24,6 +24,7 @@ function _ensureState(sessionId) {
       timelineEvents: [],
       queued: false,
       canceling: false,
+      cancelledHint: false,
       _nextMsgId: 0,
     })
   }
@@ -82,6 +83,11 @@ const queued = computed(() => {
 const canceling = computed(() => {
   const state = _stateMap.get(currentSessionId.value)
   return state ? state.canceling : false
+})
+
+const cancelledHint = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state ? state.cancelledHint : false
 })
 
 const waitingForSlot = computed(() => {
@@ -247,6 +253,20 @@ function getCancelingFor(sessionId) {
   return state ? state.canceling : false
 }
 
+const _cancelledHintTimers = new Map()
+
+function showCancelledHintFor(sessionId) {
+  const state = _ensureState(sessionId)
+  if (!state) return
+  const prev = _cancelledHintTimers.get(sessionId)
+  if (prev) clearTimeout(prev)
+  state.cancelledHint = true
+  _cancelledHintTimers.set(sessionId, setTimeout(() => {
+    state.cancelledHint = false
+    _cancelledHintTimers.delete(sessionId)
+  }, 2500))
+}
+
 function ensureState(sessionId) {
   _ensureState(sessionId)
 }
@@ -330,6 +350,7 @@ export function useSession() {
     error,
     queued,
     canceling,
+    cancelledHint,
     waitingForSlot,
     recovery,
     queryHistory,
@@ -367,6 +388,7 @@ export function useSession() {
     setErrorFor,
     setCancelingFor,
     getCancelingFor,
+    showCancelledHintFor,
     ensureState,
     removeState,
     setRestoredPrompt,

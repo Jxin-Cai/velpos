@@ -39,6 +39,7 @@ const {
   setErrorFor,
   setCancelingFor,
   getCancelingFor,
+  showCancelledHintFor,
   removeState,
   setRestoredPrompt,
 } = useSession()
@@ -272,6 +273,11 @@ function setupUnifiedHandler(connection, sessionId) {
         break
 
       case 'message':
+        if (getCancelingFor(sessionId)
+            && data.data?.type === 'result'
+            && data.data?.content?.is_error) {
+          break
+        }
         addMessageTo(sessionId, data.data)
         if (data.data && data.data.type === 'result') {
           markDone(sessionId)
@@ -403,6 +409,7 @@ function setupUnifiedHandler(connection, sessionId) {
 
       case 'cancel_rewind':
         setCancelingFor(sessionId, false)
+        showCancelledHintFor(sessionId)
         updateSessionFor(sessionId, data.session)
         if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
         setStatusFor(sessionId, data.session.status || 'idle')
