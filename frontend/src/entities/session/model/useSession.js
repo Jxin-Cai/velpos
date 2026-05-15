@@ -23,6 +23,7 @@ function _ensureState(sessionId) {
       runSteps: [],
       timelineEvents: [],
       queued: false,
+      canceling: false,
       _nextMsgId: 0,
     })
   }
@@ -76,6 +77,11 @@ const timelineEvents = computed(() => {
 const queued = computed(() => {
   const state = _stateMap.get(currentSessionId.value)
   return state ? state.queued : false
+})
+
+const canceling = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state ? state.canceling : false
 })
 
 const waitingForSlot = computed(() => {
@@ -230,6 +236,17 @@ function setErrorFor(sessionId, err) {
   state.error = err
 }
 
+function setCancelingFor(sessionId, val) {
+  const state = _ensureState(sessionId)
+  if (!state) return
+  state.canceling = val
+}
+
+function getCancelingFor(sessionId) {
+  const state = _stateMap.get(sessionId)
+  return state ? state.canceling : false
+}
+
 function ensureState(sessionId) {
   _ensureState(sessionId)
 }
@@ -266,6 +283,10 @@ function setQueued(val) {
 
 function setError(err) {
   setErrorFor(currentSessionId.value, err)
+}
+
+function setCanceling(val) {
+  setCancelingFor(currentSessionId.value, val)
 }
 
 function reset() {
@@ -308,6 +329,7 @@ export function useSession() {
     status,
     error,
     queued,
+    canceling,
     waitingForSlot,
     recovery,
     queryHistory,
@@ -324,6 +346,7 @@ export function useSession() {
     setStatus,
     setQueued,
     setError,
+    setCanceling,
     reset,
     // Session list management
     setSessions,
@@ -342,6 +365,8 @@ export function useSession() {
     setStatusFor,
     setQueuedFor,
     setErrorFor,
+    setCancelingFor,
+    getCancelingFor,
     ensureState,
     removeState,
     setRestoredPrompt,

@@ -23,8 +23,8 @@ import TeamRuntimePanel from '@features/agent-teams/ui/TeamRuntimePanel.vue'
 import WorkerSessionBreadcrumb from '@features/agent-teams/ui/WorkerSessionBreadcrumb.vue'
 
 const {
-  session, messages, status, queued, waitingForSlot, recovery, currentSessionId,
-  queryHistory, setCurrentSessionId, updateSession, setError, addSession,
+  session, messages, status, queued, canceling, waitingForSlot, recovery, currentSessionId,
+  queryHistory, setCurrentSessionId, updateSession, setError, setCanceling, addSession,
   restoredPrompt, setRestoredPrompt,
 } = useSession()
 const { projects, updateProjectInList } = useProject()
@@ -143,7 +143,7 @@ const {
 } = useCommandPalette()
 
 const messageInputRef = ref(null)
-const canceling = ref(false)
+const lastCancelAt = ref(0)
 const lastEscAt = ref(0)
 const showRewindPicker = ref(false)
 const rewindPickerRef = ref(null)
@@ -291,7 +291,7 @@ function handleCompact() {
 
 // Fetch IM status and channels when session changes
 watch(currentSessionId, (newId) => {
-  canceling.value = false
+  canceling.value && setCanceling(false)
   visibleCount.value = MESSAGE_PAGE_SIZE
   if (newId) {
     fetchImStatus(newId)
@@ -577,11 +577,9 @@ function handleSend(textOrData) {
 }
 
 watch(isRunning, (running) => {
-  if (running || !running) {
-    pendingSend.value = false
-    clearTimeout(pendingSendTimer)
-  }
-  if (!running) canceling.value = false
+  pendingSend.value = false
+  clearTimeout(pendingSendTimer)
+  if (!running) setCanceling(false)
 })
 
 watch(restoredPrompt, (prompt) => {
@@ -592,10 +590,13 @@ watch(restoredPrompt, (prompt) => {
 })
 
 function handleCancel() {
-  if (canceling.value || !isRunning.value) return
+  if (!isRunning.value) return
+  const now = Date.now()
+  if (canceling.value && now - lastCancelAt.value < 2000) return
   const sent = useCancelQuery(wsConnection.value).cancelQuery()
   if (sent) {
-    canceling.value = true
+    setCanceling(true)
+    lastCancelAt.value = now
   } else {
     setError('Not connected')
   }
@@ -1104,6 +1105,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearInterval(sessionElapsedTimer)
+  clearTimeout(pendingSendTimer)
 })
 
 // Context color: green < 70%, yellow 70-85%, red > 85% (aligned with claude-hud)
@@ -1148,6 +1150,10 @@ function formatCost(value) {
         <div v-if="showRecoveryHint" class="recovery-indicator">
           <span class="recovery-badge">Recovered</span>
           <span>{{ recoveryHintText }}</span>
+        </div>
+        <div v-if="canceling" class="queue-indicator cancel-indicator">
+          <span class="queue-dot cancel-dot"></span>
+          Cancelling...
         </div>
         <div v-if="waitingForSlot" class="queue-indicator">
           <span class="queue-dot"></span>
@@ -1227,7 +1233,11 @@ function formatCost(value) {
       <Transition name="runtime-slide">
       <div v-if="runtimePanelVisible" class="runtime-panel">
         <div class="runtime-content">
-          <template v-if="(isRunning || pendingSend) && runtimeActivity">
+          <template v-if="canceling">
+            <span class="runtime-dot cancel-dot"></span>
+            <span class="runtime-label" style="color: var(--warning, #e89a3c)">Cancelling...</span>
+          </template>
+          <template v-else-if="(isRunning || pendingSend) && runtimeActivity">
             <span class="runtime-dot"></span>
             <span v-if="runtimeActivity.type === 'tool'" class="runtime-tool">{{ runtimeActivity.name }}</span>
             <span v-if="runtimeActivity.type === 'tool' && runtimeActivity.detail" class="runtime-detail">{{ runtimeActivity.detail }}</span>
@@ -1483,7 +1493,7 @@ function formatCost(value) {
         </div>
       </div>
       <div class="input-row">
-        <MessageInput ref="messageInputRef" :running="isRunning" @send="handleSend" />
+        <MessageInput ref="messageInputRef" :running="isRunning" :disabled="canceling" @send="handleSend" />
       </div>
       <!-- Session Dashboard -->
       <div class="session-dashboard" v-if="currentSessionId">
@@ -1996,6 +2006,14 @@ function formatCost(value) {
   border-radius: 50%;
   background: var(--accent);
   animation: queue-pulse 1.5s ease-in-out infinite;
+}
+
+.cancel-indicator {
+  color: var(--warning, #e89a3c);
+}
+
+.cancel-dot {
+  background: var(--warning, #e89a3c);
 }
 
 @keyframes queue-pulse {

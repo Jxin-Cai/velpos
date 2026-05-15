@@ -37,6 +37,8 @@ const {
   setStatusFor,
   setQueuedFor,
   setErrorFor,
+  setCancelingFor,
+  getCancelingFor,
   removeState,
   setRestoredPrompt,
 } = useSession()
@@ -62,7 +64,7 @@ const { fetchStatus: fetchImStatus, fetchChannels: fetchImChannels, resetState: 
 
 const { addNotification } = useNotifications()
 const { markWorking, markDone } = useWorkingSessions()
-const { startListening: startHotkeyHintListening } = useHotkeyHint()
+const { startListening: startHotkeyHintListening, stopListening: stopHotkeyHintListening } = useHotkeyHint()
 
 const ready = ref(false)
 const initError = ref(null)
@@ -294,7 +296,9 @@ function setupUnifiedHandler(connection, sessionId) {
         break
 
       case 'error':
-        setErrorFor(sessionId, data.message)
+        if (!getCancelingFor(sessionId)) {
+          setErrorFor(sessionId, data.message)
+        }
         break
 
       case 'ws_disconnected':
@@ -398,6 +402,7 @@ function setupUnifiedHandler(connection, sessionId) {
         break
 
       case 'cancel_rewind':
+        setCancelingFor(sessionId, false)
         updateSessionFor(sessionId, data.session)
         if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
         setStatusFor(sessionId, data.session.status || 'idle')
@@ -522,6 +527,7 @@ onUnmounted(() => {
   // Clean up event listener
   window.removeEventListener('vp-session-imported', handleSessionImported)
   window.removeEventListener('vp-schedules-changed', loadScheduleCounts)
+  stopHotkeyHintListening()
 
   if (globalEventConnection) {
     globalEventConnection.close()
