@@ -5,7 +5,6 @@ import fcntl
 import logging
 import os
 import pty
-import shutil
 import signal
 import struct
 import sys
@@ -31,6 +30,7 @@ class TerminalExecutor:
 
     def __init__(self) -> None:
         self._pty_sessions: dict[str, PtySession] = {}
+        self._app_cache: list[dict[str, str]] | None = None
 
     async def execute(
         self,
@@ -193,8 +193,6 @@ class TerminalExecutor:
             "stderr": stderr_bytes.decode("utf-8", errors="replace"),
             "return_code": process.returncode,
         }
-
-    _app_cache: list[dict[str, str]] | None = None
 
     async def list_applications(self) -> list[dict[str, str]]:
         if self._app_cache is not None:

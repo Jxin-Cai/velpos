@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from application.channel_profile.command.create_channel_profile_command import (
     CreateChannelProfileCommand,
 )
@@ -14,8 +12,6 @@ from domain.channel_profile.repository.channel_profile_repository import (
     ChannelProfileRepository,
 )
 from domain.shared.business_exception import BusinessException
-
-logger = logging.getLogger(__name__)
 
 
 class ChannelProfileApplicationService:

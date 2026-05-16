@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from typing import Annotated
 
 from application.command_policy.command_policy_application_service import CommandPolicyApplicationService
 from ohs.dependencies import get_command_policy_application_service

@@ -4,7 +4,6 @@ import { useProject } from '@entities/project'
 import {
   listSessions,
   createSession,
-  getSession,
   deleteSession,
   batchDeleteSessions,
   renameSession,
@@ -268,18 +267,6 @@ export function useSessionList() {
     setProjects(ordered)
   }
 
-  async function handleNavigateToInitSession(sessionId) {
-    // Ensure the session is in the list, then navigate
-    let session = sessions.value.find(s => s.session_id === sessionId)
-    if (!session) {
-      try {
-        const data = await getSession(sessionId)
-        addSession({ ...data, source: 'velpos' })
-      } catch {}
-    }
-    switchSession(sessionId)
-  }
-
   const importing = ref(false)
 
   function switchSession(sessionId) {
@@ -345,7 +332,6 @@ export function useSessionList() {
     handleCreateInProject,
     handleDeleteProject,
     handleReorderProjects,
-    handleNavigateToInitSession,
     switchSession,
     restoreLastSession,
   }

@@ -99,7 +99,6 @@ class TeamCoordinatorService:
             raise ValueError(f"Target project '{target_project_id}' not found")
 
         # Load agent for this step if configured
-        agent_loaded = False
         step_agent_id = member.get("agent_id", "")
         step_agent_lang = member.get("language", "en")
         if step_agent_id and self._agent_service:
@@ -111,7 +110,6 @@ class TeamCoordinatorService:
                     language=step_agent_lang,
                     project_repository=self._project_repo,
                 )
-                agent_loaded = True
                 logger.info(
                     "Loaded agent %s for project %s (team step role=%s)",
                     step_agent_id, target_project_id, target_role,

@@ -494,16 +494,17 @@ class SessionApplicationService:
             subtype = str(content.get("subtype") or "system") if isinstance(content, dict) else "system"
             events.append(("system_message", f"系统事件：{subtype}", self._compact_payload_value(content)))
         elif msg_type_str == "result":
-            usage = content.get("usage", {}) if isinstance(content, dict) else {}
+            c = content if isinstance(content, dict) else {}
+            usage = c.get("usage", {})
             events.append((
                 "final_result",
                 "最终结果",
                 {
-                    "is_error": bool(content.get("is_error", False)) if isinstance(content, dict) else False,
-                    "duration_ms": content.get("duration_ms", 0) if isinstance(content, dict) else 0,
-                    "num_turns": content.get("num_turns", 0) if isinstance(content, dict) else 0,
-                    "stop_reason": content.get("stop_reason") if isinstance(content, dict) else None,
-                    "total_cost_usd": content.get("total_cost_usd", 0) if isinstance(content, dict) else 0,
+                    "is_error": bool(c.get("is_error", False)),
+                    "duration_ms": c.get("duration_ms", 0),
+                    "num_turns": c.get("num_turns", 0),
+                    "stop_reason": c.get("stop_reason"),
+                    "total_cost_usd": c.get("total_cost_usd", 0),
                 },
             ))
             events.append((
@@ -512,7 +513,7 @@ class SessionApplicationService:
                 {
                     "input_tokens": msg_dict.get("input_tokens", usage.get("input_tokens", 0)),
                     "output_tokens": msg_dict.get("output_tokens", usage.get("output_tokens", 0)),
-                    "total_cost_usd": content.get("total_cost_usd", 0) if isinstance(content, dict) else 0,
+                    "total_cost_usd": c.get("total_cost_usd", 0),
                 },
             ))
         else:
@@ -1293,7 +1294,7 @@ class SessionApplicationService:
                 str(e),
                 exc_info=True,
             )
-            session.fail_query(error_message=str(e))
+            session.fail_query()
 
             # Fail trace for team coordinator sessions
             if session.trace_id:
@@ -1362,23 +1363,7 @@ class SessionApplicationService:
                 session.session_id,
                 {
                     "event": "status",
-                    "session": {
-                        "session_id": session.session_id,
-                        "project_id": session.project_id,
-                        "model": session.model,
-                        "status": session.status.value,
-                        "message_count": session.message_count,
-                        "usage": {
-                            "input_tokens": session.usage.input_tokens,
-                            "output_tokens": session.usage.output_tokens,
-                        },
-                        "last_input_tokens": session.last_input_tokens,
-                        "project_dir": session.project_dir,
-                        "name": session.name,
-                        "sdk_session_id": SessionApplicationService._public_sdk_session_id(session.sdk_session_id),
-                        "updated_time": session.updated_time.isoformat() if session.updated_time else None,
-                        "git_branch": "",
-                    },
+                    "session": self._session_to_dict(session),
                 },
             )
 

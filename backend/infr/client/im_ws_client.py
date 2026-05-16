@@ -9,6 +9,8 @@ from uuid import uuid4
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from domain.shared.async_utils import safe_create_task
+
 from domain.im_binding.acl.im_ws_gateway import ImWsGateway
 from domain.shared.business_exception import BusinessException
 from infr.config.im_config import ImConfig
@@ -66,10 +68,10 @@ class ImWsClient(ImWsGateway):
 
         self._connections[im_user_id] = ws
         self._tokens[im_user_id] = im_token
-        self._message_queues[im_user_id] = asyncio.Queue()
+        self._message_queues[im_user_id] = asyncio.Queue(maxsize=1000)
         self._should_reconnect[im_user_id] = True
 
-        task = asyncio.create_task(self._listen_loop(im_user_id))
+        task = safe_create_task(self._listen_loop(im_user_id))
         self._listen_tasks[im_user_id] = task
         logger.info("IM WS connected: im_user_id=%s", im_user_id)
 
@@ -96,8 +98,10 @@ class ImWsClient(ImWsGateway):
 
         queue = self._message_queues.get(im_user_id)
         if queue is not None:
-            await queue.put(None)
-
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
         self._message_queues.pop(im_user_id, None)
         self._tokens.pop(im_user_id, None)
         self._should_reconnect.pop(im_user_id, None)
@@ -159,7 +163,10 @@ class ImWsClient(ImWsGateway):
 
         queue = self._message_queues.get(im_user_id)
         if queue is not None:
-            await queue.put(None)
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
 
     def _handle_raw_message(
         self, im_user_id: str, raw: str | bytes

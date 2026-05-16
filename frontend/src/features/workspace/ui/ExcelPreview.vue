@@ -12,8 +12,10 @@ const sheets = ref([])
 const activeSheet = ref(0)
 const rows = ref([])
 const headers = ref([])
+let loadVersion = 0
 
 async function loadExcel() {
+  const version = ++loadVersion
   loading.value = true
   error.value = ''
   sheets.value = []
@@ -21,16 +23,19 @@ async function loadExcel() {
   headers.value = []
   try {
     const response = await fetch(props.src)
+    if (version !== loadVersion) return
     const buffer = await response.arrayBuffer()
+    if (version !== loadVersion) return
     const workbook = XLSX.read(buffer, { type: 'array' })
     workbookCache = workbook
     sheets.value = workbook.SheetNames
     activeSheet.value = 0
     parseSheet(workbook, 0)
   } catch (e) {
+    if (version !== loadVersion) return
     error.value = e.message || 'Failed to load file'
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 

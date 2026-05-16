@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useTeamRuntime } from '../model/useTeamRuntime'
 import { getProject } from '@entities/project'
 import { useCancellableAsync } from '@shared/lib/useCancellableAsync'
+import { formatDuration } from '@features/message-display'
 import WorkflowEditor from './WorkflowEditor.vue'
 
 const props = defineProps({
@@ -13,7 +14,7 @@ const props = defineProps({
 
 const emit = defineEmits(['navigate-to-session', 'close'])
 
-const { getTasksForSession, loadTimeline, loadLinkedSessions, getWorkerSessionState } = useTeamRuntime()
+const { getTasksForSession, loadTimeline, loadLinkedSessions, getWorkerSessionState, displayStatusFromTaskStatus } = useTeamRuntime()
 
 const tasks = computed(() => getTasksForSession(props.sessionId).value)
 const linkedSessions = ref([])
@@ -33,7 +34,7 @@ const workflowMode = computed(() => teamConfig.value?.mode || 'delegation')
 
 const displaySessions = computed(() => linkedSessions.value.map(session => {
   const liveState = getWorkerSessionState(session.session_id) || {}
-  const displayStatus = liveState.display_status || session.display_status || statusFromTaskStatus(session.task_status) || session.status || 'idle'
+  const displayStatus = liveState.display_status || session.display_status || displayStatusFromTaskStatus(session.task_status) || session.status || 'idle'
   return {
     ...session,
     ...liveState,
@@ -41,12 +42,6 @@ const displaySessions = computed(() => linkedSessions.value.map(session => {
     waiting_for_input: liveState.waiting_for_input ?? session.waiting_for_input ?? displayStatus === 'waiting_input',
   }
 }))
-
-function statusFromTaskStatus(status) {
-  if (['completed', 'failed', 'cancelled'].includes(status)) return status
-  if (['running', 'waiting_for_help'].includes(status)) return 'running'
-  return status || ''
-}
 
 async function refresh() {
   if (!props.sessionId || !props.projectId) return
@@ -115,12 +110,6 @@ function statusLabel(status) {
     waiting_for_help: 'Waiting help',
   }
   return map[status] || status
-}
-
-function formatDuration(ms) {
-  if (!ms) return ''
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function navigateToWorker(session) {

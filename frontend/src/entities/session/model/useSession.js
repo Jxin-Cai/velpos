@@ -267,11 +267,12 @@ function showCancelledHintFor(sessionId) {
   }, 2500))
 }
 
-function ensureState(sessionId) {
-  _ensureState(sessionId)
-}
-
 function removeState(sessionId) {
+  const timer = _cancelledHintTimers.get(sessionId)
+  if (timer) {
+    clearTimeout(timer)
+    _cancelledHintTimers.delete(sessionId)
+  }
   _stateMap.delete(sessionId)
 }
 
@@ -307,13 +308,6 @@ function setError(err) {
 
 function setCanceling(val) {
   setCancelingFor(currentSessionId.value, val)
-}
-
-function reset() {
-  const id = currentSessionId.value
-  if (id) {
-    _stateMap.delete(id)
-  }
 }
 
 // ── Session list management (unchanged) ──
@@ -368,7 +362,6 @@ export function useSession() {
     setQueued,
     setError,
     setCanceling,
-    reset,
     // Session list management
     setSessions,
     setCurrentSessionId,
@@ -389,7 +382,6 @@ export function useSession() {
     setCancelingFor,
     getCancelingFor,
     showCancelledHintFor,
-    ensureState,
     removeState,
     setRestoredPrompt,
   }

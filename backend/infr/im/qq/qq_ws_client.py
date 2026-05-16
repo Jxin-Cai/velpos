@@ -18,6 +18,7 @@ import httpx
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from domain.shared.async_utils import safe_create_task
 from infr.im.qq.qq_api import QqApiClient
 
 # Transient network errors that are expected during reconnection
@@ -113,7 +114,7 @@ class QqWsClient:
             running=True,
         )
         self._connections[channel_id] = conn
-        conn.task = asyncio.create_task(
+        conn.task = safe_create_task(
             self._run_loop(conn),
             name=f"qq-ws-{channel_id[:8]}",
         )
@@ -240,7 +241,7 @@ class QqWsClient:
                 raise RuntimeError(f"Expected READY event, got: {ready}")
 
             # 5. Start heartbeat loop
-            conn.heartbeat_task = asyncio.create_task(
+            conn.heartbeat_task = safe_create_task(
                 self._heartbeat_loop(conn, ws, heartbeat_interval / 1000.0),
                 name=f"qq-hb-{conn.channel_id[:8]}",
             )

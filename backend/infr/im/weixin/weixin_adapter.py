@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
+from domain.shared.async_utils import safe_create_task
 from domain.im_binding.acl.im_channel_adapter import (
     BindResult,
     ImChannelAdapter,
@@ -230,7 +231,7 @@ class WeixinAdapter(ImChannelAdapter):
             "[WeChat-adapter] Starting poll loop for session=%s channel=%s",
             binding.session_id, channel_id,
         )
-        self._poll_tasks[channel_id] = asyncio.create_task(
+        self._poll_tasks[channel_id] = safe_create_task(
             self._run_poll_loop(binding),
         )
 

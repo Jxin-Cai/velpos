@@ -48,42 +48,33 @@ class ConnectionManager(ConnectionManagerPort):
     def disconnect_global(self, websocket: WebSocket) -> None:
         self._global_connections = [ws for ws in self._global_connections if ws != websocket]
 
+    @staticmethod
+    async def _safe_send(ws: WebSocket, data: dict[str, Any]) -> WebSocket | None:
+        try:
+            await ws.send_json(data)
+            return None
+        except Exception:
+            return ws
+
     async def broadcast_global(self, data: dict[str, Any]) -> None:
         connections = list(self._global_connections)
         if not connections:
             return
 
-        async def _safe_send(ws: WebSocket) -> WebSocket | None:
-            try:
-                await ws.send_json(data)
-                return None
-            except Exception:
-                return ws
-
-        results = await asyncio.gather(*(_safe_send(ws) for ws in connections))
+        results = await asyncio.gather(*(self._safe_send(ws, data) for ws in connections))
         dead = [ws for ws in results if ws is not None]
-        for ws in dead:
-            if ws in self._global_connections:
-                self._global_connections.remove(ws)
+        self._global_connections = [ws for ws in self._global_connections if ws not in dead]
 
     async def broadcast(self, session_id: str, data: dict[str, Any]) -> None:
         connections = list(self._connections.get(session_id, []))
 
-        async def _safe_send(ws: WebSocket) -> WebSocket | None:
-            try:
-                await ws.send_json(data)
-                return None
-            except Exception:
-                return ws
-
         if connections:
-            results = await asyncio.gather(*(_safe_send(ws) for ws in connections))
-            dead = [ws for ws in results if ws is not None]
-            for ws in dead:
-                if ws in self._connections.get(session_id, []):
-                    self._connections[session_id].remove(ws)
-            if session_id in self._connections and not self._connections[session_id]:
-                del self._connections[session_id]
+            results = await asyncio.gather(*(self._safe_send(ws, data) for ws in connections))
+            dead = {ws for ws in results if ws is not None}
+            if dead and session_id in self._connections:
+                self._connections[session_id] = [ws for ws in self._connections[session_id] if ws not in dead]
+                if not self._connections[session_id]:
+                    del self._connections[session_id]
 
         if self._broadcast_hooks:
             await asyncio.gather(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import logging
@@ -145,23 +146,7 @@ class ClaudeMdApplyRequest(BaseModel):
 
 
 def _revision_to_dict(revision: ClaudeMdRevision) -> dict:
-    return {
-        "id": revision.id,
-        "project_id": revision.project_id,
-        "version_no": revision.version_no,
-        "state": revision.state.value,
-        "content": revision.content,
-        "content_hash": revision.content_hash,
-        "base_revision_id": revision.base_revision_id,
-        "base_file_hash": revision.base_file_hash,
-        "created_by": revision.created_by,
-        "created_time": revision.created_time.isoformat(),
-        "proposed_time": revision.proposed_time.isoformat() if revision.proposed_time else None,
-        "approved_time": revision.approved_time.isoformat() if revision.approved_time else None,
-        "applied_time": revision.applied_time.isoformat() if revision.applied_time else None,
-        "rejected_time": revision.rejected_time.isoformat() if revision.rejected_time else None,
-        "reject_reason": revision.reject_reason,
-    }
+    return ClaudeMdRevisionApplicationService._revision_to_dict(revision)
 
 
 @router.get("/claude-md")
@@ -293,10 +278,14 @@ async def list_rules(project_dir: str = Query(...)):
     if rules_dir is None or not rules_dir.exists():
         return ApiResponse.success(data={"rules": []})
 
-    rules = []
-    for file_path in sorted(rules_dir.rglob("*.md")):
-        if file_path.is_file():
-            rules.append(_rule_to_dict(file_path, rules_dir))
+    def _scan():
+        result = []
+        for file_path in sorted(rules_dir.rglob("*.md")):
+            if file_path.is_file():
+                result.append(_rule_to_dict(file_path, rules_dir))
+        return result
+
+    rules = await asyncio.to_thread(_scan)
     return ApiResponse.success(data={"rules": rules})
 
 
@@ -310,7 +299,8 @@ async def read_rule(rule_path: str, project_dir: str = Query(...)):
         return ApiResponse.fail(code=-1, message="Invalid rule path")
     if not file_path.exists() or not file_path.is_file():
         return ApiResponse.fail(code=-1, message="Rule not found")
-    return ApiResponse.success(data={"rule": _rule_to_dict(file_path, rules_dir)})
+    rule = await asyncio.to_thread(_rule_to_dict, file_path, rules_dir)
+    return ApiResponse.success(data={"rule": rule})
 
 
 @router.put("/rules/{rule_path:path}")
@@ -325,10 +315,14 @@ async def write_rule(rule_path: str, body: RuleFileWrite):
     if paths is None:
         return ApiResponse.fail(code=-1, message="Invalid paths")
 
-    os.makedirs(file_path.parent, exist_ok=True)
-    file_path.write_text(_compose_rule_markdown(body.content, paths), encoding="utf-8")
+    def _write():
+        os.makedirs(file_path.parent, exist_ok=True)
+        file_path.write_text(_compose_rule_markdown(body.content, paths), encoding="utf-8")
+        return _rule_to_dict(file_path, rules_dir)
+
+    rule = await asyncio.to_thread(_write)
     logger.info("Rule file written: %s", file_path)
-    return ApiResponse.success(data={"rule": _rule_to_dict(file_path, rules_dir)})
+    return ApiResponse.success(data={"rule": rule})
 
 
 @router.delete("/rules/{rule_path:path}")
@@ -342,7 +336,7 @@ async def delete_rule(rule_path: str, project_dir: str = Query(...)):
     if not file_path.exists() or not file_path.is_file():
         return ApiResponse.fail(code=-1, message="Rule not found")
 
-    file_path.unlink()
+    await asyncio.to_thread(file_path.unlink)
     logger.info("Rule file deleted: %s", file_path)
     return ApiResponse.success(data={"path": rule_path})
 
@@ -354,24 +348,26 @@ async def list_memory_files(project_dir: str = Query(...)):
     if mem_dir is None or not mem_dir.exists():
         return ApiResponse.success(data={"files": [], "index": ""})
 
-    files = []
-    for f in sorted(mem_dir.iterdir()):
-        if f.is_file() and f.suffix == ".md" and f.name != "MEMORY.md":
+    def _scan():
+        files = []
+        for f in sorted(mem_dir.iterdir()):
+            if f.is_file() and f.suffix == ".md" and f.name != "MEMORY.md":
+                try:
+                    text = f.read_text(encoding="utf-8")
+                    preview = text[:200] + ("..." if len(text) > 200 else "")
+                    files.append({"name": f.name, "preview": preview, "size": len(text)})
+                except Exception:
+                    files.append({"name": f.name, "preview": "(read error)", "size": 0})
+        index_path = mem_dir / "MEMORY.md"
+        index_content = ""
+        if index_path.exists():
             try:
-                content = f.read_text(encoding="utf-8")
-                preview = content[:200] + ("..." if len(content) > 200 else "")
-                files.append({"name": f.name, "preview": preview, "size": len(content)})
+                index_content = index_path.read_text(encoding="utf-8")
             except Exception:
-                files.append({"name": f.name, "preview": "(read error)", "size": 0})
+                pass
+        return files, index_content
 
-    index_path = mem_dir / "MEMORY.md"
-    index_content = ""
-    if index_path.exists():
-        try:
-            index_content = index_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
-
+    files, index_content = await asyncio.to_thread(_scan)
     return ApiResponse.success(data={"files": files, "index": index_content})
 
 
@@ -386,7 +382,7 @@ async def read_index(project_dir: str = Query(...)):
     if not index_path.exists():
         return ApiResponse.success(data={"content": ""})
 
-    content = index_path.read_text(encoding="utf-8")
+    content = await asyncio.to_thread(index_path.read_text, "utf-8")
     return ApiResponse.success(data={"content": content})
 
 
@@ -404,7 +400,7 @@ async def read_memory_file(filename: str, project_dir: str = Query(...)):
     if not file_path.exists() or not file_path.is_file():
         return ApiResponse.fail(code=-1, message="File not found")
 
-    content = file_path.read_text(encoding="utf-8")
+    content = await asyncio.to_thread(file_path.read_text, "utf-8")
     return ApiResponse.success(data={"name": filename, "content": content})
 
 
@@ -415,13 +411,15 @@ async def write_memory_file(filename: str, body: MemoryFileWrite):
     if mem_dir is None:
         return ApiResponse.fail(code=-1, message="Memory directory not found")
 
-    os.makedirs(mem_dir, exist_ok=True)
-
     file_path = mem_dir / filename
     if not file_path.resolve().is_relative_to(mem_dir.resolve()):
         return ApiResponse.fail(code=-1, message="Invalid filename")
 
-    file_path.write_text(body.content, encoding="utf-8")
+    def _write():
+        os.makedirs(mem_dir, exist_ok=True)
+        file_path.write_text(body.content, encoding="utf-8")
+
+    await asyncio.to_thread(_write)
     logger.info("Memory file written: %s", file_path)
     return ApiResponse.success(data={"name": filename})
 
@@ -433,10 +431,12 @@ async def write_index(body: MemoryFileWrite):
     if mem_dir is None:
         return ApiResponse.fail(code=-1, message="Memory directory not found")
 
-    os.makedirs(mem_dir, exist_ok=True)
+    def _write():
+        os.makedirs(mem_dir, exist_ok=True)
+        index_path = mem_dir / "MEMORY.md"
+        index_path.write_text(body.content, encoding="utf-8")
 
-    index_path = mem_dir / "MEMORY.md"
-    index_path.write_text(body.content, encoding="utf-8")
+    await asyncio.to_thread(_write)
     return ApiResponse.success(data={"name": "MEMORY.md"})
 
 
@@ -454,6 +454,6 @@ async def delete_memory_file(filename: str, project_dir: str = Query(...)):
     if not file_path.exists():
         return ApiResponse.fail(code=-1, message="File not found")
 
-    file_path.unlink()
+    await asyncio.to_thread(file_path.unlink)
     logger.info("Memory file deleted: %s", file_path)
     return ApiResponse.success(data={"name": filename})

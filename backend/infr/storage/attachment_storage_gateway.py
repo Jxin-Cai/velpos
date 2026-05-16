@@ -19,11 +19,11 @@ class AttachmentStorageGateway:
         safe_name = self._safe_filename(filename)
         digest = hashlib.sha256(data).hexdigest()
         path = root / session_id / f"{digest[:12]}-{safe_name}"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
         resolved = path.resolve()
         if not str(resolved).startswith(str(root.resolve())):
             raise ValueError("Attachment path escapes storage root")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
         return str(resolved), digest
 
     @staticmethod

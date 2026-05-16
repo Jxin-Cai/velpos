@@ -2,7 +2,6 @@ export { useSession } from './model/useSession'
 export {
   createSession,
   listSessions,
-  getSession,
   deleteSession,
   batchDeleteSessions,
   clearContext,
@@ -20,6 +19,4 @@ export {
 export {
   getSessionUsage,
   getProjectUsage,
-  getProjectBudget,
-  saveProjectBudget,
 } from './api/usageApi'

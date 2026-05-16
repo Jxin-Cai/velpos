@@ -446,18 +446,15 @@ defineExpose({ setInput, addImage, appendText })
 
 .input-field::placeholder {
   color: var(--text-muted);
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .input-field:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.input-field::placeholder {
-  user-select: none;
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
 }
 
 .input-actions {

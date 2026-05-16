@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from domain.session.model.message import Message
+from domain.session.model.message_type import MessageType
 from domain.session.model.session_status import SessionStatus
 from domain.session.model.usage import Usage
 
@@ -249,7 +250,6 @@ class Session:
         prompt = ""
         last_user_idx = -1
         for i in range(len(self._messages) - 1, -1, -1):
-            from domain.session.model.message_type import MessageType
             if self._messages[i].message_type == MessageType.USER:
                 last_user_idx = i
                 prompt = self._messages[i].content.get("text", "")
@@ -268,7 +268,6 @@ class Session:
         """
         if self._status != SessionStatus.IDLE:
             raise ValueError("Session must be idle to rewind")
-        from domain.session.model.message_type import MessageType
         if user_message_index < 0 or user_message_index >= len(self._messages):
             raise ValueError(f"Invalid message index: {user_message_index}")
         msg = self._messages[user_message_index]
@@ -280,10 +279,9 @@ class Session:
         self._updated_time = datetime.now()
         return prompt
 
-    def fail_query(self, error_message: str) -> None:
+    def fail_query(self) -> None:
         """Transition status from RUNNING to ERROR.
 
-        Records the error message.
         Raises ValueError if not currently RUNNING.
         """
         if self._status != SessionStatus.RUNNING:
@@ -464,7 +462,6 @@ class Session:
             raise ValueError("Session is not compacting")
         if usage is None:
             raise ValueError("usage must not be None")
-        from domain.session.model.message_type import MessageType
 
         marker = Message.create(
             message_type=MessageType.SYSTEM,

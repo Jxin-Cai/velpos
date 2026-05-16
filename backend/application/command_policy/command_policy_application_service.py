@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
+from application.shared.project_resolver import resolve_project
 from domain.command.model.project_command_policy import ProjectCommandPolicy
 from domain.command.repository.project_command_policy_repository import ProjectCommandPolicyRepository
-from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from domain.shared.business_exception import BusinessException
 
@@ -25,7 +24,7 @@ class CommandPolicyApplicationService:
         project_id: str = "",
         project_dir: str = "",
     ) -> list[ProjectCommandPolicy]:
-        project = await self._resolve_project(project_id, project_dir)
+        project = await resolve_project(self._project_repository, project_id, project_dir)
         return await self._policy_repository.find_by_project_id(project.id)
 
     async def save_policy(
@@ -40,7 +39,7 @@ class CommandPolicyApplicationService:
     ) -> ProjectCommandPolicy:
         if not command_name.strip():
             raise BusinessException("Command name is required")
-        project = await self._resolve_project(project_id, project_dir)
+        project = await resolve_project(self._project_repository, project_id, project_dir)
         policy = await self._policy_repository.find_by_project_and_command(
             project.id,
             command_name.strip(),
@@ -70,7 +69,7 @@ class CommandPolicyApplicationService:
         commands: list[dict[str, Any]],
         project_dir: str,
     ) -> list[dict[str, Any]]:
-        project = await self._resolve_project("", project_dir)
+        project = await resolve_project(self._project_repository, "", project_dir)
         policies = await self._policy_repository.find_by_project_id(project.id)
         policy_map = {
             (policy.command_name, policy.command_type): policy
@@ -100,23 +99,6 @@ class CommandPolicyApplicationService:
                 }
             result.append(command)
         return result
-
-    async def _resolve_project(self, project_id: str = "", project_dir: str = "") -> Project:
-        if project_id:
-            project = await self._project_repository.find_by_id(project_id)
-            if project is None:
-                raise BusinessException("Project not found")
-            return project
-        if not project_dir:
-            raise BusinessException("Project id or directory is required")
-        project_path = Path(project_dir).expanduser().resolve()
-        if not project_path.is_dir():
-            raise BusinessException("Project directory not found")
-        project = await self._project_repository.find_by_dir_path(str(project_path))
-        if project is None:
-            project = Project.create(project_path.name, str(project_path))
-            await self._project_repository.save(project)
-        return project
 
     @staticmethod
     def policy_to_dict(policy: ProjectCommandPolicy) -> dict[str, Any]:

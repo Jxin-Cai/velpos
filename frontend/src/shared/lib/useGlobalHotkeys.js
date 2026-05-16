@@ -181,14 +181,3 @@ export function useGlobalHotkeys({ keys, handler, priority = 0, condition = null
  * @param {Function} handler - Local handler function
  * @returns {Object} - Control object
  */
-export function useLocalHotkeys(keys, handler) {
-  return useGlobalHotkeys({
-    keys,
-    handler: (event) => {
-      handler(event)
-      return false // Block propagation to lower priority handlers
-    },
-    priority: 100, // Local hotkeys always have higher priority
-  })
-}
-

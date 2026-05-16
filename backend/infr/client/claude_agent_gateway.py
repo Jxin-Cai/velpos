@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from claude_agent_sdk._errors import ProcessError
@@ -13,7 +13,6 @@ from claude_agent_sdk.types import (
     TaskStartedMessage,
     TaskProgressMessage,
     TaskNotificationMessage,
-    ResultMessage,
     PermissionResultAllow,
     PermissionResultDeny,
     ToolPermissionContext,
@@ -119,7 +118,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         return str(content)[:500]
 
     @staticmethod
-    def _create_stderr_collector() -> tuple[list[str], "Callable[[str], None]"]:
+    def _create_stderr_collector() -> tuple[list[str], Callable[[str], None]]:
         """Create a stderr line collector and its callback."""
         lines: list[str] = []
 
@@ -159,15 +158,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         attempted resume but had to fall back to a fresh session.
         """
         stderr_lines, stderr_cb = self._create_stderr_collector()
-        options = ClaudeAgentOptions(
+        common_kwargs = dict(
             model=model,
             permission_mode=perm_mode,
             max_buffer_size=self._max_buffer_size,
             cli_path=self._cli_path,
             setting_sources=["user", "project"],
             cwd=cwd if cwd else None,
-            resume=prev_sdk_sid,
-            fork_session=fork_session,
             can_use_tool=self._create_can_use_tool_callback(session_id),
             stderr=stderr_cb,
             system_prompt=system_prompt,
@@ -177,6 +174,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             output_format=output_format,
             hooks=hooks,
             enable_file_checkpointing=enable_file_checkpointing,
+        )
+        options = ClaudeAgentOptions(
+            **common_kwargs,
+            resume=prev_sdk_sid,
+            fork_session=fork_session,
         )
 
         client = ClaudeSDKClient(options=options)
@@ -191,23 +193,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             logger.warning("resume 失败, 降级为新会话: session=%s", session_id)
             self._sdk_session_ids.pop(session_id, None)
 
-            options_fresh = ClaudeAgentOptions(
-                model=model,
-                permission_mode=perm_mode,
-                max_buffer_size=self._max_buffer_size,
-                cli_path=self._cli_path,
-                setting_sources=["user", "project"],
-                cwd=cwd if cwd else None,
-                can_use_tool=self._create_can_use_tool_callback(session_id),
-                stderr=stderr_cb,
-                system_prompt=system_prompt,
-                mcp_servers=mcp_servers or {},
-                max_turns=max_turns,
-                max_budget_usd=max_budget_usd,
-                output_format=output_format,
-                hooks=hooks,
-                enable_file_checkpointing=enable_file_checkpointing,
-            )
+            options_fresh = ClaudeAgentOptions(**common_kwargs)
             client_fresh = ClaudeSDKClient(options=options_fresh)
             await client_fresh.connect()
             return client_fresh, True
@@ -354,24 +340,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             yield {"message_type": "_meta", "resume_failed": True}
 
         try:
-            async for msg in client.receive_response():
-                # Capture SDK session_id from messages that carry it
-                sdk_sid = getattr(msg, "session_id", None)
-                if sdk_sid:
-                    old_sid = self._sdk_session_ids.get(session_id)
-                    if old_sid != sdk_sid:
-                        self._sdk_session_ids[session_id] = sdk_sid
-                info = self._extract_message_info(msg)
-                if info is not None:
-                    # Attach captured SDK session_id so caller can persist it
-                    if sdk_sid:
-                        info["sdk_session_id"] = sdk_sid
-                    yield info
+            async for info in self._iter_response(session_id, client):
+                yield info
         finally:
             if self._clients.get(session_id) is client:
                 self._set_state(session_id, "connected")
 
-    async def send_query(
+    async def _run_query(
         self,
         session_id: str,
         prompt: str,
@@ -385,31 +360,32 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         await client.query(prompt=prompt)
 
         try:
-            async for msg in client.receive_response():
-                sdk_sid = getattr(msg, "session_id", None)
-                if sdk_sid:
-                    old_sid = self._sdk_session_ids.get(session_id)
-                    if old_sid != sdk_sid:
-                        self._sdk_session_ids[session_id] = sdk_sid
-                info = self._extract_message_info(msg)
-                if info is not None:
-                    if sdk_sid:
-                        info["sdk_session_id"] = sdk_sid
-                    yield info
+            async for info in self._iter_response(session_id, client):
+                yield info
         finally:
             if self._clients.get(session_id) is client:
                 self._set_state(session_id, "connected")
+
+    async def send_query(
+        self,
+        session_id: str,
+        prompt: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        async for info in self._run_query(session_id, prompt):
+            yield info
 
     async def compact(
         self,
         session_id: str,
     ) -> AsyncIterator[dict[str, Any]]:
-        client = self._clients.get(session_id)
-        if client is None:
-            raise RuntimeError(f"No active connection for session {session_id}")
+        async for info in self._run_query(session_id, "/compact"):
+            yield info
 
-        await client.query(prompt="/compact")
-
+    async def _iter_response(
+        self,
+        session_id: str,
+        client: ClaudeSDKClient,
+    ) -> AsyncIterator[dict[str, Any]]:
         async for msg in client.receive_response():
             sdk_sid = getattr(msg, "session_id", None)
             if sdk_sid:

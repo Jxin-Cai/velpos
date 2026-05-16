@@ -7,6 +7,7 @@ gets its own token cache so multiple QQ bots can coexist.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ class QqApiClient:
         self._app_secret = ""
         # Per-credential token cache: key = app_id
         self._tokens: dict[str, _TokenEntry] = {}
+        self._token_lock = asyncio.Lock()
 
     def set_credentials(self, app_id: str, app_secret: str) -> None:
         """Set global fallback credentials (legacy interface)."""
@@ -81,7 +83,11 @@ class QqApiClient:
         if entry and entry.access_token and time.time() < entry.expires_at - 60:
             return entry.access_token
 
-        return await self._refresh_token(aid, asec)
+        async with self._token_lock:
+            entry = self._tokens.get(aid)
+            if entry and entry.access_token and time.time() < entry.expires_at - 60:
+                return entry.access_token
+            return await self._refresh_token(aid, asec)
 
     async def _refresh_token(self, app_id: str, app_secret: str) -> str:
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:

@@ -128,7 +128,7 @@ class OpenImAdapter(ImChannelAdapter):
 
     async def start_listening(self, binding: ImBinding, on_message=None) -> None:
         try:
-            if not await self._im_ws_gateway.is_connected(binding.im_user_id):
+            if not self._im_ws_gateway.is_connected(binding.im_user_id):
                 await self._im_ws_gateway.connect(binding.im_user_id, binding.im_token)
         except Exception:
             logger.warning("start_listening failed for %s", binding.im_user_id)

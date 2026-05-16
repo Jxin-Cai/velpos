@@ -14,6 +14,7 @@ from application.session.session_application_service import SessionApplicationSe
 from application.terminal.terminal_application_service import TerminalApplicationService
 from application.team_task.team_coordinator_service import TeamCoordinatorService
 from domain.shared.async_utils import safe_create_task
+from domain.shared.business_exception import BusinessException
 from infr.client.connection_manager import ConnectionManager
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from ohs.assembler.session_assembler import SessionAssembler
@@ -124,8 +125,6 @@ async def websocket_endpoint(
     attachment_service: AttachmentServiceDep,
     team_service: TeamServiceDep,
 ) -> None:
-    from domain.shared.business_exception import BusinessException
-
     # Accept WebSocket first to avoid 403 on handshake rejection.
     # Errors are delivered as WebSocket events so the client gets proper close codes.
     await manager.connect(websocket, session_id)

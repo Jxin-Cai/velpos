@@ -872,12 +872,6 @@ useGlobalHotkeys({
   gap: 8px;
 }
 
-.header-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--border);
-}
-
 .logo {
   display: flex;
   align-items: center;
@@ -1027,13 +1021,6 @@ useGlobalHotkeys({
 .sidebar-collapse-btn:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
-}
-
-.sidebar-collapse-btn.collapsed {
-  left: 0;
-  border-left: none;
-  border-right: 1px solid var(--border);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 @media (max-width: 768px) {

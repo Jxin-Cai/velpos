@@ -11,13 +11,25 @@ class TraceFileManager:
 
     _locks: dict[str, asyncio.Lock] = {}
     _locks_guard = asyncio.Lock()
+    _MAX_LOCKS = 200
 
     @classmethod
     async def _get_lock(cls, trace_id: str) -> asyncio.Lock:
         async with cls._locks_guard:
             if trace_id not in cls._locks:
+                if len(cls._locks) >= cls._MAX_LOCKS:
+                    stale = [k for k, v in cls._locks.items() if not v.locked()]
+                    for k in stale[:len(cls._locks) - cls._MAX_LOCKS + 1]:
+                        del cls._locks[k]
                 cls._locks[trace_id] = asyncio.Lock()
             return cls._locks[trace_id]
+
+    @classmethod
+    async def _release_lock(cls, trace_id: str) -> None:
+        async with cls._locks_guard:
+            lock = cls._locks.get(trace_id)
+            if lock and not lock.locked():
+                cls._locks.pop(trace_id, None)
 
     @staticmethod
     def trace_dir(project_dir: str) -> str:
@@ -117,6 +129,7 @@ class TraceFileManager:
             await asyncio.to_thread(
                 cls._write_json, cls.trace_path(project_dir, trace_id), data,
             )
+        await cls._release_lock(trace_id)
 
     @classmethod
     async def fail_trace(
@@ -136,6 +149,7 @@ class TraceFileManager:
             await asyncio.to_thread(
                 cls._write_json, cls.trace_path(project_dir, trace_id), data,
             )
+        await cls._release_lock(trace_id)
 
     @classmethod
     async def read_trace(

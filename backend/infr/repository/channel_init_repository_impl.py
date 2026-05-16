@@ -22,8 +22,8 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
         await self._session.merge(model)
         await self._session.flush()
 
-    async def find_by_id(self, id: str) -> ChannelInit | None:
-        stmt = select(ChannelInitModel).where(ChannelInitModel.id == id)
+    async def find_by_id(self, channel_init_id: str) -> ChannelInit | None:
+        stmt = select(ChannelInitModel).where(ChannelInitModel.id == channel_init_id)
         result = await self._session.execute(stmt)
         model = result.scalar_one_or_none()
         return self._to_domain(model) if model else None
@@ -52,8 +52,8 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
         result = await self._session.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
 
-    async def remove(self, id: str) -> bool:
-        stmt = select(ChannelInitModel).where(ChannelInitModel.id == id)
+    async def remove(self, channel_init_id: str) -> bool:
+        stmt = select(ChannelInitModel).where(ChannelInitModel.id == channel_init_id)
         result = await self._session.execute(stmt)
         model = result.scalar_one_or_none()
         if model is None:

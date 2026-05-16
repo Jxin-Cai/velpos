@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from domain.im_binding.model.channel_spec import ImChannelSpec
 from domain.im_binding.model.channel_type import ImChannelType
-
-if TYPE_CHECKING:
-    pass
 
 
 class ImChannelRegistry:

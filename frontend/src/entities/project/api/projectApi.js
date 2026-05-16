@@ -29,18 +29,6 @@ export function pickProjectDirectory() {
   return post('/projects/pick-directory', {})
 }
 
-export function initPlugin(projectId, pluginType, sessionId) {
-  return post(`/projects/${projectId}/init-plugin`, { plugin_type: pluginType, session_id: sessionId })
-}
-
-export function completePluginInit(projectId, pluginType) {
-  return post(`/projects/${projectId}/complete-plugin-init`, { plugin_type: pluginType })
-}
-
-export function resetPlugin(projectId, pluginType) {
-  return post(`/projects/${projectId}/reset-plugin`, { plugin_type: pluginType })
-}
-
 export function getGitBranches(projectId) {
   return get(`/projects/${projectId}/git/branches`)
 }

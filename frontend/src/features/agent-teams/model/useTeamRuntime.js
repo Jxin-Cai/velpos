@@ -124,6 +124,7 @@ export function useTeamRuntime() {
   return {
     teamTasks,
     workerSessionStates,
+    displayStatusFromTaskStatus,
     handleTeamEvent,
     handleWorkerSessionEvent,
     getTasksForSession,

@@ -46,6 +46,5 @@ export function useNotifications() {
     addNotification,
     markAsRead,
     markAllAsRead,
-    clearExpired,
   }
 }

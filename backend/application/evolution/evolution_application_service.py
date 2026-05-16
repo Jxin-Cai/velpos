@@ -176,20 +176,4 @@ class EvolutionApplicationService:
 
     @staticmethod
     def _revision_to_dict(revision) -> dict[str, Any]:
-        return {
-            "id": revision.id,
-            "project_id": revision.project_id,
-            "version_no": revision.version_no,
-            "state": revision.state.value,
-            "content": revision.content,
-            "content_hash": revision.content_hash,
-            "base_revision_id": revision.base_revision_id,
-            "base_file_hash": revision.base_file_hash,
-            "created_by": revision.created_by,
-            "created_time": revision.created_time.isoformat(),
-            "proposed_time": revision.proposed_time.isoformat() if revision.proposed_time else None,
-            "approved_time": revision.approved_time.isoformat() if revision.approved_time else None,
-            "applied_time": revision.applied_time.isoformat() if revision.applied_time else None,
-            "rejected_time": revision.rejected_time.isoformat() if revision.rejected_time else None,
-            "reject_reason": revision.reject_reason,
-        }
+        return ClaudeMdRevisionApplicationService._revision_to_dict(revision)

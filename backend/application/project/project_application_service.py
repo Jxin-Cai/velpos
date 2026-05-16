@@ -831,26 +831,6 @@ class ProjectApplicationService:
             if svc is not None:
                 await svc.close()
 
-    async def _auto_complete_plugin_init(
-        self, project_id: str, plugin_type: PluginType,
-    ) -> None:
-        from infr.config.database import async_session_factory
-        from infr.repository.project_repository_impl import ProjectRepositoryImpl
-
-        async with async_session_factory() as db_session:
-            repo = ProjectRepositoryImpl(db_session)
-            project = await repo.find_by_id(project_id)
-            if project is None:
-                return
-            if project.get_plugin_init_status(plugin_type) == PluginInitStatus.INITIALIZING:
-                project.complete_plugin_init(plugin_type)
-                await repo.save(project)
-                await db_session.commit()
-                logger.info(
-                    "Plugin init auto-completed: project=%s, type=%s",
-                    project_id, plugin_type.value,
-                )
-
     async def _auto_fail_plugin_init(
         self, project_id: str, plugin_type: PluginType,
     ) -> None:

@@ -7,9 +7,6 @@ export {
   reorderProjects,
   ensureProjectsByDirs,
   pickProjectDirectory,
-  initPlugin,
-  completePluginInit,
-  resetPlugin,
   getGitBranches,
   checkoutGitBranch,
 } from './api/projectApi'

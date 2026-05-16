@@ -9,6 +9,7 @@ import {
   writeRule,
   deleteRule,
 } from '../api/memoryApi'
+import { parseRulePaths } from '@shared/lib/textParsers'
 
 const content = ref('')
 const fileHash = ref('')
@@ -16,6 +17,7 @@ const activeRevision = ref(null)
 const versions = ref([])
 const selectedRevision = ref(null)
 const loading = ref(false)
+const loadingCount = ref(0)
 const editing = ref(false)
 const editContent = ref('')
 const saving = ref(false)
@@ -39,17 +41,10 @@ function formatRulePaths(paths = []) {
   return paths.join('\n')
 }
 
-function parseRulePaths(text = '') {
-  return text
-    .split('\n')
-    .map(item => item.trim())
-    .filter(Boolean)
-}
-
 export function useMemoryManager() {
   async function loadClaudeMd(projectDir) {
     if (!projectDir) return
-    loading.value = true
+    loadingCount.value++
     error.value = ''
     conflictMessage.value = ''
     try {
@@ -67,13 +62,14 @@ export function useMemoryManager() {
       content.value = ''
       error.value = e.message || 'Failed to load CLAUDE.md'
     } finally {
-      loading.value = false
+      loadingCount.value--
+      loading.value = loadingCount.value > 0
     }
   }
 
   async function loadRules(projectDir) {
     if (!projectDir) return
-    loading.value = true
+    loadingCount.value++
     error.value = ''
     try {
       const data = await listRules(projectDir)
@@ -85,7 +81,8 @@ export function useMemoryManager() {
       selectedRule.value = null
       error.value = e.message || 'Failed to load rules'
     } finally {
-      loading.value = false
+      loadingCount.value--
+      loading.value = loadingCount.value > 0
     }
   }
 

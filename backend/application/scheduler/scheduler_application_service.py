@@ -208,6 +208,7 @@ class SchedulerApplicationService:
             return
         await self._repository.save_run(run)
         await self._repository.commit()
+
     async def _resolve_anchor_session_id(
         self,
         service: SessionApplicationService,

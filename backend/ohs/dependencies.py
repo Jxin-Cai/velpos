@@ -203,8 +203,8 @@ async def _persist_pending_request_context(
 _claude_agent_gateway.set_persist_pending_request_context_fn(_persist_pending_request_context)
 
 
-async def _on_assistant_response(session_id: str, content: str) -> None:
-    """Forward assistant response to bound IM channel (outbound sync)."""
+async def _sync_to_im(session_id: str, content: str, log_label: str = "Outbound") -> None:
+    """Forward a message to the bound IM channel with 3-attempt retry."""
     from infr.config.database import async_session_factory
 
     last_err = None
@@ -225,8 +225,8 @@ async def _on_assistant_response(session_id: str, content: str) -> None:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
     logger.warning(
-        "Outbound IM sync failed for session %s after 3 attempts",
-        session_id, exc_info=last_err,
+        "%s IM sync failed for session %s after 3 attempts",
+        log_label, session_id, exc_info=last_err,
     )
     await _connection_manager.broadcast(session_id, {
         "event": "error",
@@ -234,35 +234,12 @@ async def _on_assistant_response(session_id: str, content: str) -> None:
     })
 
 
+async def _on_assistant_response(session_id: str, content: str) -> None:
+    await _sync_to_im(session_id, content, "Outbound")
+
+
 async def _on_user_message(session_id: str, content: str) -> None:
-    """Forward user message from Web UI to bound IM channel (outbound sync)."""
-    from infr.config.database import async_session_factory
-
-    last_err = None
-    for attempt in range(3):
-        try:
-            async with async_session_factory() as db_session:
-                svc = ImChannelApplicationService(
-                    registry=_im_channel_registry,
-                    binding_repo=ImBindingRepositoryImpl(db_session),
-                    init_repo=ChannelInitRepositoryImpl(db_session),
-                )
-                await svc.sync_outbound(session_id, f"[Web User]\n{content}")
-                await db_session.commit()
-            return
-        except Exception as exc:
-            last_err = exc
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (attempt + 1))
-
-    logger.warning(
-        "User message IM sync failed for session %s after 3 attempts",
-        session_id, exc_info=last_err,
-    )
-    await _connection_manager.broadcast(session_id, {
-        "event": "error",
-        "message": "IM message sync failed, your message may not have been delivered to the IM channel.",
-    })
+    await _sync_to_im(session_id, f"[Web User]\n{content}", "User message")
 
 
 async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:

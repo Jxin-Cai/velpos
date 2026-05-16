@@ -546,9 +546,11 @@ class ImChannelApplicationService:
 
         await self._persist_reply_context(binding, sender_id, group_id)
 
+        adapter = self._create_adapter(binding.channel_type)
+        reply_ctx_base = {"msg_id": message_id, "sender_id": sender_id, "group_id": group_id}
+
         # Add "working" reaction for Lark channels
         reaction_id = ""
-        adapter = self._create_adapter(binding.channel_type)
         if hasattr(adapter, 'add_reaction') and message_id:
             try:
                 reaction_id = await adapter.add_reaction(binding, message_id, "OnIt")
@@ -602,10 +604,9 @@ class ImChannelApplicationService:
                 if session.message_count <= msg_count_before:
                     logger.warning("[IM-process] No new messages after query: session=%s", binding.session_id)
                     try:
-                        err_adapter = self._create_adapter(binding.channel_type)
-                        err_ctx = err_adapter.build_reply_context(binding) or {}
-                        err_ctx.update({"msg_id": message_id, "sender_id": sender_id, "group_id": group_id})
-                        await err_adapter.send_message(binding, "[Error] Query failed, please retry.", reply_context=err_ctx)
+                        err_ctx = adapter.build_reply_context(binding) or {}
+                        err_ctx.update(reply_ctx_base)
+                        await adapter.send_message(binding, "[Error] Query failed, please retry.", reply_context=err_ctx)
                     except Exception:
                         logger.warning("[IM-process] Failed to send error notification: session=%s", binding.session_id, exc_info=True)
                     return
@@ -613,13 +614,8 @@ class ImChannelApplicationService:
                 response = self._extract_last_response(session)
 
             if response:
-                adapter = self._create_adapter(binding.channel_type)
                 reply_ctx = adapter.build_reply_context(binding) or {}
-                reply_ctx.update({
-                    "msg_id": message_id,
-                    "sender_id": sender_id,
-                    "group_id": group_id,
-                })
+                reply_ctx.update(reply_ctx_base)
                 await adapter.send_message(binding, response, reply_context=reply_ctx)
             else:
                 logger.warning("[IM-process] No response extracted: session=%s", binding.session_id)
@@ -627,10 +623,9 @@ class ImChannelApplicationService:
         except Exception as exc:
             logger.error("[IM-process] Failed to process inbound: session=%s", binding.session_id, exc_info=True)
             try:
-                err_adapter = self._create_adapter(binding.channel_type)
-                err_ctx = err_adapter.build_reply_context(binding) or {}
-                err_ctx.update({"msg_id": message_id, "sender_id": sender_id, "group_id": group_id})
-                await err_adapter.send_message(binding, f"[Error] {str(exc)[:200]}", reply_context=err_ctx)
+                err_ctx = adapter.build_reply_context(binding) or {}
+                err_ctx.update(reply_ctx_base)
+                await adapter.send_message(binding, f"[Error] {str(exc)[:200]}", reply_context=err_ctx)
             except Exception:
                 logger.warning("[IM-process] Failed to send error notification to IM", exc_info=True)
         finally:
@@ -645,21 +640,9 @@ class ImChannelApplicationService:
     def _extract_last_response(session: Any) -> str:
         for msg in reversed(session.messages):
             if msg.message_type.value == "assistant":
-                content = msg.content
-                blocks = None
-                if isinstance(content, dict):
-                    blocks = content.get("blocks", [])
-                elif isinstance(content, list):
-                    blocks = content
-                if blocks:
-                    texts = [
-                        b.get("text", "")
-                        for b in blocks
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    ]
-                    text = "".join(texts).strip()
-                    if text:
-                        return text
+                text = ImChannelApplicationService._extract_text_from_content(msg.content)
+                if text:
+                    return text
         return ""
 
     # ── Channel listener lifecycle ──

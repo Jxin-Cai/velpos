@@ -23,6 +23,10 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'prompt', 'navigate-session'])
 
+function scheduleClose() {
+  setTimeout(() => emit('close'), 600)
+}
+
 const {
   bindingState,
   loading,
@@ -103,7 +107,7 @@ async function onInstanceSelect(instance) {
   if (result?.ui_data?.mode === 'prompt') {
     bindUiData.value = result.ui_data
   } else if (result?.binding_status === 'bound') {
-    setTimeout(() => emit('close'), 600)
+    scheduleClose()
   }
 }
 
@@ -125,7 +129,7 @@ async function onChannelCreate(channelType, name) {
     if (bindResult?.ui_data?.mode === 'prompt') {
       bindUiData.value = bindResult.ui_data
     } else if (bindResult?.binding_status === 'bound') {
-      setTimeout(() => emit('close'), 600)
+      scheduleClose()
     }
   }
 }
@@ -154,7 +158,7 @@ async function onInitSubmit(params) {
       bindUiData.value = bindResult.ui_data
     } else if (bindResult?.binding_status === 'bound') {
       // Direct-mode binding (Lark, WeChat) — auto-close after brief success flash
-      setTimeout(() => emit('close'), 600)
+      scheduleClose()
     }
   } else if (result?.ui_data?.prompt) {
     emit('prompt', result.ui_data.prompt)
@@ -204,7 +208,7 @@ async function onSyncContext() {
   clearSyncResult()
   const result = await handleSyncContext(props.sessionId)
   if (result && result.synced != null && !result.error) {
-    setTimeout(() => emit('close'), 600)
+    scheduleClose()
   }
 }
 

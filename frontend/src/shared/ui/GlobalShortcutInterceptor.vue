@@ -10,7 +10,7 @@ const { status, currentSessionId, sessions, setCurrentSessionId } = useSession()
 const { projects } = useProject()
 const connections = inject('wsConnections', null)
 const switchSession = inject('switchSession', null)
-const { closeTopmostDialog, hasOpenDialogs } = useDialogManager()
+const { hasOpenDialogs } = useDialogManager()
 
 // ==================== Session 导航逻辑 ====================
 
@@ -194,7 +194,7 @@ useGlobalHotkeys({
   keys: ['Ctrl+ArrowUp', 'Cmd+ArrowUp'],
   handler: () => {
     navigatePrevious()
-    return true
+    return false
   },
   priority: 100
 })
@@ -204,16 +204,6 @@ useGlobalHotkeys({
   keys: ['Ctrl+ArrowDown', 'Cmd+ArrowDown'],
   handler: () => {
     navigateNext()
-    return true
-  },
-  priority: 100
-})
-
-// Cmd/Ctrl + K: 语音输入切换
-useGlobalHotkeys({
-  keys: ['Ctrl+K', 'Cmd+K'],
-  handler: () => {
-    window.dispatchEvent(new CustomEvent('vp-voice-toggle-global'))
     return false
   },
   priority: 100

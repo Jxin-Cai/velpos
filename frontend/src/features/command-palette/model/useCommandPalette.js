@@ -94,11 +94,6 @@ export function useCommandPalette() {
     }
   }
 
-  function openPanel() {
-    visible.value = true
-    searchQuery.value = ''
-  }
-
   function closePanel() {
     visible.value = false
     searchQuery.value = ''
@@ -121,7 +116,6 @@ export function useCommandPalette() {
     loadCommands,
     updateCommandPolicy,
     togglePanel,
-    openPanel,
     closePanel,
     invalidateCache,
   }

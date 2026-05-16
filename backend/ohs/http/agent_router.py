@@ -82,7 +82,6 @@ async def update_agent(
 @router.post("/projects/{project_id}/unload", summary="Unload agent from project")
 async def unload_agent(
     project_id: str,
-    request: UnloadAgentRequest,
     service: ServiceDep,
     project_repo=Depends(get_project_repository),
 ) -> ApiResponse[ProjectResponse]:

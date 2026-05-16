@@ -34,16 +34,9 @@ export function useTheme() {
     }
   }
 
-  function cycleTheme() {
-    const idx = THEMES.indexOf(currentTheme.value)
-    const next = THEMES[(idx + 1) % THEMES.length]
-    currentTheme.value = next
-  }
-
   return {
     theme: currentTheme,
     themes: THEMES,
     setTheme,
-    cycleTheme,
   }
 }

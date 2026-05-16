@@ -8,9 +8,10 @@ from domain.memory.model.claude_md_revision import ClaudeMdRevision
 from domain.memory.model.claude_md_revision_event import ClaudeMdRevisionEvent
 from domain.memory.model.claude_md_revision_state import ClaudeMdRevisionState
 from domain.memory.repository.claude_md_revision_repository import ClaudeMdRevisionRepository
-from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from domain.shared.business_exception import BusinessException
+
+from application.shared.project_resolver import resolve_project
 
 
 @dataclass(frozen=True)
@@ -175,14 +176,9 @@ class ClaudeMdRevisionApplicationService:
             "revision": self._revision_to_dict(revision),
         }
 
-    async def _resolve_project(self, project_dir: str) -> tuple[Project, Path]:
-        project_path = Path(project_dir).expanduser().resolve()
-        if not project_path.is_dir():
-            raise BusinessException("Project directory not found")
-        project = await self._project_repository.find_by_dir_path(str(project_path))
-        if project is None:
-            project = Project.create(project_path.name, str(project_path))
-            await self._project_repository.save(project)
+    async def _resolve_project(self, project_dir: str) -> tuple:
+        project = await resolve_project(self._project_repository, project_dir=project_dir)
+        project_path = Path(project.dir_path)
         claude_md_path = (project_path / "CLAUDE.md").resolve()
         if not claude_md_path.is_relative_to(project_path):
             raise BusinessException("Invalid CLAUDE.md path")

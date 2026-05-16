@@ -6,7 +6,6 @@ const DEFAULT_CONTEXT_SIZE = 200000
 
 // Cached model context sizes from backend
 const modelContextSizes = ref({})
-const usageSummary = ref(null)
 const projectUsageSummary = ref(null)
 let usageFetchKey = ''
 let modelsFetched = false
@@ -42,11 +41,10 @@ export function useSessionStats() {
     if (key === usageFetchKey) return
     usageFetchKey = key
     try {
-      const [sessionUsage, projectUsage] = await Promise.all([
+      const [, projectUsage] = await Promise.all([
         getSessionUsage(current.session_id),
         current.project_id ? getProjectUsage(current.project_id, true) : Promise.resolve(null),
       ])
-      usageSummary.value = sessionUsage
       projectUsageSummary.value = projectUsage
     } catch {
       // keep previous usage display
@@ -61,13 +59,6 @@ export function useSessionStats() {
 
 
   const gitBranch = computed(() => session.value?.git_branch || '')
-
-  // Last query duration
-  const lastQueryDuration = computed(() => {
-    if (!queryHistory.value.length) return null
-    const last = queryHistory.value[queryHistory.value.length - 1]
-    return last.duration_ms || null
-  })
 
   // Context usage ratio
   // Uses last query's input_tokens as the best estimate of current context
@@ -128,50 +119,10 @@ export function useSessionStats() {
       .map(([name, count]) => ({ name, count }))
   })
 
-  // Active subagents: track from system messages (task_started / task_progress / task_notification)
-  const activeSubagents = computed(() => {
-    const tasks = {}
-    const now = Date.now()
-    for (const msg of messages.value) {
-      if (msg.type !== 'system' || !msg.content) continue
-      const { subtype, task_id, description, status: taskStatus, summary } = msg.content
-      if (!task_id) continue
-
-      if (subtype === 'task_started') {
-        tasks[task_id] = {
-          task_id,
-          description: description || '',
-          startTime: msg.timestamp || now,
-          status: 'running',
-        }
-      } else if (subtype === 'task_progress') {
-        if (tasks[task_id]) {
-          if (description) tasks[task_id].description = description
-        } else {
-          tasks[task_id] = {
-            task_id,
-            description: description || '',
-            startTime: now,
-            status: 'running',
-          }
-        }
-      } else if (subtype === 'task_notification') {
-        if (tasks[task_id]) {
-          tasks[task_id].status = taskStatus || 'done'
-        }
-      }
-    }
-    // Return only running tasks
-    return Object.values(tasks).filter(t => t.status === 'running')
-  })
-
   return {
     gitBranch,
-    lastQueryDuration,
     contextUsage,
     toolStats,
-    activeSubagents,
-    usageSummary,
     projectUsageSummary,
   }
 }

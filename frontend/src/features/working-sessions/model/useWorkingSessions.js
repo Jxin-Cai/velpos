@@ -28,16 +28,11 @@ export function useWorkingSessions() {
     workingSessions.value = updated
   }
 
-  function isWorking(sessionId) {
-    return workingSessions.value.has(sessionId)
-  }
-
   return {
     workingSessions,
     workingCount,
     workingList,
     markWorking,
     markDone,
-    isWorking,
   }
 }

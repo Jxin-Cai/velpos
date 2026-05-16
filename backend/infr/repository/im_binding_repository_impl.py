@@ -68,9 +68,9 @@ class ImBindingRepositoryImpl(ImBindingRepository):
             return None
         return self._to_domain(model)
 
-    async def find_by_id(self, id: str) -> ImBinding | None:
+    async def find_by_id(self, binding_id: str) -> ImBinding | None:
         stmt = select(ImBindingModel).where(
-            ImBindingModel.id == id,
+            ImBindingModel.id == binding_id,
         )
         result = await self._session.execute(stmt)
         model = result.scalars().first()

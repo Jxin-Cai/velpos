@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useTaskProgress } from '../model/useTaskProgress'
+import { formatDurationLong as formatDuration } from '@features/message-display'
 
 const emit = defineEmits(['close'])
 
@@ -23,16 +24,6 @@ onBeforeUnmount(() => {
 function formatElapsed(startTime) {
   const diff = Math.max(0, now.value - startTime)
   return formatDuration(diff)
-}
-
-function formatDuration(ms) {
-  const secs = Math.floor(Math.max(0, ms) / 1000)
-  if (secs < 60) return `${secs}s`
-  const mins = Math.floor(secs / 60)
-  const remainSecs = secs % 60
-  if (mins < 60) return `${mins}m ${remainSecs}s`
-  const hrs = Math.floor(mins / 60)
-  return `${hrs}h ${mins % 60}m`
 }
 
 function truncate(text, max = 80) {

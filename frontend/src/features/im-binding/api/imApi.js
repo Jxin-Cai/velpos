@@ -42,10 +42,6 @@ export function unbindIm(sessionId) {
 
 // ── Channel initialization ──
 
-export function getChannelInitStatus(channelId) {
-  return get(`/im/channels/${encodeURIComponent(channelId)}/init`)
-}
-
 export function initializeChannel(channelId, params = {}) {
   return post(`/im/channels/${encodeURIComponent(channelId)}/init`, { params })
 }

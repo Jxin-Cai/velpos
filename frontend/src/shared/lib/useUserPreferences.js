@@ -26,11 +26,6 @@ export function useUserPreferences() {
     }
   }
 
-  function getEnterBehavior() {
-    return currentEnterBehavior.value
-  }
-
-  // 判断Enter键是否应该发送消息
   function shouldEnterSend() {
     return currentEnterBehavior.value === 'enter-send'
   }
@@ -44,7 +39,6 @@ export function useUserPreferences() {
     enterBehavior: currentEnterBehavior,
     enterBehaviors: ENTER_BEHAVIORS,
     setEnterBehavior,
-    getEnterBehavior,
     shouldEnterSend,
     shouldCtrlEnterSend,
   }

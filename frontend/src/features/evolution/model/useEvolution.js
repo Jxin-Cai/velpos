@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { extractEvolutionLessons, createEvolutionClaudeMdDraft } from '../api/evolutionApi'
+import { parseRulePaths } from '@shared/lib/textParsers'
 
 const visible = ref(false)
 const loading = ref(false)
@@ -18,13 +19,6 @@ function buildRuleDraftContent(items) {
     })
     .join('\n\n')
     .trim()
-}
-
-function parseRulePaths(text = '') {
-  return text
-    .split('\n')
-    .map(item => item.trim())
-    .filter(Boolean)
 }
 
 export function useEvolution() {
