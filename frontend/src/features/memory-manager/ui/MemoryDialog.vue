@@ -121,6 +121,15 @@ watch(() => props.visible, async (visible) => {
   }
 })
 
+watch(() => props.projectDir, async (dir) => {
+  if (props.visible && dir) {
+    await Promise.all([
+      loadClaudeMd(dir),
+      loadRules(dir),
+    ])
+  }
+})
+
 watch(() => props.projectId, async (projectId) => {
   if (props.visible && projectId && selectedRule.value) {
     await loadRuleHistory()

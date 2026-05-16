@@ -407,6 +407,17 @@ code {
 .code-copy-btn.copied {
   color: var(--green);
   border-color: var(--green);
+  opacity: 1;
+}
+
+.code-copy-btn.copied svg {
+  display: none;
+}
+
+.code-copy-btn.copied::after {
+  content: '✓';
+  font-size: 14px;
+  font-weight: 700;
 }
 
 /* ===================================================================

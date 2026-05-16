@@ -114,7 +114,12 @@ DOMPurify.addHook('afterSanitizeAttributes', function (node) {
 
 export function configuredMarked(text) {
   return DOMPurify.sanitize(marked.parse(text), {
-    ALLOWED_ATTR: ['target', 'rel', 'href', 'class', 'data-file-path', 'title'],
+    ALLOWED_ATTR: [
+      'target', 'rel', 'href', 'class', 'data-file-path', 'title',
+      'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+      'width', 'height', 'x', 'y', 'rx', 'ry', 'd',
+      'x1', 'y1', 'x2', 'y2',
+    ],
     ALLOW_DATA_ATTR: true
   })
 }

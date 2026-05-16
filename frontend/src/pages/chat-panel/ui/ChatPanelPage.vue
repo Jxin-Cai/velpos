@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, inject, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
+import { formatDuration } from '@features/message-display'
 import { useDialogManager } from '@shared/lib/useDialogManager'
 import { useSession, listModels, createSessionBranch, listSessionBranches, compareSessions, convergeSessionBranches } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
@@ -216,74 +217,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('vp-dialog-open', handleDialogOpen)
-  window.removeEventListener('vp-debug-toggle', handleDebugToggle)
-  window.removeEventListener('vp-voice-toggle', handleVoiceToggle)
-  window.removeEventListener('vp-camera-toggle', handleCameraToggle)
-  window.removeEventListener('vp-clear-context', handleClearContext)
   window.removeEventListener('pointermove', handleVideoDragMove)
   window.removeEventListener('pointerup', stopVideoDrag)
   stopVoiceRecording()
   stopCapture()
 })
-
-// 监听全局快捷键触发的弹窗打开事件
-function handleDialogOpen(e) {
-  const dialog = e.detail?.dialog
-  switch (dialog) {
-    case 'agent-manager':
-      agentDialogVisible.value = true
-      break
-    case 'plugin-manager':
-      pluginDialogVisible.value = true
-      break
-    case 'memory-manager':
-      memoryDialogVisible.value = true
-      break
-    case 'evolution':
-      evolutionDialogVisible.value = true
-      break
-    case 'command-palette':
-      cmdVisible.value = true
-      break
-    case 'history':
-      showHistory.value = true
-      break
-    case 'im-binding':
-      imDialogVisible.value = true
-      break
-  }
-}
-
-// 监听 debug 模式切换
-function handleDebugToggle(e) {
-  debugMode.value = e.detail?.enabled ?? false
-}
-
-// 监听 voice 切换
-function handleVoiceToggle() {
-  handleMediaVoice()
-}
-
-async function handleCameraToggle() {
-  await handleMediaVideo()
-}
-
-// 监听 clear context
-function handleClearContext() {
-  if (!currentSessionId.value) {
-    setError('No active session to clear context')
-    return
-  }
-  compactContext(currentSessionId.value)
-}
-
-// 注册全局事件监听
-window.addEventListener('vp-dialog-open', handleDialogOpen)
-window.addEventListener('vp-debug-toggle', handleDebugToggle)
-window.addEventListener('vp-voice-toggle', handleVoiceToggle)
-window.addEventListener('vp-camera-toggle', handleCameraToggle)
-window.addEventListener('vp-clear-context', handleClearContext)
 
 function handleCompact() {
   compactContext(currentSessionId.value)
@@ -291,7 +229,7 @@ function handleCompact() {
 
 // Fetch IM status and channels when session changes
 watch(currentSessionId, (newId) => {
-  canceling.value && setCanceling(false)
+  if (canceling.value) setCanceling(false)
   visibleCount.value = MESSAGE_PAGE_SIZE
   if (newId) {
     fetchImStatus(newId)
@@ -335,12 +273,6 @@ const historyPanelStyle = computed(() => ({
   bottom: historyPanelPos.value.bottom + 'px',
   zIndex: 9999,
 }))
-
-function formatDuration(ms) {
-  if (!ms) return '-'
-  const s = (ms / 1000).toFixed(1)
-  return `${s}s`
-}
 
 function formatTokens(n) {
   const value = Number(n) || 0
@@ -943,6 +875,7 @@ function handleEvolutionDraftCreated(payload = {}) {
 // Project copy menu
 const showProjectCopyMenu = ref(false)
 const copiedChip = ref('')  // 'session' or 'project-path' or 'project-name'
+let _copiedChipTimer = null
 const showOpenWithMenu = ref(false)
 const installedApps = ref([])
 const appsLoaded = ref(false)
@@ -959,7 +892,8 @@ const claudeResumeCommand = computed(() => {
 function copyToClipboard(text, chipName) {
   navigator.clipboard.writeText(text).then(() => {
     copiedChip.value = chipName
-    setTimeout(() => { copiedChip.value = '' }, 1500)
+    if (_copiedChipTimer) clearTimeout(_copiedChipTimer)
+    _copiedChipTimer = setTimeout(() => { copiedChip.value = ''; _copiedChipTimer = null }, 1500)
   }).catch(() => {
     // Clipboard API not available or permission denied — ignore silently
   })
@@ -1022,7 +956,7 @@ function handleClickOutside() {
 // Plugin management
 
 // Session stats for bottom status bar
-const { gitBranch, lastQueryDuration, contextUsage, toolStats, activeSubagents, usageSummary, projectUsageSummary } = useSessionStats()
+const { gitBranch, contextUsage, toolStats, projectUsageSummary } = useSessionStats()
 const { allTasks, taskCounts, hasActiveTasks, planTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
 const showTaskPanel = ref(false)
 
@@ -1049,16 +983,6 @@ const runtimeActivity = computed(() => {
   }
   return null
 })
-
-function formatDurationShort(ms) {
-  if (!ms) return '-'
-  if (ms < 1000) return `${ms}ms`
-  const s = ms / 1000
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(ms / 60000)
-  const remainS = Math.round((ms % 60000) / 1000)
-  return `${m}m${remainS}s`
-}
 
 const topTools = computed(() => toolStats.value.slice(0, 5))
 const totalToolCalls = computed(() => toolStats.value.reduce((sum, t) => sum + t.count, 0))
@@ -1106,6 +1030,7 @@ onMounted(() => {
 onUnmounted(() => {
   clearInterval(sessionElapsedTimer)
   clearTimeout(pendingSendTimer)
+  if (_copiedChipTimer) clearTimeout(_copiedChipTimer)
 })
 
 // Context color: green < 70%, yellow 70-85%, red > 85% (aligned with claude-hud)
@@ -1122,11 +1047,6 @@ function formatMaxTokens(n) {
   return `${Math.round(n / 1000)}k`
 }
 
-function formatCost(value) {
-  const n = Number(value || 0)
-  if (n < 0.01) return `$${n.toFixed(4)}`
-  return `$${n.toFixed(2)}`
-}
 
 </script>
 
@@ -1899,7 +1819,7 @@ function formatCost(value) {
     <MemoryDialog
       :visible="memoryDialogVisible"
       :project-id="currentProject?.id || ''"
-      :project-dir="currentProject?.dir_path || ''"
+      :project-dir="currentProject?.dir_path || projectDir || ''"
       @close="memoryDialogVisible = false"
       @evolve="evolutionDialogVisible = true"
     />
