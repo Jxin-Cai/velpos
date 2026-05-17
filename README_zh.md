@@ -169,6 +169,16 @@ git clone git@github.com:Jxin-Cai/velpos.git
 cd velpos
 ```
 
+### 一键启动
+
+```bash
+./setup.sh          # 交互模式 — 选择 dev 或 prod
+./setup.sh dev      # 开发环境
+./setup.sh prod     # 生产环境
+```
+
+脚本会自动检查前置依赖、创建环境配置文件、提示输入必要密钥并启动所有服务。完整的机器可读部署指南请参考 [doc/deploy-guide.md](./doc/deploy-guide.md)（适合让 Claude Code 自动完成部署）。
+
 ### 开发环境
 
 > 仅 MySQL 运行在 Docker 中。后端和前端运行在 **宿主机**，直接管理 **宿主机文件系统** 上的项目目录。

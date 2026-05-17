@@ -8,14 +8,16 @@ Velpos is a web interface for controlling Claude Code via the Agent SDK. Python 
 
 ## Development Commands
 
-### Quick Start (Dev)
+### Quick Start (One Command)
 ```bash
-# 1. Copy and configure environment
-cp build/dev/.env.example build/dev/.env
-
-# 2. Start everything (MySQL docker + backend + frontend)
-build/dev/start.sh start
+./setup.sh          # Interactive — asks dev or prod
+./setup.sh dev      # Development mode
+./setup.sh prod     # Production mode
+./setup.sh stop     # Stop services
+./setup.sh status   # Show status
 ```
+
+For the full machine-readable deploy guide, see [doc/deploy-guide.md](./doc/deploy-guide.md).
 
 ### Dev Service Management
 ```bash
@@ -28,11 +30,10 @@ build/dev/start.sh logs      # Tail backend logs
 
 ### Production (Full Docker)
 ```bash
-# 1. Configure
+# Manual alternative (setup.sh handles this automatically):
 cp build/prod/.env.example build/prod/.env
-
-# 2. Build and start
-cd build/prod && docker compose up --build -d
+# Edit build/prod/.env — set ANTHROPIC_API_KEY and MYSQL_ROOT_PASSWORD
+docker compose -f build/prod/docker-compose.yml up --build -d
 ```
 
 ### Run Services Individually

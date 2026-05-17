@@ -169,6 +169,16 @@ git clone git@github.com:Jxin-Cai/velpos.git
 cd velpos
 ```
 
+### Quick Start (One Command)
+
+```bash
+./setup.sh          # Interactive — asks dev or prod
+./setup.sh dev      # Development mode
+./setup.sh prod     # Production mode
+```
+
+The setup script checks prerequisites, creates environment files, prompts for required secrets, and starts all services. See [doc/deploy-guide.md](./doc/deploy-guide.md) for the full machine-readable guide (useful for Claude Code automated setup).
+
 ### Development
 
 > Only MySQL runs in Docker. Backend and frontend run on the **host machine**, managing **host filesystem** paths directly.
