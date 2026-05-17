@@ -109,14 +109,14 @@ AGENT_CATALOG: list[dict] = _scan_agents()
 TEAM_TEMPLATE_CATALOG: list[dict[str, Any]] = _scan_team_templates()
 
 
-def get_prompt_path(agent_id: str, category: str, language: str) -> Path:
+def get_prompt_path(agent_id: str, language: str) -> Path:
     """Return the path to the prompt .md file for the given agent."""
     return _AGENTS_DIR / agent_id / "role" / f"{language}.md"
 
 
-def read_prompt(agent_id: str, category: str, language: str) -> str:
+def read_prompt(agent_id: str, language: str) -> str:
     """Read and return the prompt content for the given agent."""
-    path = get_prompt_path(agent_id, category, language)
+    path = get_prompt_path(agent_id, language)
     if not path.exists():
         raise FileNotFoundError(f"Prompt file not found: {path}")
     return path.read_text(encoding="utf-8")

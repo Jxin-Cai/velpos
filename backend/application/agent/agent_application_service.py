@@ -82,7 +82,7 @@ class AgentApplicationService:
         if current_agent and current_agent.get("id") != agent_id:
             await self._uninstall_agent_plugins(current_agent["id"], project_dir)
 
-        prompt_content = read_prompt(agent_id, agent_meta["category"], language)
+        prompt_content = read_prompt(agent_id, language)
         await self._apply_claude_md_revision(project_dir, prompt_content)
         logger.info(
             "Applied agent prompt through CLAUDE.md revision: agent=%s, lang=%s, project=%s",
@@ -119,7 +119,7 @@ class AgentApplicationService:
         project_dir = project.dir_path
 
         # Re-apply CLAUDE.md revision
-        prompt_content = read_prompt(agent_id, agent_meta["category"], language)
+        prompt_content = read_prompt(agent_id, language)
         await self._apply_claude_md_revision(project_dir, prompt_content)
         logger.info(
             "Updated agent prompt through CLAUDE.md revision: agent=%s, lang=%s, project=%s",

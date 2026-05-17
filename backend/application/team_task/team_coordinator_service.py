@@ -279,6 +279,30 @@ class TeamCoordinatorService:
 
             return result_text
 
+        except asyncio.CancelledError:
+            error_msg = "Task cancelled"
+            task.fail(error_msg)
+            await self._task_repo.save(task)
+
+            if trace_id:
+                await TraceFileManager.update_task_in_trace(
+                    project_dir=project.dir_path,
+                    trace_id=trace_id,
+                    task_id=task.task_id,
+                    updates={
+                        "status": "cancelled",
+                        "completed_at": datetime.now().isoformat(),
+                        "error_message": error_msg,
+                    },
+                )
+
+            await self._broadcast_team_event(main_project_id, coordinator_session_id, {
+                "event": "team_task_failed",
+                "task": task.to_timeline_entry(),
+            })
+
+            raise
+
         except Exception as e:
             error_msg = str(e)[:500]
             task.fail(error_msg)
@@ -320,7 +344,7 @@ class TeamCoordinatorService:
                             "Unloaded agent %s from project %s (team step role=%s)",
                             step_agent_id, target_project_id, target_role,
                         )
-                except Exception:
+                except BaseException:
                     logger.warning(
                         "Failed to unload agent %s from project %s",
                         step_agent_id, target_project_id,

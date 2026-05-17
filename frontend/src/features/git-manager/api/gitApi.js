@@ -15,7 +15,3 @@ export function listSshKeys() {
 export function generateSshKey(keyType = 'ed25519', comment = '') {
   return post('/git/ssh/keys', { key_type: keyType, comment })
 }
-
-export function getSshPublicKey(keyName) {
-  return get(`/git/ssh/keys/${encodeURIComponent(keyName)}/public`)
-}

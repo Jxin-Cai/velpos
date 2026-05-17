@@ -552,7 +552,10 @@ class LarkAdapter(ImChannelAdapter):
                     delay, conn.channel_id,
                 )
                 attempt += 1
-                time.sleep(delay)
+                for _ in range(delay):
+                    if conn.stop:
+                        break
+                    time.sleep(1)
 
         except Exception:
             if not conn.stop:

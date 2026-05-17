@@ -14,6 +14,7 @@ from domain.session.model.session_status import SessionStatus
 from domain.session.model.usage import Usage
 from domain.session.repository.session_repository import SessionRepository
 from infr.repository.session_model import SessionModel
+from infr.repository.repo_helpers import remove_by_pk
 
 
 class SessionRepositoryImpl(SessionRepository):
@@ -59,16 +60,7 @@ class SessionRepositoryImpl(SessionRepository):
         return [self._to_domain(m) for m in models]
 
     async def remove(self, session_id: str) -> bool:
-        stmt = select(SessionModel).where(
-            SessionModel.session_id == session_id,
-        )
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        if model is None:
-            return False
-        await self._session.delete(model)
-        await self._session.flush()
-        return True
+        return await remove_by_pk(self._session, SessionModel.session_id, session_id)
 
     async def find_by_sdk_session_id(self, sdk_session_id: str) -> Session | None:
         if not sdk_session_id:
@@ -141,7 +133,8 @@ class SessionRepositoryImpl(SessionRepository):
     def _deserialize_json_field(json_str: str) -> dict[str, Any] | None:
         if not json_str:
             return None
-        return json.loads(json_str)
+        result = safe_json_loads(json_str)
+        return result or None
 
     @staticmethod
     def _serialize_messages(messages: list[Message]) -> str:

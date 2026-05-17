@@ -1,4 +1,5 @@
 <script setup>
+import { formatDurationLong } from '@features/message-display'
 import { useWorkingSessions } from '../model/useWorkingSessions'
 
 const emit = defineEmits(['navigate', 'close'])
@@ -11,13 +12,7 @@ function handleClick(item) {
 }
 
 function formatElapsed(startTime) {
-  const diff = Date.now() - startTime
-  const sec = Math.floor(diff / 1000)
-  if (sec < 60) return `${sec}s`
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min}m ${sec % 60}s`
-  const hr = Math.floor(min / 60)
-  return `${hr}h ${min % 60}m`
+  return formatDurationLong(Date.now() - startTime)
 }
 </script>
 

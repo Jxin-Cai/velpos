@@ -536,8 +536,6 @@ function cancelRename() {
   white-space: nowrap;
 }
 
-.inst-col--status { text-align: center; }
-
 .inst-col--actions {
   display: flex;
   justify-content: center;

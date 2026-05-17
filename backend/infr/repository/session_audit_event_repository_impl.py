@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.session_audit_event import SessionAuditEvent
 from domain.session.repository.session_audit_event_repository import SessionAuditEventRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.session_audit_event_model import SessionAuditEventModel
 
 
@@ -44,11 +44,7 @@ class SessionAuditEventRepositoryImpl(SessionAuditEventRepository):
 
     @staticmethod
     def _to_domain(model: SessionAuditEventModel) -> SessionAuditEvent:
-        payload: dict[str, Any]
-        try:
-            payload = json.loads(model.payload_json) if model.payload_json else {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
+        payload = safe_json_loads(model.payload_json)
         return SessionAuditEvent(
             id=model.id,
             session_id=model.session_id,

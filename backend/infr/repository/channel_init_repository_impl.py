@@ -9,7 +9,9 @@ from domain.im_binding.model.channel_init import ChannelInit
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.repository.channel_init_repository import ChannelInitRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.channel_init_model import ChannelInitModel
+from infr.repository.repo_helpers import remove_by_pk
 
 
 class ChannelInitRepositoryImpl(ChannelInitRepository):
@@ -53,14 +55,7 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
         return [self._to_domain(m) for m in result.scalars().all()]
 
     async def remove(self, channel_init_id: str) -> bool:
-        stmt = select(ChannelInitModel).where(ChannelInitModel.id == channel_init_id)
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        if model is None:
-            return False
-        await self._session.delete(model)
-        await self._session.flush()
-        return True
+        return await remove_by_pk(self._session, ChannelInitModel.id, channel_init_id)
 
     @staticmethod
     def _to_model(ci: ChannelInit) -> ChannelInitModel:
@@ -77,10 +72,7 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
 
     @staticmethod
     def _to_domain(model: ChannelInitModel) -> ChannelInit:
-        try:
-            config = json.loads(model.config_json) if model.config_json else {}
-        except (json.JSONDecodeError, TypeError):
-            config = {}
+        config = safe_json_loads(model.config_json)
 
         return ChannelInit.reconstitute(
             id=model.id,

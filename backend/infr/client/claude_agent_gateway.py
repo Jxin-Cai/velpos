@@ -71,8 +71,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._broadcast_fn: Any = None
         # IM binding check callback: set externally to protect bound sessions
         self._is_im_bound_fn: Any = None
-        # Lock for protecting _pending_user_responses and _clients mutations
+        # Lock for protecting _pending_user_responses mutations
         self._lock = asyncio.Lock()
+        # Lock for protecting client lifecycle (connect/disconnect)
+        self._client_lock = asyncio.Lock()
 
     def _set_state(self, session_id: str, state: str) -> None:
         self._session_states[session_id] = state
@@ -246,7 +248,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             self.schedule_idle_disconnect(session_id)
             return
         # Don't disconnect while waiting for user permission/choice
-        if session_id in self._pending_user_responses:
+        async with self._lock:
+            has_pending = session_id in self._pending_user_responses
+        if has_pending:
             logger.info("空闲断开跳过(等待用户响应): session=%s, 重新调度", session_id)
             self.schedule_idle_disconnect(session_id)
             return
@@ -298,16 +302,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         fork_source_sid = self._fork_source_session_id(raw_prev_sdk_sid)
         prev_sdk_sid = fork_source_sid or raw_prev_sdk_sid
 
-        # Disconnect existing client if any
-        await self.disconnect(session_id)
-
-        # Use per-session permission mode if set, otherwise fall back to default
-        perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
-
-        client, resume_failed = await self._try_connect(
+        client, resume_failed = await self._connect_and_register(
             session_id=session_id,
             model=model,
-            perm_mode=perm_mode,
             cwd=cwd,
             prev_sdk_sid=prev_sdk_sid,
             fork_session=bool(fork_source_sid),
@@ -319,18 +316,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             hooks=hooks,
             enable_file_checkpointing=enable_file_checkpointing,
         )
-        self._clients[session_id] = client
-        self._connected_models[session_id] = model
-        self._set_state(session_id, "connected")
-        self._touch(session_id)
-        if cwd:
-            self._session_cwds[session_id] = cwd
-
-        # Force permission mode after connect — resume can restore a stale mode
-        try:
-            await client.set_permission_mode(perm_mode)
-        except Exception:
-            logger.debug("set_permission_mode after connect failed (non-critical): session=%s", session_id)
 
         # Send query and receive response until ResultMessage
         self._set_state(session_id, "streaming")
@@ -406,7 +391,60 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._set_state(session_id, "interrupted")
         await client.interrupt()
 
+    async def _connect_and_register(
+        self,
+        session_id: str,
+        model: str,
+        cwd: str,
+        prev_sdk_sid: str | None,
+        fork_session: bool = False,
+        system_prompt: str | None = None,
+        mcp_servers: dict | None = None,
+        max_turns: int | None = None,
+        max_budget_usd: float | None = None,
+        output_format: dict | None = None,
+        hooks: dict | None = None,
+        enable_file_checkpointing: bool = False,
+    ) -> tuple[ClaudeSDKClient, bool]:
+        perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
+
+        async with self._client_lock:
+            await self._disconnect_unlocked(session_id)
+
+            client, resume_failed = await self._try_connect(
+                session_id=session_id,
+                model=model,
+                perm_mode=perm_mode,
+                cwd=cwd,
+                prev_sdk_sid=prev_sdk_sid,
+                fork_session=fork_session,
+                system_prompt=system_prompt,
+                mcp_servers=mcp_servers,
+                max_turns=max_turns,
+                max_budget_usd=max_budget_usd,
+                output_format=output_format,
+                hooks=hooks,
+                enable_file_checkpointing=enable_file_checkpointing,
+            )
+            self._clients[session_id] = client
+            self._connected_models[session_id] = model
+            self._set_state(session_id, "connected")
+            self._touch(session_id)
+            if cwd:
+                self._session_cwds[session_id] = cwd
+
+        try:
+            await client.set_permission_mode(perm_mode)
+        except Exception:
+            logger.debug("set_permission_mode after connect failed (non-critical): session=%s", session_id)
+
+        return client, resume_failed
+
     async def disconnect(self, session_id: str) -> None:
+        async with self._client_lock:
+            await self._disconnect_unlocked(session_id)
+
+    async def _disconnect_unlocked(self, session_id: str) -> None:
         client = self._clients.pop(session_id, None)
         if client is not None:
             try:
@@ -639,30 +677,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 "no SDK session to resume (run a query first)"
             )
 
-        await self.disconnect(session_id)
-
-        perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
-
-        client, _resume_failed = await self._try_connect(
+        await self._connect_and_register(
             session_id=session_id,
             model=model,
-            perm_mode=perm_mode,
             cwd=cwd,
             prev_sdk_sid=prev_sdk_sid,
             fork_session=bool(fork_source_sid),
         )
-        self._clients[session_id] = client
-        self._connected_models[session_id] = model
-        self._set_state(session_id, "connected")
-        self._touch(session_id)
-        if cwd:
-            self._session_cwds[session_id] = cwd
-
-        # Force permission mode after connect — resume can restore a stale mode
-        try:
-            await client.set_permission_mode(perm_mode)
-        except Exception:
-            logger.debug("set_permission_mode after open_connection failed (non-critical): session=%s", session_id)
 
     async def open_fresh_connection(
         self,
@@ -671,28 +692,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         cwd: str = "",
     ) -> None:
         """Open a fresh SDK connection (no resume) for a new session."""
-        await self.disconnect(session_id)
-
-        perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
-
-        client, _ = await self._try_connect(
+        await self._connect_and_register(
             session_id=session_id,
             model=model,
-            perm_mode=perm_mode,
             cwd=cwd,
             prev_sdk_sid=None,
         )
-        self._clients[session_id] = client
-        self._connected_models[session_id] = model
-        self._set_state(session_id, "connected")
-        self._touch(session_id)
-        if cwd:
-            self._session_cwds[session_id] = cwd
-
-        try:
-            await client.set_permission_mode(perm_mode)
-        except Exception:
-            logger.debug("set_permission_mode after open_fresh_connection failed (non-critical): session=%s", session_id)
 
     async def get_context_usage(self, session_id: str) -> dict[str, Any] | None:
         client = self._clients.get(session_id)
@@ -747,7 +752,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         gateway's in-memory ``_sdk_session_ids`` mapping has no entry (e.g.
         after a process restart).
         """
-        import os
         from claude_agent_sdk._internal.sessions import (
             _canonicalize_path,
             _find_project_dir,

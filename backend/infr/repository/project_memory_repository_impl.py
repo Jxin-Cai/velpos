@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domain.memory.model.project_memory_entry import ProjectMemoryEntry
 from domain.memory.repository.project_memory_repository import ProjectMemoryRepository
 from infr.repository.project_memory_entry_model import ProjectMemoryEntryModel
+from infr.repository.repo_helpers import remove_by_pk
 
 
 class ProjectMemoryRepositoryImpl(ProjectMemoryRepository):
@@ -35,14 +36,7 @@ class ProjectMemoryRepositoryImpl(ProjectMemoryRepository):
         return [self._to_domain(m) for m in result.scalars().all()]
 
     async def remove(self, memory_id: str) -> bool:
-        stmt = select(ProjectMemoryEntryModel).where(ProjectMemoryEntryModel.id == memory_id)
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        if model is None:
-            return False
-        await self._session.delete(model)
-        await self._session.flush()
-        return True
+        return await remove_by_pk(self._session, ProjectMemoryEntryModel.id, memory_id)
 
     @staticmethod
     def _to_model(entry: ProjectMemoryEntry) -> ProjectMemoryEntryModel:

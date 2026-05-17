@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.evolution.model.evolution_proposal import EvolutionProposal
 from domain.evolution.repository.evolution_proposal_repository import EvolutionProposalRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.evolution_proposal_model import EvolutionProposalModel
 
 
@@ -54,7 +55,7 @@ class EvolutionProposalRepositoryImpl(EvolutionProposalRepository):
             project_id=model.project_id,
             source_session_id=model.source_session_id,
             state=model.state,
-            extracted_lessons=json.loads(model.extracted_lessons_json or "[]"),
+            extracted_lessons=safe_json_loads(model.extracted_lessons_json, default=[]),
             proposed_claude_md_revision_id=model.proposed_claude_md_revision_id,
             created_time=model.created_time,
             updated_time=model.updated_time,

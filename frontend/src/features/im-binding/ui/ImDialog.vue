@@ -814,9 +814,6 @@ function handleOverlayClick(e) {
 .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
 
@@ -827,10 +824,6 @@ function handleOverlayClick(e) {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 @keyframes pulse {

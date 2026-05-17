@@ -65,10 +65,6 @@ const displayName = computed(() => {
   return props.session.name || getShortId(props.session.session_id)
 })
 
-const isActive = computed(() => {
-  return props.session.status === 'running'
-})
-
 const formattedTime = computed(() => {
   const t = props.session.updated_time
   if (!t) return ''

@@ -957,7 +957,7 @@ function handleClickOutside() {
 
 // Session stats for bottom status bar
 const { gitBranch, contextUsage, toolStats, projectUsageSummary } = useSessionStats()
-const { allTasks, taskCounts, hasActiveTasks, planTasks, planTaskCounts, hasPlanTasks } = useTaskProgress()
+const { planTaskCounts, hasPlanTasks } = useTaskProgress()
 const showTaskPanel = ref(false)
 
 // Runtime panel: current activity from latest assistant message blocks
@@ -2134,10 +2134,6 @@ function formatMaxTokens(n) {
   box-shadow: var(--shadow-active);
 }
 
-.toolbar-btn-label {
-  font-weight: 500;
-}
-
 .toolbar-btn[data-tooltip] {
   position: relative;
 }
@@ -2860,10 +2856,7 @@ function formatMaxTokens(n) {
   padding-left: 34px;
 }
 
-.dash-usage,
-.dash-cost,
-.dash-budget,
-.dash-last-query {
+.dash-budget {
   color: var(--text-secondary);
 }
 
@@ -3189,9 +3182,6 @@ button.dash-chip[disabled] {
 
 /* Mobile: enforce minimum font size */
 @media (max-width: 768px) {
-  .toolbar-btn-label {
-    font-size: 12px;
-  }
   .dash-chip {
     font-size: 12px;
   }

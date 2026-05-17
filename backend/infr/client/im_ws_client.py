@@ -34,6 +34,7 @@ class ImWsClient(ImWsGateway):
         self._listen_tasks: dict[str, asyncio.Task[None]] = {}
         self._should_reconnect: dict[str, bool] = {}
         self._tokens: dict[str, str] = {}
+        self._lock = asyncio.Lock()
 
     def _build_ws_url(self, im_user_id: str, im_token: str) -> str:
         operation_id = str(uuid4())
@@ -46,67 +47,69 @@ class ImWsClient(ImWsGateway):
         )
 
     async def connect(self, im_user_id: str, im_token: str) -> None:
-        if self.is_connected(im_user_id):
-            return
+        async with self._lock:
+            if self.is_connected(im_user_id):
+                return
 
-        url = self._build_ws_url(im_user_id, im_token)
-        try:
-            ws = await asyncio.wait_for(
-                websockets.connect(url),
-                timeout=_CONNECT_TIMEOUT,
-            )
-        except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
-            logger.error(
-                "IM WS connect failed: im_user_id=%s, error=%s",
-                im_user_id,
-                exc,
-            )
-            raise BusinessException(
-                f"IM WebSocket connection failed: {exc}",
-                code="IM_WS_CONNECT_FAILED",
-            ) from exc
+            url = self._build_ws_url(im_user_id, im_token)
+            try:
+                ws = await asyncio.wait_for(
+                    websockets.connect(url),
+                    timeout=_CONNECT_TIMEOUT,
+                )
+            except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
+                logger.error(
+                    "IM WS connect failed: im_user_id=%s, error=%s",
+                    im_user_id,
+                    exc,
+                )
+                raise BusinessException(
+                    f"IM WebSocket connection failed: {exc}",
+                    code="IM_WS_CONNECT_FAILED",
+                ) from exc
 
-        self._connections[im_user_id] = ws
-        self._tokens[im_user_id] = im_token
-        self._message_queues[im_user_id] = asyncio.Queue(maxsize=1000)
-        self._should_reconnect[im_user_id] = True
+            self._connections[im_user_id] = ws
+            self._tokens[im_user_id] = im_token
+            self._message_queues[im_user_id] = asyncio.Queue(maxsize=1000)
+            self._should_reconnect[im_user_id] = True
 
-        task = safe_create_task(self._listen_loop(im_user_id))
-        self._listen_tasks[im_user_id] = task
-        logger.info("IM WS connected: im_user_id=%s", im_user_id)
+            task = safe_create_task(self._listen_loop(im_user_id))
+            self._listen_tasks[im_user_id] = task
+            logger.info("IM WS connected: im_user_id=%s", im_user_id)
 
     async def disconnect(self, im_user_id: str) -> None:
-        if im_user_id not in self._connections and im_user_id not in self._listen_tasks:
-            return
+        async with self._lock:
+            if im_user_id not in self._connections and im_user_id not in self._listen_tasks:
+                return
 
-        self._should_reconnect[im_user_id] = False
+            self._should_reconnect[im_user_id] = False
 
-        task = self._listen_tasks.pop(im_user_id, None)
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            task = self._listen_tasks.pop(im_user_id, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
-        ws = self._connections.pop(im_user_id, None)
-        if ws is not None:
-            try:
-                await ws.close()
-            except Exception:  # noqa: BLE001
-                pass
+            ws = self._connections.pop(im_user_id, None)
+            if ws is not None:
+                try:
+                    await ws.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
-        queue = self._message_queues.get(im_user_id)
-        if queue is not None:
-            try:
-                queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
-        self._message_queues.pop(im_user_id, None)
-        self._tokens.pop(im_user_id, None)
-        self._should_reconnect.pop(im_user_id, None)
+            queue = self._message_queues.get(im_user_id)
+            if queue is not None:
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+            self._message_queues.pop(im_user_id, None)
+            self._tokens.pop(im_user_id, None)
+            self._should_reconnect.pop(im_user_id, None)
 
-        logger.info("IM WS disconnected: im_user_id=%s", im_user_id)
+            logger.info("IM WS disconnected: im_user_id=%s", im_user_id)
 
     def is_connected(self, im_user_id: str) -> bool:
         ws = self._connections.get(im_user_id)
@@ -234,25 +237,38 @@ class ImWsClient(ImWsGateway):
             )
             await asyncio.sleep(delay)
 
+            if not self._should_reconnect.get(im_user_id, False):
+                return False
+
             url = self._build_ws_url(im_user_id, token)
             try:
                 ws = await asyncio.wait_for(
                     websockets.connect(url),
                     timeout=_CONNECT_TIMEOUT,
                 )
-                self._connections[im_user_id] = ws
-                logger.info(
-                    "IM WS reconnected: im_user_id=%s, attempt=%d",
-                    im_user_id,
-                    attempt,
-                )
-                return True
             except (
                 OSError,
                 asyncio.TimeoutError,
                 websockets.WebSocketException,
             ):
                 delay = min(delay * 2, _RECONNECT_MAX_DELAY)
+                continue
+
+            try:
+                async with self._lock:
+                    if not self._should_reconnect.get(im_user_id, False):
+                        await ws.close()
+                        return False
+                    self._connections[im_user_id] = ws
+            except BaseException:
+                await ws.close()
+                raise
+            logger.info(
+                "IM WS reconnected: im_user_id=%s, attempt=%d",
+                im_user_id,
+                attempt,
+            )
+            return True
 
         logger.error(
             "IM WS reconnect failed after %d attempts: im_user_id=%s",

@@ -45,7 +45,3 @@ class LoadAgentRequest(BaseModel):
         pattern="^(en|zh)$",
         description="Language for agent prompt: en or zh",
     )
-
-
-class UnloadAgentRequest(BaseModel):
-    pass

@@ -9,6 +9,7 @@ from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
 from domain.im_binding.repository.im_binding_repository import ImBindingRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.im_binding_model import ImBindingModel
 
 
@@ -133,10 +134,7 @@ class ImBindingRepositoryImpl(ImBindingRepository):
 
     @staticmethod
     def _to_domain(model: ImBindingModel) -> ImBinding:
-        try:
-            config = json.loads(model.config_json) if model.config_json else {}
-        except (json.JSONDecodeError, TypeError):
-            config = {}
+        config = safe_json_loads(model.config_json)
 
         try:
             channel_type = ImChannelType(model.channel_type)

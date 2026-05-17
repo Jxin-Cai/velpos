@@ -679,13 +679,8 @@ function nextRuleDiff() {
   gap: 8px; color: var(--text-muted); font-size: 13px;
 }
 .spinner {
-  width: 18px; height: 18px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 .version-sidebar {
   width: 220px;
   border-right: 1px solid var(--border);

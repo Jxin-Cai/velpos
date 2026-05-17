@@ -68,17 +68,7 @@ class ProjectListResponse(BaseModel):
         )
 
 
-class ProjectDetailResponse(BaseModel):
-    id: str
-    name: str
-    dir_path: str
-    agents: dict[str, dict] = {}
-    plugins: dict[str, dict] = {}
-    sort_order: int = 0
-    project_type: str = "single"
-    team_config: dict = {}
-    created_at: str | None = None
-    updated_at: str | None = None
+class ProjectDetailResponse(ProjectResponse):
     sessions: list[dict[str, Any]] = []
 
     @classmethod

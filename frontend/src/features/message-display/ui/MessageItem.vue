@@ -19,8 +19,6 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['select-user'])
-
 const wsConnection = inject('wsConnection')
 
 // Track whether interactive messages have been answered

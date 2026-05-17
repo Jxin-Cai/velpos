@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from application.git_helpers import get_current_git_branch
+
 from domain.session.model.message import Message
 from domain.session.model.session import Session
 from domain.session.model.session_branch import SessionBranch
@@ -439,17 +441,7 @@ class SessionBranchApplicationService:
         return branch.root_session_id if branch else session_id
 
     async def _current_git_branch(self, project_dir: str) -> str:
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "-C", project_dir, "rev-parse", "--abbrev-ref", "HEAD"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            return result.stdout.strip()
-        except Exception:
-            return ""
+        return await get_current_git_branch(project_dir)
 
     async def _create_worktree(
         self,

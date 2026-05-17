@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.session_run_step import SessionRunStep
 from domain.session.repository.session_run_step_repository import SessionRunStepRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.session_run_step_model import SessionRunStepModel
 
 
@@ -77,11 +77,7 @@ class SessionRunStepRepositoryImpl(SessionRunStepRepository):
 
     @staticmethod
     def _to_domain(model: SessionRunStepModel) -> SessionRunStep:
-        payload: dict[str, Any]
-        try:
-            payload = json.loads(model.payload_json) if model.payload_json else {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
+        payload = safe_json_loads(model.payload_json)
         return SessionRunStep(
             id=model.id,
             session_id=model.session_id,

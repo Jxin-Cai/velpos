@@ -31,29 +31,14 @@ class _TokenEntry:
 class QqApiClient:
     """QQ Open Platform REST API client.
 
-    Supports two modes:
-    1. Legacy global credentials via ``set_credentials`` (for ``initialize``/
-       ``check_init_status`` which validate a single credential pair).
-    2. Per-channel credentials via explicit ``app_id``/``app_secret`` parameters
-       on ``ensure_token``, ``get_gateway_url``, ``send_*`` methods.
+    Uses per-channel credentials: each (app_id, app_secret) pair
+    gets its own token cache so multiple QQ bots can coexist.
     """
 
     def __init__(self) -> None:
-        # Legacy global credentials (used by adapter init/bind)
-        self._app_id = ""
-        self._app_secret = ""
         # Per-credential token cache: key = app_id
         self._tokens: dict[str, _TokenEntry] = {}
         self._token_lock = asyncio.Lock()
-
-    def set_credentials(self, app_id: str, app_secret: str) -> None:
-        """Set global fallback credentials (legacy interface)."""
-        self._app_id = app_id
-        self._app_secret = app_secret
-
-    @property
-    def has_credentials(self) -> bool:
-        return bool(self._app_id and self._app_secret)
 
     def has_credentials_for(self, app_id: str, app_secret: str) -> bool:
         """Check if specific credentials are non-empty."""
@@ -66,28 +51,21 @@ class QqApiClient:
         app_id: str | None = None,
         app_secret: str | None = None,
     ) -> str:
-        """Return a valid access_token, refreshing if needed.
-
-        If *app_id*/*app_secret* are given they are used directly;
-        otherwise falls back to the global credentials set via
-        ``set_credentials``.
-        """
-        aid = app_id or self._app_id
-        asec = app_secret or self._app_secret
-        if not aid or not asec:
+        """Return a valid access_token, refreshing if needed."""
+        if not app_id or not app_secret:
             raise RuntimeError(
                 "QQ API credentials not configured (app_id/app_secret missing)"
             )
 
-        entry = self._tokens.get(aid)
+        entry = self._tokens.get(app_id)
         if entry and entry.access_token and time.time() < entry.expires_at - 60:
             return entry.access_token
 
         async with self._token_lock:
-            entry = self._tokens.get(aid)
+            entry = self._tokens.get(app_id)
             if entry and entry.access_token and time.time() < entry.expires_at - 60:
                 return entry.access_token
-            return await self._refresh_token(aid, asec)
+            return await self._refresh_token(app_id, app_secret)
 
     async def _refresh_token(self, app_id: str, app_secret: str) -> str:
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:

@@ -4,7 +4,6 @@ from typing import Any
 
 from domain.session.model.message import Message
 from domain.session.model.session import Session
-from domain.session.model.usage import Usage
 
 
 class SessionAssembler:
@@ -72,7 +71,3 @@ class SessionAssembler:
     @staticmethod
     def message_to_dict(message: Message) -> dict[str, Any]:
         return {"type": message.message_type.value, "content": message.content}
-
-    @staticmethod
-    def usage_to_dict(usage: Usage) -> dict[str, int]:
-        return {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}

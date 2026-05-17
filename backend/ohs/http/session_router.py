@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -36,6 +37,8 @@ from ohs.http.dto.session_dto import (
     SessionListResponse,
     SessionResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sessions", tags=["Session"])
 
@@ -237,7 +240,7 @@ async def delete_session(
             try:
                 await service.delete_session(wid)
             except Exception:
-                pass
+                logger.warning("Failed to cascade-delete worker session %s", wid, exc_info=True)
     await service.delete_session(session_id)
     return ApiResponse.success()
 

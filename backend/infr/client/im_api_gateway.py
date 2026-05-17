@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from uuid import uuid4
@@ -23,6 +24,7 @@ class ImApiGateway(ImGateway):
         self._config = config
         self._client: httpx.AsyncClient | None = None
         self._admin_token: str | None = None
+        self._token_lock = asyncio.Lock()
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -33,35 +35,39 @@ class ImApiGateway(ImGateway):
         if self._admin_token:
             return self._admin_token
 
-        client = self._ensure_client()
-        url = f"{self._config.api_addr}/auth/get_admin_token"
-        operation_id = str(uuid4())
-        payload = {
-            "secret": self._config.admin_secret,
-            "userID": self._config.admin_user_id,
-        }
-        headers = {"operationID": operation_id}
+        async with self._token_lock:
+            if self._admin_token:
+                return self._admin_token
 
-        try:
-            resp = await client.post(url, json=payload, headers=headers)
-            data = resp.json()
-        except httpx.HTTPError as exc:
-            logger.error("IM admin token request failed: %s", exc)
-            raise BusinessException(
-                "Failed to obtain IM admin token", code="IM_AUTH_FAILED"
-            ) from exc
+            client = self._ensure_client()
+            url = f"{self._config.api_addr}/auth/get_admin_token"
+            operation_id = str(uuid4())
+            payload = {
+                "secret": self._config.admin_secret,
+                "userID": self._config.admin_user_id,
+            }
+            headers = {"operationID": operation_id}
 
-        if data.get("errCode") != 0:
-            detail = data.get("errMsg", "unknown error")
-            logger.error("IM admin token error: %s", detail)
-            raise BusinessException(
-                f"Failed to obtain IM admin token: {detail}",
-                code="IM_AUTH_FAILED",
-            )
+            try:
+                resp = await client.post(url, json=payload, headers=headers)
+                data = resp.json()
+            except httpx.HTTPError as exc:
+                logger.error("IM admin token request failed: %s", exc)
+                raise BusinessException(
+                    "Failed to obtain IM admin token", code="IM_AUTH_FAILED"
+                ) from exc
 
-        self._admin_token = data["data"]["token"]
-        logger.info("IM admin token acquired")
-        return self._admin_token
+            if data.get("errCode") != 0:
+                detail = data.get("errMsg", "unknown error")
+                logger.error("IM admin token error: %s", detail)
+                raise BusinessException(
+                    f"Failed to obtain IM admin token: {detail}",
+                    code="IM_AUTH_FAILED",
+                )
+
+            self._admin_token = data["data"]["token"]
+            logger.info("IM admin token acquired")
+            return self._admin_token
 
     async def _post(
         self,
@@ -102,7 +108,8 @@ class ImApiGateway(ImGateway):
                     path,
                     err_msg,
                 )
-                self._admin_token = None
+                async with self._token_lock:
+                    self._admin_token = None
                 continue
 
             logger.error("IM API error: path=%s, errCode=%s, errMsg=%s", path, err_code, err_msg)

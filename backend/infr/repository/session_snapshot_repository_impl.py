@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.session_snapshot import SessionSnapshot
 from domain.session.repository.session_snapshot_repository import SessionSnapshotRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.session_branch_model import SessionSnapshotModel
 
 
@@ -41,12 +41,8 @@ class SessionSnapshotRepositoryImpl(SessionSnapshotRepository):
 
     @staticmethod
     def _to_domain(model: SessionSnapshotModel) -> SessionSnapshot:
-        messages: list[dict[str, Any]]
-        try:
-            parsed = json.loads(model.messages_json) if model.messages_json else []
-            messages = parsed if isinstance(parsed, list) else []
-        except (json.JSONDecodeError, TypeError):
-            messages = []
+        parsed = safe_json_loads(model.messages_json, default=[])
+        messages = parsed if isinstance(parsed, list) else []
         return SessionSnapshot(
             id=model.id,
             session_id=model.session_id,

@@ -451,22 +451,14 @@ function handleOverlayClick(e) {
 .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
 
 .spinner-sm {
   width: 12px;
   height: 12px;
-  border: 2px solid currentColor;
+  border-color: currentColor;
   border-top-color: transparent;
-  border-radius: 50%;
   animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 </style>

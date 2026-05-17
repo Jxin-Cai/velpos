@@ -413,14 +413,14 @@ class WeixinAdapter(ImChannelAdapter):
         self, binding: ImBinding, message_id: str, reaction: str,
     ) -> None:
         bot_token = binding.config.get("bot_token", "")
-        ilink_user_id = binding.config.get("ilink_user_id", "")
-        if bot_token and ilink_user_id:
-            await self._api.send_typing(bot_token, ilink_user_id, message_id, 1)
+        user_id = binding.config.get("last_sender_id", "")
+        if bot_token and user_id:
+            await self._api.send_typing(bot_token, user_id, message_id, 1)
 
     async def remove_reaction(
         self, binding: ImBinding, message_id: str, reaction: str,
     ) -> None:
         bot_token = binding.config.get("bot_token", "")
-        ilink_user_id = binding.config.get("ilink_user_id", "")
-        if bot_token and ilink_user_id:
-            await self._api.send_typing(bot_token, ilink_user_id, message_id, 0)
+        user_id = binding.config.get("last_sender_id", "")
+        if bot_token and user_id:
+            await self._api.send_typing(bot_token, user_id, message_id, 0)

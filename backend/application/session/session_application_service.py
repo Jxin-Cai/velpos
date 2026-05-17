@@ -4,9 +4,9 @@ import asyncio
 import logging
 import os
 import re
-import subprocess
 import uuid
 
+from application.git_helpers import get_current_git_branch as _get_current_git_branch
 from domain.shared.async_utils import safe_create_task
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -786,19 +786,7 @@ class SessionApplicationService:
         return await self._session_repository.find_all()
 
     async def get_current_git_branch(self, project_dir: str) -> str:
-        if not project_dir:
-            return ""
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "-C", project_dir, "rev-parse", "--abbrev-ref", "HEAD"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            return result.stdout.strip()
-        except Exception:
-            return ""
+        return await _get_current_git_branch(project_dir)
 
     async def get_git_branch_for_session(self, session_id: str) -> str:
         session = await self.get_session(session_id)

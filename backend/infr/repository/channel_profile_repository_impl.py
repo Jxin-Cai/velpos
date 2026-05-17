@@ -11,6 +11,7 @@ from domain.channel_profile.repository.channel_profile_repository import (
 )
 from domain.shared.utils import safe_json_loads
 from infr.repository.channel_profile_model import ChannelProfileModel
+from infr.repository.repo_helpers import remove_by_pk
 
 
 class ChannelProfileRepositoryImpl(ChannelProfileRepository):
@@ -55,16 +56,7 @@ class ChannelProfileRepositoryImpl(ChannelProfileRepository):
         return self._to_domain(model)
 
     async def remove(self, profile_id: str) -> bool:
-        stmt = select(ChannelProfileModel).where(
-            ChannelProfileModel.profile_id == profile_id,
-        )
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        if model is None:
-            return False
-        await self._session.delete(model)
-        await self._session.flush()
-        return True
+        return await remove_by_pk(self._session, ChannelProfileModel.profile_id, profile_id)
 
     @staticmethod
     def _to_model(profile: ChannelProfile) -> ChannelProfileModel:

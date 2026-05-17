@@ -681,14 +681,7 @@ async function copyJsonPreview() {
 .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
   animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 .dialog-body {
@@ -1167,20 +1160,8 @@ async function copyJsonPreview() {
   white-space: normal;
 }
 
-.form-select--compact {
-  width: auto;
-  min-width: 140px;
-  flex-shrink: 0;
-}
-
 .settings-card .form-input {
   width: 100%;
-}
-
-.field-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 4px 0;
 }
 
 .toggle-label {
@@ -1223,11 +1204,6 @@ async function copyJsonPreview() {
 
 .toggle-checkbox:checked + .toggle-track .toggle-thumb {
   transform: translateX(16px);
-}
-
-.toggle-text {
-  font-size: 13px;
-  color: var(--text-secondary);
 }
 
 .json-preview-wrapper {

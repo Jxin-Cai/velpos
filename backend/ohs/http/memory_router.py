@@ -8,7 +8,6 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
@@ -248,10 +247,7 @@ async def apply_claude_md_revision(
         "current_file_hash": result.current_file_hash,
     }
     if result.conflict:
-        response = ApiResponse.fail(code=-409, message="CLAUDE.md has changed on disk")
-        payload = response.model_dump()
-        payload["data"] = data
-        return JSONResponse(status_code=409, content=payload)
+        return ApiResponse.success(data=data, message="CLAUDE.md has changed on disk")
     return ApiResponse.success(data=data)
 
 

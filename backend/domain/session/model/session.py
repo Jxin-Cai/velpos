@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -81,15 +80,19 @@ class Session:
     def pending_request_context(self) -> dict[str, Any] | None:
         return dict(self._pending_request_context) if self._pending_request_context else None
 
-    @property
-    def queued_command(self) -> dict[str, Any] | None:
-        if self._queued_command is None:
+    @staticmethod
+    def _normalize_queued_command(cmd: dict[str, Any] | None) -> dict[str, Any] | None:
+        if cmd is None:
             return None
         return {
-            "prompt": self._queued_command.get("prompt", ""),
-            "image_paths": list(self._queued_command.get("image_paths", [])),
-            "attachments": list(self._queued_command.get("attachments", [])),
+            "prompt": cmd.get("prompt", ""),
+            "image_paths": list(cmd.get("image_paths", [])),
+            "attachments": list(cmd.get("attachments", [])),
         }
+
+    @property
+    def queued_command(self) -> dict[str, Any] | None:
+        return self._normalize_queued_command(self._queued_command)
 
     @property
     def cancel_requested(self) -> bool:
@@ -138,7 +141,7 @@ class Session:
         """
         session_id = uuid.uuid4().hex[:8]
         if not model:
-            model = os.getenv("DEFAULT_MODEL", "claude-opus-4-6")
+            model = "claude-opus-4-6"
         return cls(
             _session_id=session_id,
             _model=model,
@@ -199,11 +202,7 @@ class Session:
             _sdk_session_id=sdk_session_id,
             _last_input_tokens=last_input_tokens,
             _pending_request_context=dict(pending_request_context) if pending_request_context else None,
-            _queued_command={
-                "prompt": queued_command.get("prompt", ""),
-                "image_paths": list(queued_command.get("image_paths", [])),
-                "attachments": list(queued_command.get("attachments", [])),
-            } if queued_command else None,
+            _queued_command=cls._normalize_queued_command(queued_command),
             _cancel_requested=cancel_requested,
             _team_task_id=team_task_id,
             _trace_id=trace_id,
@@ -333,11 +332,11 @@ class Session:
         image_paths: list[str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> None:
-        self._queued_command = {
+        self._queued_command = self._normalize_queued_command({
             "prompt": prompt,
-            "image_paths": list(image_paths or []),
-            "attachments": list(attachments or []),
-        }
+            "image_paths": image_paths or [],
+            "attachments": attachments or [],
+        })
         self._updated_time = datetime.now()
 
     def clear_queued_command(self) -> None:
@@ -386,20 +385,6 @@ class Session:
         self._queued_command = None
         self._cancel_requested = False
         self._trace_id = ""
-        self._status = SessionStatus.IDLE
-        self._updated_time = datetime.now()
-
-    def restore_messages(self, messages: list[Message]) -> None:
-        if self._status in (SessionStatus.RUNNING, SessionStatus.COMPACTING):
-            raise ValueError("Cannot restore context while session is running")
-        self._messages = list(messages)
-        self._usage = Usage.zero()
-        self._continue_conversation = bool(self._messages)
-        self._sdk_session_id = ""
-        self._last_input_tokens = 0
-        self._pending_request_context = None
-        self._queued_command = None
-        self._cancel_requested = False
         self._status = SessionStatus.IDLE
         self._updated_time = datetime.now()
 

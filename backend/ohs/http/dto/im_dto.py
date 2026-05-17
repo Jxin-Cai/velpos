@@ -82,20 +82,6 @@ class BindImResponse(BaseModel):
     ui_data: dict[str, Any] = {}
 
     @classmethod
-    def from_domain(cls, binding: ImBinding) -> BindImResponse:
-        return cls(
-            id=binding.id,
-            session_id=binding.session_id,
-            channel_type=binding.channel_type.value,
-            channel_id=binding.channel_id,
-            im_user_id=binding.im_user_id,
-            binding_status=binding.binding_status.value,
-            qr_code_data=binding.qr_code_data or None,
-            friend_user_id=binding.friend_user_id or None,
-            channel_address=binding.channel_address,
-        )
-
-    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BindImResponse:
         return cls(**data)
 

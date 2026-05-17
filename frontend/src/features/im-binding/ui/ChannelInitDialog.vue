@@ -403,7 +403,4 @@ const pollStatusText = computed(() => {
   opacity: 0.7;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
 </style>

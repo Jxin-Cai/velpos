@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.session_timeline_event import SessionTimelineEvent
 from domain.session.repository.session_timeline_event_repository import SessionTimelineEventRepository
+from domain.shared.utils import safe_json_loads
 from infr.repository.session_timeline_event_model import SessionTimelineEventModel
 
 
@@ -96,11 +96,7 @@ class SessionTimelineEventRepositoryImpl(SessionTimelineEventRepository):
 
     @staticmethod
     def _to_domain(model: SessionTimelineEventModel) -> SessionTimelineEvent:
-        payload: dict[str, Any]
-        try:
-            payload = json.loads(model.payload_json) if model.payload_json else {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
+        payload = safe_json_loads(model.payload_json)
         return SessionTimelineEvent(
             id=model.id,
             session_id=model.session_id,

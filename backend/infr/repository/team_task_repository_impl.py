@@ -8,6 +8,7 @@ from domain.team_task.model.team_task_status import TeamTaskStatus
 from domain.team_task.repository.team_task_repository import TeamTaskRepository
 from domain.shared.utils import safe_json_loads
 from infr.repository.team_task_model import TeamTaskModel
+from infr.repository.repo_helpers import remove_by_pk
 
 
 class TeamTaskRepositoryImpl(TeamTaskRepository):
@@ -59,14 +60,7 @@ class TeamTaskRepositoryImpl(TeamTaskRepository):
         return [self._to_domain(m) for m in result.scalars().all()]
 
     async def remove(self, task_id: str) -> bool:
-        stmt = select(TeamTaskModel).where(TeamTaskModel.task_id == task_id)
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        if model is None:
-            return False
-        await self._session.delete(model)
-        await self._session.flush()
-        return True
+        return await remove_by_pk(self._session, TeamTaskModel.task_id, task_id)
 
     @staticmethod
     def _to_model(task: TeamTask) -> TeamTaskModel:

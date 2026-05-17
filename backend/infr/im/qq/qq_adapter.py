@@ -72,8 +72,7 @@ class QqAdapter(ImChannelAdapter):
             )
 
         try:
-            self._api.set_credentials(app_id, app_secret)
-            await self._api.ensure_token()
+            await self._api.ensure_token(app_id, app_secret)
         except Exception as e:
             return InitResult(
                 status=ChannelInitStatus.ERROR,
@@ -82,7 +81,7 @@ class QqAdapter(ImChannelAdapter):
 
         # Verify gateway connectivity
         try:
-            gw_url = await self._api.get_gateway_url()
+            gw_url = await self._api.get_gateway_url(app_id, app_secret)
         except Exception as e:
             return InitResult(
                 status=ChannelInitStatus.ERROR,
@@ -109,8 +108,6 @@ class QqAdapter(ImChannelAdapter):
         app_id = params.get("app_id", "")
         app_secret = params.get("app_secret", "")
         logger.info("[QQ-adapter] bind: session=%s app_id=%s", session_id, app_id)
-        if app_id and app_secret:
-            self._api.set_credentials(app_id, app_secret)
 
         return BindResult(
             status=BindingStatus.BOUND,
@@ -180,7 +177,7 @@ class QqAdapter(ImChannelAdapter):
 
         logger.info(
             "[QQ-adapter] send_message: session=%s msg_id=%s sender=%s group=%s content=%.100s",
-            binding.session_id if hasattr(binding, 'session_id') else '?',
+            binding.session_id,
             msg_id, sender_id, group_id, content,
         )
 

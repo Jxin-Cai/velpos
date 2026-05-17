@@ -43,7 +43,6 @@ _INTENTS = 1 << 25
 _OP_DISPATCH = 0
 _OP_HEARTBEAT = 1
 _OP_IDENTIFY = 2
-_OP_RESUME = 6
 _OP_RECONNECT = 7
 _OP_INVALID_SESSION = 9
 _OP_HELLO = 10
@@ -169,7 +168,7 @@ class QqWsClient:
         delay = _RECONNECT_BASE_DELAY
         while conn.running:
             creds_ok = self._api.has_credentials_for(conn.app_id, conn.app_secret)
-            if not creds_ok and not self._api.has_credentials:
+            if not creds_ok:
                 logger.warning(
                     "[QQ-WS] channel=%s stopping: no credentials configured",
                     conn.channel_id,

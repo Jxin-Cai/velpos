@@ -12,7 +12,6 @@ export function useCompactContext() {
     try {
       await compactSession(sessionId)
     } catch (err) {
-      console.error('Failed to compact context:', err)
       setError('Failed to compact context: ' + (err.message || 'Unknown error'))
     } finally {
       compacting.value = false

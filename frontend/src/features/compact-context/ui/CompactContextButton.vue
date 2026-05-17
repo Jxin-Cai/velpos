@@ -69,13 +69,8 @@ const emit = defineEmits(['compact'])
 .spinner-sm {
   width: 12px;
   height: 12px;
-  border: 2px solid currentColor;
+  border-color: currentColor;
   border-top-color: transparent;
-  border-radius: 50%;
   animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 </style>

@@ -15,6 +15,7 @@ class SettingsFileService:
 
     def __init__(self) -> None:
         self._settings_path = Path.home() / ".claude" / "settings.json"
+        self._lock = asyncio.Lock()
 
     # Default settings values — merged on read, user can override
     _DEFAULTS: dict = {
@@ -70,11 +71,12 @@ class SettingsFileService:
         key with the provided env_vars, and writes the result back.
         Existing keys not present in env_vars are preserved.
         """
-        settings = await self.read_settings()
-        existing_env: dict = settings.get("env", {})
-        existing_env.update(env_vars)
-        settings["env"] = existing_env
-        await self.write_settings(settings)
+        async with self._lock:
+            settings = await self.read_settings()
+            existing_env: dict = settings.get("env", {})
+            existing_env.update(env_vars)
+            settings["env"] = existing_env
+            await self.write_settings(settings)
 
     def _read_sync(self) -> dict:
         """Synchronous file read, intended to be called via asyncio.to_thread."""

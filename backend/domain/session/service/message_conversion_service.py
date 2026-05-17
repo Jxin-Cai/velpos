@@ -6,6 +6,15 @@ from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 
 
+def _extract_text_blocks(content: list) -> str:
+    """Join text from all text-type blocks in a content list."""
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text", ""))
+    return " ".join(parts) if parts else ""
+
+
 class MessageConversionService:
     """Encapsulates conversion rules between Claude Code message formats
     and VP domain model, stream message parsing, and assistant text extraction.
@@ -134,14 +143,11 @@ def _convert_user_message(
         )
         if has_tool_result:
             # Preserve text blocks alongside tool_result blocks
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-            if text_parts:
+            joined = _extract_text_blocks(content)
+            if joined:
                 pf_messages.append(Message.create(
                     message_type=MessageType.USER,
-                    content={"text": " ".join(text_parts)},
+                    content={"text": joined},
                 ))
             results = []
             for block in content:
@@ -156,14 +162,11 @@ def _convert_user_message(
                 content={"results": results},
             ))
         else:
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-            if text_parts:
+            joined = _extract_text_blocks(content)
+            if joined:
                 pf_messages.append(Message.create(
                     message_type=MessageType.USER,
-                    content={"text": " ".join(text_parts)},
+                    content={"text": joined},
                 ))
 
 

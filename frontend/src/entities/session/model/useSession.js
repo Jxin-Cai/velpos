@@ -298,10 +298,6 @@ function setStatus(s) {
   setStatusFor(currentSessionId.value, s)
 }
 
-function setQueued(val) {
-  setQueuedFor(currentSessionId.value, val)
-}
-
 function setError(err) {
   setErrorFor(currentSessionId.value, err)
 }
@@ -359,7 +355,6 @@ export function useSession() {
     addMessage,
     setMessages,
     setStatus,
-    setQueued,
     setError,
     setCanceling,
     // Session list management

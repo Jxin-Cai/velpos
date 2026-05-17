@@ -13,7 +13,6 @@ export function useClearContext() {
       setMessages([])
       setStatus('idle')
     } catch (err) {
-      console.error('Failed to clear context:', err)
       setError('Failed to clear context: ' + (err.message || 'Unknown error'))
     } finally {
       clearing.value = false

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from infr.repository.project_model import ProjectModel
+from infr.repository.repo_helpers import remove_by_pk
 
 
 class ProjectRepositoryImpl(ProjectRepository):
@@ -44,14 +45,7 @@ class ProjectRepositoryImpl(ProjectRepository):
         return self._to_domain(model)
 
     async def remove(self, project_id: str) -> bool:
-        stmt = select(ProjectModel).where(ProjectModel.id == project_id)
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        if model is None:
-            return False
-        await self._session.delete(model)
-        await self._session.flush()
-        return True
+        return await remove_by_pk(self._session, ProjectModel.id, project_id)
 
     @staticmethod
     def _to_model(project: Project) -> ProjectModel:

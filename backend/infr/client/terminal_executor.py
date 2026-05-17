@@ -110,7 +110,9 @@ class TerminalExecutor:
 
     async def read_pty(self, terminal_id: str) -> str:
         while terminal_id in self._pty_sessions:
-            session = self._get_pty_session(terminal_id)
+            session = self._pty_sessions.get(terminal_id)
+            if session is None:
+                return ""
             try:
                 data = os.read(session.master_fd, 4096)
             except BlockingIOError:
