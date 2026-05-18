@@ -1,6 +1,7 @@
 <script setup>
 import { ref, nextTick, watch, computed } from 'vue'
 import { useUserPreferences } from '@shared/lib/useUserPreferences'
+import { formatFileSize } from '@shared/lib/textParsers'
 
 const props = defineProps({
   disabled: {
@@ -200,10 +201,7 @@ function removeAttachment(index) {
 }
 
 function formatSize(size) {
-  const n = Number(size) || 0
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  if (n >= 1024) return `${Math.round(n / 1024)} KB`
-  return `${n} B`
+  return formatFileSize(size)
 }
 
 function setInput(text) {

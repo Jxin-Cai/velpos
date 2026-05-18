@@ -147,6 +147,17 @@ export function useSessionList() {
     switchSession(session.session_id)
   }
 
+  function fallbackToNextSession(deletedIds = []) {
+    const remaining = sessions.value.find(s => s.source !== 'claude-code')
+    if (remaining) {
+      switchSession(remaining.session_id)
+    } else {
+      setCurrentSessionId(null)
+      for (const id of deletedIds) removeState(id)
+      localStorage.removeItem(LAST_SESSION_ID_KEY)
+    }
+  }
+
   async function handleDelete(sessionId) {
     const session = sessions.value.find(s => s.session_id === sessionId)
     if (!session) return
@@ -163,13 +174,7 @@ export function useSessionList() {
     removeState(sessionId)
 
     if (currentSessionId.value === sessionId) {
-      const first = sessions.value.find(s => s.source !== 'claude-code')
-      if (first) {
-        switchSession(first.session_id)
-      } else {
-        setCurrentSessionId(null)
-        localStorage.removeItem(LAST_SESSION_ID_KEY)
-      }
+      fallbackToNextSession([sessionId])
     }
   }
 
@@ -205,15 +210,7 @@ export function useSessionList() {
 
     // Handle current session being deleted
     if (sessionIds.includes(currentSessionId.value)) {
-      const deletedId = currentSessionId.value
-      const remaining = sessions.value.find(s => s.source !== 'claude-code')
-      if (remaining) {
-        switchSession(remaining.session_id)
-      } else {
-        setCurrentSessionId(null)
-        removeState(deletedId)
-        localStorage.removeItem(LAST_SESSION_ID_KEY)
-      }
+      fallbackToNextSession([currentSessionId.value])
     }
   }
 
@@ -243,16 +240,7 @@ export function useSessionList() {
     }
 
     if (projectSessions.some(s => s.session_id === currentSessionId.value)) {
-      const remaining = sessions.value.find(s => s.source !== 'claude-code')
-      if (remaining) {
-        switchSession(remaining.session_id)
-      } else {
-        setCurrentSessionId(null)
-        for (const s of projectSessions) {
-          removeState(s.session_id)
-        }
-        localStorage.removeItem(LAST_SESSION_ID_KEY)
-      }
+      fallbackToNextSession(projectSessions.map(s => s.session_id))
     }
   }
 

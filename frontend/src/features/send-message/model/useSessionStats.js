@@ -42,6 +42,7 @@ export function useSessionStats() {
     if (!current?.session_id) return
     const key = `${current.session_id}:${current.project_id || ''}:${current.usage?.input_tokens || 0}:${current.usage?.output_tokens || 0}`
     if (key === usageFetchKey) return
+    const prevKey = usageFetchKey
     usageFetchKey = key
     const seq = ++_usageSeq
     try {
@@ -51,7 +52,7 @@ export function useSessionStats() {
       if (seq !== _usageSeq) return
       projectUsageSummary.value = projectUsage
     } catch {
-      // keep previous usage display
+      if (seq === _usageSeq) usageFetchKey = prevKey
     }
   }
 

@@ -22,6 +22,7 @@ from claude_agent_sdk.types import (
 from domain.session.acl.claude_agent_gateway import (
     ClaudeAgentGateway as ClaudeAgentGatewayPort,
 )
+from domain.shared.async_utils import safe_create_task
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         loop = asyncio.get_running_loop()
         self._idle_timers[session_id] = loop.call_later(
             delay,
-            lambda sid=session_id: asyncio.create_task(self._idle_disconnect(sid)),
+            lambda sid=session_id: safe_create_task(self._idle_disconnect(sid), name=f"idle_disconnect_{sid}"),
         )
         logger.info("已调度空闲断开: session=%s", session_id)
 
@@ -798,7 +799,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     raw_models = info["models"]
                     break
             except Exception:
-                pass
+                logger.debug("Failed to get models from existing client", exc_info=True)
 
         # No active client — create a temporary one
         if not raw_models:
@@ -815,7 +816,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 try:
                     await client.disconnect()
                 except Exception:
-                    pass
+                    logger.debug("Failed to disconnect temp client for model fetch", exc_info=True)
 
         for model in raw_models:
             model["context_window"] = self._context_window_for_model(model)

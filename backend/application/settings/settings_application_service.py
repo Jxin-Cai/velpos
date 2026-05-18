@@ -24,3 +24,7 @@ class SettingsApplicationService:
         """
         await self._settings_file_gateway.write_settings(data)
         return await self._settings_file_gateway.read_settings()
+
+    async def update_env_section(self, env_vars: dict[str, str]) -> None:
+        """Update the env section of settings.json with the given variables."""
+        await self._settings_file_gateway.update_env_section(env_vars)

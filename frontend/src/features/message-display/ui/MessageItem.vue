@@ -1,6 +1,7 @@
 <script setup>
 import { ref, shallowRef, watch, onMounted, nextTick, inject } from 'vue'
 import { configuredMarked } from '../lib/markdownConfig'
+import { formatFileSize } from '@shared/lib/textParsers'
 import { openPath } from '@features/terminal'
 import AssistantBlock from './AssistantBlock.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
@@ -181,10 +182,7 @@ function attachmentName(attachment) {
 }
 
 function attachmentSize(attachment) {
-  const n = Number(attachment?.size_bytes || attachment?.size || 0)
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  if (n >= 1024) return `${Math.round(n / 1024)} KB`
-  return `${n} B`
+  return formatFileSize(attachment?.size_bytes || attachment?.size || 0)
 }
 
 // Event delegation for code copy buttons and file path links

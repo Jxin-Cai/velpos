@@ -228,7 +228,7 @@ async def _restore_channel_profile_settings() -> None:
 
         env_vars = ChannelProfileApplicationService._profile_to_env_vars(active_profile)
         if env_vars:
-            await settings_svc._settings_file_gateway.update_env_section(env_vars)
+            await settings_svc.update_env_section(env_vars)
             logger.info(
                 "Restored active channel profile '%s' env vars to settings.json.",
                 active_profile.name,

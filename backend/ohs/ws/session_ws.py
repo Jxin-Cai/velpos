@@ -132,6 +132,24 @@ async def websocket_endpoint(
     await manager.connect(websocket, session_id)
     logger.info("websocket_connected", extra={"session_id": session_id})
 
+    async def _build_session_summary(
+        svc: SessionApplicationService,
+        sess,
+        *,
+        include_permission: bool = True,
+        include_agent_state: bool = False,
+    ) -> dict:
+        summary = SessionAssembler.to_summary(
+            sess,
+            git_branch=await svc.get_current_git_branch(sess.project_dir),
+        )
+        if include_permission:
+            summary["permission_mode"] = gateway.get_permission_mode(session_id)
+        summary["waiting_for_slot"] = await svc.is_waiting_for_slot(session_id)
+        if include_agent_state:
+            summary["agent_state"] = svc.get_agent_state(session_id)
+        return summary
+
     try:
         try:
             session = await service.get_session(session_id)
@@ -191,13 +209,9 @@ async def websocket_endpoint(
             try:
                 async def _refresh(bg_service: SessionApplicationService) -> None:
                     refreshed = await bg_service.refresh_context_usage(session_id)
-                    refreshed_summary = SessionAssembler.to_summary(
-                        refreshed,
-                        git_branch=await bg_service.get_current_git_branch(refreshed.project_dir),
+                    refreshed_summary = await _build_session_summary(
+                        bg_service, refreshed, include_agent_state=True,
                     )
-                    refreshed_summary["permission_mode"] = gateway.get_permission_mode(session_id)
-                    refreshed_summary["waiting_for_slot"] = await bg_service.is_waiting_for_slot(session_id)
-                    refreshed_summary["agent_state"] = bg_service.get_agent_state(session_id)
                     await manager.broadcast(session_id, {
                         "event": "status",
                         "session": refreshed_summary,
@@ -291,11 +305,9 @@ async def websocket_endpoint(
                     )
 
                     if not current_session.is_running:
-                        task = asyncio.create_task(_submit_query_background(command))
-                        task.add_done_callback(
-                            lambda t: t.exception() and logger.error(
-                                "run_claude_query task crashed: %s", t.exception()
-                            ) if not t.cancelled() and t.exception() else None
+                        safe_create_task(
+                            _submit_query_background(command),
+                            name=f"run_claude_query_{session_id}",
                         )
                     else:
                         # Queue for after current query completes (latest-wins)
@@ -354,11 +366,7 @@ async def websocket_endpoint(
 
             elif action == "get_status":
                 current_session = await service.get_session(session_id)
-                summary = SessionAssembler.to_summary(
-                    current_session,
-                    git_branch=await service.get_current_git_branch(current_session.project_dir),
-                )
-                summary["waiting_for_slot"] = await service.is_waiting_for_slot(session_id)
+                summary = await _build_session_summary(service, current_session)
                 await websocket.send_json({
                     "event": "status",
                     "session": summary,
@@ -370,12 +378,9 @@ async def websocket_endpoint(
                     try:
                         await service.set_model(session_id, model)
                         current_session = await service.get_session(session_id)
-                        summary = SessionAssembler.to_summary(
-                            current_session,
-                            git_branch=await service.get_current_git_branch(current_session.project_dir),
+                        summary = await _build_session_summary(
+                            service, current_session, include_agent_state=True,
                         )
-                        summary["waiting_for_slot"] = await service.is_waiting_for_slot(session_id)
-                        summary["agent_state"] = service.get_agent_state(session_id)
                         await websocket.send_json({
                             "event": "status",
                             "session": summary,
