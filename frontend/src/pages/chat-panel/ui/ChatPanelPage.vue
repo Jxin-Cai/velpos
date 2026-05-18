@@ -224,6 +224,7 @@ function handleCompact() {
 watch(currentSessionId, (newId) => {
   if (canceling.value) setCanceling(false)
   visibleCount.value = MESSAGE_PAGE_SIZE
+  messageInputRef.value?.clearAttachments()
   if (newId) {
     fetchImStatus(newId)
     fetchImChannels()

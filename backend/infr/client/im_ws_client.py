@@ -104,7 +104,14 @@ class ImWsClient(ImWsGateway):
                 try:
                     queue.put_nowait(None)
                 except asyncio.QueueFull:
-                    pass
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        queue.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
             self._message_queues.pop(im_user_id, None)
             self._tokens.pop(im_user_id, None)
             self._should_reconnect.pop(im_user_id, None)

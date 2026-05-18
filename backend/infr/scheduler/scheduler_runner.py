@@ -62,7 +62,11 @@ class SchedulerRunner:
                 unbind_im_fn=_im_unbind_for_session,
                 save_run_fn=_save_scheduled_task_run,
             )
-            runs = await service.run_due_tasks()
-            await db_session.commit()
+            try:
+                runs = await service.run_due_tasks()
+                await db_session.commit()
+            except Exception:
+                await db_session.rollback()
+                raise
             if runs:
                 logger.info("scheduler triggered %d task(s)", len(runs))

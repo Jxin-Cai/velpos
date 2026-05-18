@@ -235,7 +235,11 @@ function openFilePicker() {
   fileInputEl.value?.click()
 }
 
-defineExpose({ setInput, addImage, appendText })
+function clearAttachments() {
+  pendingAttachments.value = []
+}
+
+defineExpose({ setInput, addImage, appendText, clearAttachments })
 </script>
 
 <template>
