@@ -62,7 +62,7 @@ class LarkAdapter(ImChannelAdapter):
         self._api = LarkApiClient()
         # Multiple WS connections keyed by channel_id
         self._connections: dict[str, _WsConnection] = {}
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
     # ── Initialization ──────────────────────────────────────────
 
@@ -244,7 +244,7 @@ class LarkAdapter(ImChannelAdapter):
             return
 
         # Stop existing listener for this specific channel if any
-        with self._lock:
+        async with self._lock:
             existing = self._connections.pop(channel_id, None)
         if existing and existing.thread and existing.thread.is_alive():
             logger.info("[Lark-adapter] Stopping existing WS for channel=%s before restart", channel_id)
@@ -257,7 +257,7 @@ class LarkAdapter(ImChannelAdapter):
             main_loop=asyncio.get_running_loop(),
         )
 
-        with self._lock:
+        async with self._lock:
             self._connections[channel_id] = conn
 
         logger.info(
@@ -276,7 +276,7 @@ class LarkAdapter(ImChannelAdapter):
     async def stop_listening(self, binding: ImBinding) -> None:
         """Stop the WebSocket listener for a specific channel instance."""
         channel_id = binding.channel_id
-        with self._lock:
+        async with self._lock:
             conn = self._connections.pop(channel_id, None)
         if conn:
             await self._stop_connection(conn)
@@ -694,7 +694,7 @@ class LarkAdapter(ImChannelAdapter):
 
     async def close(self) -> None:
         """Shutdown adapter — stop all WS listeners."""
-        with self._lock:
+        async with self._lock:
             connections = list(self._connections.values())
             self._connections.clear()
 

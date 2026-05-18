@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-
-from domain.session.model.session_audit_event import SessionAuditEvent
-from domain.shared.async_utils import safe_create_task
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,55 +68,12 @@ from infr.repository.team_task_repository_impl import TeamTaskRepositoryImpl
 from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 from domain.im_binding.model.channel_registry import ImChannelRegistry
-from domain.im_binding.model.binding_status import BindingStatus
+from ohs.session_event_coordinator import SessionEventCoordinator
 
 logger = logging.getLogger(__name__)
 
 _connection_manager = ConnectionManager()
 _claude_agent_gateway = ClaudeAgentGateway()
-
-
-async def _broadcast_with_im(session_id: str, data: dict) -> None:
-    """Broadcast to WS clients and forward user_choice_request to IM."""
-    await _connection_manager.broadcast(session_id, data)
-    event = data.get("event")
-    if event in {"permission_request", "user_choice_request"}:
-        interaction_type = "user_choice" if event == "user_choice_request" else "permission"
-        await _connection_manager.broadcast_global({
-            "event": "session_waiting_for_input",
-            "session_id": session_id,
-            "interaction_type": interaction_type,
-            "tool_name": data.get("tool_name", ""),
-            "questions": data.get("questions", []),
-            "tool_input": data.get("tool_input", ""),
-            "agent_state": "waiting_permission",
-        })
-        audit_type = "ask_user_question_requested" if event == "user_choice_request" else "permission_requested"
-        try:
-            await _record_session_audit_event(
-                SessionAuditEvent.create(
-                    session_id=session_id,
-                    event_type=audit_type,
-                    payload={"tool_name": data.get("tool_name", "")},
-                )
-            )
-        except Exception:
-            logger.warning("Failed to record pending request audit for session %s", session_id, exc_info=True)
-    # Also sync user_choice_request to IM so IM users can see and answer
-    if event == "user_choice_request":
-        questions = data.get("questions", [])
-        lines = ["[User Input Required]"]
-        for i, q in enumerate(questions):
-            lines.append(f"\n{q.get('question', '')}")
-            for j, opt in enumerate(q.get("options", [])):
-                label = opt.get("label", "")
-                desc = opt.get("description", "")
-                lines.append(f"  {j + 1}. {label}" + (f" - {desc}" if desc else ""))
-        text = "\n".join(lines)
-        safe_create_task(_on_assistant_response(session_id, text))
-
-
-_claude_agent_gateway.set_broadcast_fn(_broadcast_with_im)
 _claude_plugin_manager = ClaudePluginManager()
 _claude_command_gateway = ClaudeCommandGateway()
 _claude_session_manager = ClaudeSessionManagerImpl()
@@ -164,82 +117,15 @@ _weixin_adapter = WeixinAdapter()
 _im_channel_registry.register(WEIXIN_CHANNEL_SPEC, lambda: _weixin_adapter)
 
 
-async def _is_session_im_bound(session_id: str) -> bool:
-    """Check if a session has an active IM binding (for idle disconnect protection)."""
-    from infr.config.database import async_session_factory
-
-    try:
-        async with async_session_factory() as db_session:
-            repo = ImBindingRepositoryImpl(db_session)
-            binding = await repo.find_by_session_id(session_id)
-            return binding is not None and binding.binding_status == BindingStatus.BOUND
-    except Exception:
-        logger.warning("Failed to check IM binding for session %s", session_id, exc_info=True)
-        return False
-
-
-_claude_agent_gateway.set_is_im_bound_fn(_is_session_im_bound)
-
-
-async def _persist_pending_request_context(
-    session_id: str,
-    context: dict | None,
-) -> None:
-    from infr.config.database import async_session_factory
-
-    async with async_session_factory() as db_session:
-        repo = SessionRepositoryImpl(db_session)
-        session = await repo.find_by_id(session_id)
-        if session is None:
-            return
-        if context:
-            session.update_pending_request_context(context)
-        else:
-            session.clear_pending_request_context()
-        await repo.save(session)
-        await db_session.commit()
-
-
-_claude_agent_gateway.set_persist_pending_request_context_fn(_persist_pending_request_context)
-
-
-async def _sync_to_im(session_id: str, content: str, log_label: str = "Outbound") -> None:
-    """Forward a message to the bound IM channel with 3-attempt retry."""
-    from infr.config.database import async_session_factory
-
-    last_err = None
-    for attempt in range(3):
-        try:
-            async with async_session_factory() as db_session:
-                svc = ImChannelApplicationService(
-                    registry=_im_channel_registry,
-                    binding_repo=ImBindingRepositoryImpl(db_session),
-                    init_repo=ChannelInitRepositoryImpl(db_session),
-                )
-                await svc.sync_outbound(session_id, content)
-                await db_session.commit()
-            return
-        except Exception as exc:
-            last_err = exc
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (attempt + 1))
-
-    logger.warning(
-        "%s IM sync failed for session %s after 3 attempts",
-        log_label, session_id, exc_info=last_err,
-    )
-    await _connection_manager.broadcast(session_id, {
-        "event": "error",
-        "message": "IM message sync failed, the message may not have been delivered to the IM channel.",
-    })
-
-
-async def _on_assistant_response(session_id: str, content: str) -> None:
-    await _sync_to_im(session_id, content, "Outbound")
-
-
-async def _on_user_message(session_id: str, content: str) -> None:
-    await _sync_to_im(session_id, f"[Web User]\n{content}", "User message")
+# ── Session Event Coordinator (broadcast, IM sync, audit, timeline, usage) ──
+_session_coordinator = SessionEventCoordinator(
+    connection_manager=_connection_manager,
+    im_channel_registry=_im_channel_registry,
+)
+_claude_agent_gateway.set_broadcast_fn(_session_coordinator.broadcast_with_im)
+_claude_agent_gateway.set_is_im_bound_fn(_session_coordinator.is_session_im_bound)
+_claude_agent_gateway.set_persist_pending_request_context_fn(_session_coordinator.persist_pending_request_context)
+_connection_manager.register_broadcast_hook(_session_coordinator.timeline_broadcast_hook)
 
 
 async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
@@ -303,91 +189,6 @@ async def _cleanup_branch_group(group_id: str) -> None:
         await db_session.commit()
 
 
-async def _record_session_audit_event(event) -> None:
-    from infr.config.database import async_session_factory
-
-    async with async_session_factory() as db_session:
-        repo = SessionAuditEventRepositoryImpl(db_session)
-        await repo.save(event)
-        await db_session.commit()
-
-
-async def _record_session_timeline_event(
-    session_id: str,
-    event_type: str,
-    title: str,
-    payload: dict | None = None,
-    status: str = "completed",
-) -> None:
-    from infr.config.database import async_session_factory
-
-    async with async_session_factory() as db_session:
-        svc = SessionTimelineEventService(
-            repository=SessionTimelineEventRepositoryImpl(db_session),
-            connection_manager=None,
-        )
-        await svc.record_event(
-            session_id=session_id,
-            run_id="external",
-            event_type=event_type,
-            title=title,
-            payload=payload or {},
-            status=status,
-            commit=True,
-            emit=False,
-        )
-
-
-async def _timeline_broadcast_hook(session_id: str, data: dict) -> None:
-    event = data.get("event")
-    if event == "permission_request":
-        await _record_session_timeline_event(
-            session_id,
-            "permission_request",
-            f"权限请求：{data.get('tool_name', '')}",
-            {"tool_name": data.get("tool_name", ""), "tool_input": data.get("tool_input", "")},
-            status="running",
-        )
-    elif event == "user_choice_request":
-        await _record_session_timeline_event(
-            session_id,
-            "permission_request",
-            "用户选择请求",
-            {"tool_name": data.get("tool_name", ""), "questions": data.get("questions", [])},
-            status="running",
-        )
-
-
-_connection_manager.register_broadcast_hook(_timeline_broadcast_hook)
-
-
-async def _record_usage_ledger(
-    session_id: str,
-    project_id: str,
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read_tokens: int = 0,
-    cache_creation_tokens: int = 0,
-) -> None:
-    from infr.config.database import async_session_factory
-
-    async with async_session_factory() as db_session:
-        svc = UsageGovernanceApplicationService(
-            repository=UsageGovernanceRepositoryImpl(db_session),
-        )
-        await svc.record_usage(
-            session_id=session_id,
-            project_id=project_id,
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cache_creation_tokens=cache_creation_tokens,
-        )
-        await db_session.commit()
-
-
 async def get_session_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> SessionApplicationService:
@@ -407,13 +208,13 @@ async def get_session_application_service(
         claude_agent_gateway=_claude_agent_gateway,
         connection_manager=_connection_manager,
         claude_session_manager=_claude_session_manager,
-        on_assistant_response=_on_assistant_response,
-        on_user_message=_on_user_message,
+        on_assistant_response=_session_coordinator.on_assistant_response,
+        on_user_message=_session_coordinator.on_user_message,
         project_repository=project_repo,
         im_unbind_fn=_im_unbind_for_session,
         audit_event_repository=audit_repo,
-        audit_event_recorder=_record_session_audit_event,
-        usage_recorder=_record_usage_ledger,
+        audit_event_recorder=_session_coordinator.record_audit_event,
+        usage_recorder=_session_coordinator.record_usage_ledger,
         timeline_service=timeline_service,
         timeline_event_service=timeline_event_service,
         session_service_factory=_create_session_service,
@@ -451,7 +252,7 @@ async def get_scheduler_application_service(
         project_repository=ProjectRepositoryImpl(db_session),
         session_service_factory=_create_session_service,
         connection_manager=_connection_manager,
-        notify_im_fn=_on_assistant_response,
+        notify_im_fn=_session_coordinator.on_assistant_response,
         bind_im_fn=_im_bind_for_session,
         unbind_im_fn=_im_unbind_for_session,
         save_run_fn=_save_scheduled_task_run,
@@ -517,6 +318,10 @@ def get_im_channel_registry() -> ImChannelRegistry:
     return _im_channel_registry
 
 
+def get_session_event_coordinator() -> SessionEventCoordinator:
+    return _session_coordinator
+
+
 def get_lark_adapter() -> LarkAdapter:
     return _lark_adapter
 
@@ -576,8 +381,8 @@ async def _create_session_service(
         claude_agent_gateway=_claude_agent_gateway,
         connection_manager=_connection_manager,
         claude_session_manager=_claude_session_manager,
-        on_assistant_response=_on_assistant_response,
-        on_user_message=_on_user_message,
+        on_assistant_response=_session_coordinator.on_assistant_response,
+        on_user_message=_session_coordinator.on_user_message,
         project_repository=ProjectRepositoryImpl(db_session),
         im_unbind_fn=_im_unbind_for_session,
         timeline_service=SessionRunTimelineService(
@@ -700,6 +505,6 @@ async def get_team_coordinator_service(
         team_task_repository=TeamTaskRepositoryImpl(db_session),
         claude_agent_gateway=_claude_agent_gateway,
         connection_manager=_connection_manager,
-        notify_im_fn=_on_assistant_response,
+        notify_im_fn=_session_coordinator.on_assistant_response,
         agent_application_service=agent_service,
     )

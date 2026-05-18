@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 class SessionApplicationService:
     _session_locks: dict[str, asyncio.Lock] = {}
     _session_locks_guard = asyncio.Lock()
+    _MAX_SESSION_LOCKS = 500
     # Shared across all instances to coordinate between WS-service and bg-service
     _cancelled_sessions: set[str] = set()
     _queued_messages: dict[str, "RunQueryCommand"] = {}
@@ -52,6 +53,10 @@ class SessionApplicationService:
         async with cls._session_locks_guard:
             lock = cls._session_locks.get(session_id)
             if lock is None:
+                if len(cls._session_locks) >= cls._MAX_SESSION_LOCKS:
+                    stale = [k for k, v in cls._session_locks.items() if not v.locked()]
+                    for k in stale[:len(stale) // 2]:
+                        del cls._session_locks[k]
                 lock = asyncio.Lock()
                 cls._session_locks[session_id] = lock
             return lock

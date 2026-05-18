@@ -12,9 +12,9 @@ from ohs.dependencies import (
     _save_scheduled_task_run,
     _im_bind_for_session,
     _im_unbind_for_session,
-    _on_assistant_response,
     get_connection_manager,
     get_create_session_service_factory,
+    get_session_event_coordinator,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ class SchedulerRunner:
                 project_repository=ProjectRepositoryImpl(db_session),
                 session_service_factory=get_create_session_service_factory(),
                 connection_manager=get_connection_manager(),
-                notify_im_fn=_on_assistant_response,
+                notify_im_fn=get_session_event_coordinator().on_assistant_response,
                 bind_im_fn=_im_bind_for_session,
                 unbind_im_fn=_im_unbind_for_session,
                 save_run_fn=_save_scheduled_task_run,
