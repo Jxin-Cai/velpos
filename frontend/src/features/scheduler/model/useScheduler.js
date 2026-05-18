@@ -6,16 +6,20 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const activeProjectId = ref('')
+let _loadSeq = 0
 
 export function useScheduler() {
   async function loadSchedules(projectId = '') {
     activeProjectId.value = projectId
     loading.value = true
     error.value = ''
+    const seq = ++_loadSeq
     try {
       const data = await listSchedules(projectId)
+      if (seq !== _loadSeq) return
       tasks.value = data.tasks || []
     } catch (e) {
+      if (seq !== _loadSeq) return
       error.value = e.message || 'Failed to load schedules'
     } finally {
       loading.value = false

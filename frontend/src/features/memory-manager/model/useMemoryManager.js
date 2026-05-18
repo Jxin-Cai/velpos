@@ -28,6 +28,8 @@ const rules = ref([])
 const selectedRule = ref(null)
 const ruleEditing = ref(false)
 const ruleDraft = ref({ path: '', content: '', pathsText: '' })
+let _claudeMdSeq = 0
+let _rulesSeq = 0
 
 const selectedContent = computed(() => {
   if (selectedRevision.value && activeRevision.value && selectedRevision.value.id === activeRevision.value.id) {
@@ -47,8 +49,10 @@ export function useMemoryManager() {
     loadingCount.value++
     error.value = ''
     conflictMessage.value = ''
+    const seq = ++_claudeMdSeq
     try {
       const data = await readClaudeMd(projectDir)
+      if (seq !== _claudeMdSeq) return
       content.value = data.content || ''
       fileHash.value = data.file_hash || ''
       activeRevision.value = data.active_revision || null
@@ -59,6 +63,7 @@ export function useMemoryManager() {
         || versions.value[0]
         || null
     } catch (e) {
+      if (seq !== _claudeMdSeq) return
       content.value = ''
       error.value = e.message || 'Failed to load CLAUDE.md'
     } finally {
@@ -71,12 +76,15 @@ export function useMemoryManager() {
     if (!projectDir) return
     loadingCount.value++
     error.value = ''
+    const seq = ++_rulesSeq
     try {
       const data = await listRules(projectDir)
+      if (seq !== _rulesSeq) return
       rules.value = data.rules || []
       const selectedPath = selectedRule.value?.path
       selectedRule.value = rules.value.find(rule => rule.path === selectedPath) || rules.value[0] || null
     } catch (e) {
+      if (seq !== _rulesSeq) return
       rules.value = []
       selectedRule.value = null
       error.value = e.message || 'Failed to load rules'

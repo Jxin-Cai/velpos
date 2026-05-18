@@ -9,6 +9,7 @@ const error = ref(null)
 const searchQuery = ref('')
 
 let cachedProjectDir = null
+let _loadCmdSeq = 0
 
 const policyRows = computed(() => {
   const rowsByKey = new Map()
@@ -51,15 +52,18 @@ export function useCommandPalette() {
     }
     loading.value = true
     error.value = null
+    const seq = ++_loadCmdSeq
     try {
       const [commandData, policyData] = await Promise.all([
         fetchCommands(projectDir),
         fetchCommandPolicies(projectDir),
       ])
+      if (seq !== _loadCmdSeq) return
       commands.value = (commandData.commands || []).filter(c => c.isUserInvocable !== false)
       policies.value = policyData.policies || []
       cachedProjectDir = projectDir
     } catch (e) {
+      if (seq !== _loadCmdSeq) return
       error.value = e.message
     } finally {
       loading.value = false

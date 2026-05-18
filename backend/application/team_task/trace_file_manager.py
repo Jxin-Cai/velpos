@@ -10,12 +10,18 @@ from typing import Any
 class TraceFileManager:
 
     _locks: dict[str, asyncio.Lock] = {}
-    _locks_guard = asyncio.Lock()
+    _locks_guard: asyncio.Lock | None = None
     _MAX_LOCKS = 200
 
     @classmethod
+    def _get_locks_guard(cls) -> asyncio.Lock:
+        if cls._locks_guard is None:
+            cls._locks_guard = asyncio.Lock()
+        return cls._locks_guard
+
+    @classmethod
     async def _get_lock(cls, trace_id: str) -> asyncio.Lock:
-        async with cls._locks_guard:
+        async with cls._get_locks_guard():
             lock = cls._locks.get(trace_id)
             if lock is None:
                 if len(cls._locks) >= cls._MAX_LOCKS:
@@ -28,7 +34,7 @@ class TraceFileManager:
 
     @classmethod
     async def _release_lock(cls, trace_id: str) -> None:
-        async with cls._locks_guard:
+        async with cls._get_locks_guard():
             lock = cls._locks.get(trace_id)
             if lock and not lock.locked():
                 cls._locks.pop(trace_id, None)

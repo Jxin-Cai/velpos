@@ -9,6 +9,7 @@ const error = ref('')
 const proposal = ref(null)
 const lessons = ref([])
 const createdDraft = ref(null)
+let _extractSeq = 0
 
 function buildRuleDraftContent(items) {
   return items
@@ -35,6 +36,7 @@ export function useEvolution() {
     loading.value = true
     error.value = ''
     createdDraft.value = null
+    const seq = ++_extractSeq
     try {
       const data = await extractEvolutionLessons({
         project_id: projectId,
@@ -42,9 +44,11 @@ export function useEvolution() {
         session_id: sessionId,
         limit: 80,
       })
+      if (seq !== _extractSeq) return
       proposal.value = data.proposal || null
       lessons.value = (data.lessons || []).map(item => ({ ...item, enabled: true }))
     } catch (e) {
+      if (seq !== _extractSeq) return
       error.value = e.message || 'Failed to extract lessons'
     } finally {
       loading.value = false
