@@ -39,11 +39,6 @@ class ClaudeMdRevisionRepository(ABC):
         ...
 
     @abstractmethod
-    async def has_children(self, revision_id: str) -> bool:
-        """Return whether another revision uses this revision as base."""
-        ...
-
-    @abstractmethod
     async def remove(self, revision_id: str) -> bool:
         """Remove a revision and its events."""
         ...

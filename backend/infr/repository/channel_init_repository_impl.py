@@ -30,25 +30,6 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
         model = result.scalar_one_or_none()
         return self._to_domain(model) if model else None
 
-    async def find_by_channel_type(
-        self, channel_type: ImChannelType,
-    ) -> ChannelInit | None:
-        stmt = select(ChannelInitModel).where(
-            ChannelInitModel.channel_type == channel_type.value,
-        ).limit(1)
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return self._to_domain(model) if model else None
-
-    async def find_all_by_channel_type(
-        self, channel_type: ImChannelType,
-    ) -> list[ChannelInit]:
-        stmt = select(ChannelInitModel).where(
-            ChannelInitModel.channel_type == channel_type.value,
-        ).order_by(ChannelInitModel.created_time)
-        result = await self._session.execute(stmt)
-        return [self._to_domain(m) for m in result.scalars().all()]
-
     async def find_all(self) -> list[ChannelInit]:
         stmt = select(ChannelInitModel).order_by(ChannelInitModel.created_time)
         result = await self._session.execute(stmt)

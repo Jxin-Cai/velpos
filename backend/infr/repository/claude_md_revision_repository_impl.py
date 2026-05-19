@@ -71,13 +71,6 @@ class ClaudeMdRevisionRepositoryImpl(ClaudeMdRevisionRepository):
         current = result.scalar_one_or_none() or 0
         return int(current) + 1
 
-    async def has_children(self, revision_id: str) -> bool:
-        stmt = select(ClaudeMdRevisionModel.id).where(
-            ClaudeMdRevisionModel.base_revision_id == revision_id,
-        ).limit(1)
-        result = await self._session.execute(stmt)
-        return result.scalar_one_or_none() is not None
-
     async def remove(self, revision_id: str) -> bool:
         revision = await self.find_by_id(revision_id)
         if revision is None:

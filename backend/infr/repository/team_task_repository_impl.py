@@ -50,15 +50,6 @@ class TeamTaskRepositoryImpl(TeamTaskRepository):
         result = await self._session.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
 
-    async def find_by_main_project(self, main_project_id: str) -> list[TeamTask]:
-        stmt = (
-            select(TeamTaskModel)
-            .where(TeamTaskModel.main_project_id == main_project_id)
-            .order_by(TeamTaskModel.created_time.desc())
-        )
-        result = await self._session.execute(stmt)
-        return [self._to_domain(m) for m in result.scalars().all()]
-
     async def remove(self, task_id: str) -> bool:
         return await remove_by_pk(self._session, TeamTaskModel.task_id, task_id)
 

@@ -28,9 +28,5 @@ class SessionBranchRepository(ABC):
         ...
 
     @abstractmethod
-    async def remove_by_branch_session_id(self, session_id: str) -> bool:
-        ...
-
-    @abstractmethod
     async def remove_by_group_id(self, group_id: str) -> int:
         ...

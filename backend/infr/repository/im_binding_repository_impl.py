@@ -33,32 +33,6 @@ class ImBindingRepositoryImpl(ImBindingRepository):
             return None
         return self._to_domain(model)
 
-    async def find_by_session_and_channel(
-        self, session_id: str, channel_type: ImChannelType,
-    ) -> ImBinding | None:
-        stmt = select(ImBindingModel).where(
-            ImBindingModel.session_id == session_id,
-            ImBindingModel.channel_type == channel_type.value,
-        )
-        result = await self._session.execute(stmt)
-        model = result.scalars().first()
-        if model is None:
-            return None
-        return self._to_domain(model)
-
-    async def find_by_channel(
-        self, channel_type: ImChannelType, channel_address: str,
-    ) -> ImBinding | None:
-        stmt = select(ImBindingModel).where(
-            ImBindingModel.channel_type == channel_type.value,
-            ImBindingModel.channel_address == channel_address,
-        )
-        result = await self._session.execute(stmt)
-        model = result.scalars().first()
-        if model is None:
-            return None
-        return self._to_domain(model)
-
     async def find_by_channel_id(self, channel_id: str) -> ImBinding | None:
         stmt = select(ImBindingModel).where(
             ImBindingModel.channel_id == channel_id,
@@ -82,22 +56,6 @@ class ImBindingRepositoryImpl(ImBindingRepository):
     async def remove(self, session_id: str) -> bool:
         stmt = select(ImBindingModel).where(
             ImBindingModel.session_id == session_id,
-        )
-        result = await self._session.execute(stmt)
-        models = result.scalars().all()
-        if not models:
-            return False
-        for model in models:
-            await self._session.delete(model)
-        await self._session.flush()
-        return True
-
-    async def remove_by_session_and_channel(
-        self, session_id: str, channel_type: ImChannelType,
-    ) -> bool:
-        stmt = select(ImBindingModel).where(
-            ImBindingModel.session_id == session_id,
-            ImBindingModel.channel_type == channel_type.value,
         )
         result = await self._session.execute(stmt)
         models = result.scalars().all()

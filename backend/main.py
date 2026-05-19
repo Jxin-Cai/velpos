@@ -114,7 +114,6 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.project_command_policy_model  # noqa: F401
     import infr.repository.project_memory_entry_model  # noqa: F401
     import infr.repository.claude_md_revision_model  # noqa: F401
-    from infr.config.base import Base
 
     connectable = async_engine_from_config(
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),

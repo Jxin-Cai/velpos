@@ -663,6 +663,5 @@ class TeamCoordinatorService:
         data: dict[str, Any],
     ) -> None:
         """Broadcast a team event to global WS and coordinator session."""
-        data["project_id"] = project_id
-        data["coordinator_session_id"] = coordinator_session_id
-        await self._connection_manager.broadcast_global(data)
+        payload = {**data, "project_id": project_id, "coordinator_session_id": coordinator_session_id}
+        await self._connection_manager.broadcast_global(payload)

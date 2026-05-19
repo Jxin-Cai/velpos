@@ -52,12 +52,6 @@ class SessionBranchRepositoryImpl(SessionBranchRepository):
         result = await self._session.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
 
-    async def remove_by_branch_session_id(self, session_id: str) -> bool:
-        stmt = delete(SessionBranchModel).where(SessionBranchModel.branch_session_id == session_id)
-        result = await self._session.execute(stmt)
-        await self._session.flush()
-        return bool(result.rowcount)
-
     async def remove_by_group_id(self, group_id: str) -> int:
         stmt = delete(SessionBranchModel).where(SessionBranchModel.group_id == group_id)
         result = await self._session.execute(stmt)

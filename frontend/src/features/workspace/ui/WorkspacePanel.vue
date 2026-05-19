@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { downloadWorkspaceSelection } from '@entities/project/api/projectApi'
 import hljs from 'highlight.js/lib/common'
-import { useGlobalHotkeys } from '../../../shared/lib/useGlobalHotkeys'
+import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useTimeout } from '@shared/lib/useTimeout'
 import { escapeHtml } from '@shared/lib/escapeHtml'
 import { useWorkspace } from '../model/useWorkspace'
