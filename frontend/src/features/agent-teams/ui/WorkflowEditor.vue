@@ -18,7 +18,8 @@ const PAD = 20
 
 const nodes = computed(() => {
   const items = props.steps.map((step, i) => {
-    const task = props.tasks.find(t => t.target_role === step.role)
+    const matching = props.tasks.filter(t => t.target_role === step.role)
+    const task = matching.at(-1)
     return {
       ...step,
       index: i,

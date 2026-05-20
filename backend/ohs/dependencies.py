@@ -431,11 +431,13 @@ async def get_project_application_service(
 ) -> ProjectApplicationService:
     project_repo = ProjectRepositoryImpl(db_session)
     session_repo = SessionRepositoryImpl(db_session)
+    team_task_repo = TeamTaskRepositoryImpl(db_session)
     return ProjectApplicationService(
         project_repository=project_repo,
         session_repository=session_repo,
         session_service_factory=_create_session_service,
         connection_manager=_connection_manager,
+        team_task_repository=team_task_repo,
     )
 
 

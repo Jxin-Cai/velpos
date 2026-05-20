@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.team_task.model.team_task import TeamTask
@@ -52,6 +52,12 @@ class TeamTaskRepositoryImpl(TeamTaskRepository):
 
     async def remove(self, task_id: str) -> bool:
         return await remove_by_pk(self._session, TeamTaskModel.task_id, task_id)
+
+    async def remove_by_project(self, main_project_id: str) -> int:
+        stmt = delete(TeamTaskModel).where(TeamTaskModel.main_project_id == main_project_id)
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return result.rowcount
 
     @staticmethod
     def _to_model(task: TeamTask) -> TeamTaskModel:

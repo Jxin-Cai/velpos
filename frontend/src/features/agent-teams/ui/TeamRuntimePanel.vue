@@ -5,7 +5,7 @@ import { getProject } from '@entities/project'
 import { getWorkspaceDiff } from '@entities/project/api/projectApi'
 import { useCancellableAsync } from '@shared/lib/useCancellableAsync'
 import { formatDuration } from '@features/message-display'
-import { getSessionArtifacts, getTeamTaskDetail, cancelTeamTask } from '../api/teamApi'
+import { getSessionArtifacts, getTeamTaskDetail, cancelTeamTask, retryTeamTask } from '../api/teamApi'
 import WorkflowEditor from './WorkflowEditor.vue'
 
 const props = defineProps({
@@ -217,6 +217,24 @@ async function cancelTask(task) {
   }
 }
 
+function isTaskRetryable(task) {
+  return task.status === 'failed' || task.status === 'cancelled'
+}
+
+const retryingTasks = ref(new Set())
+
+async function retryTask(task) {
+  if (!isTaskRetryable(task) || retryingTasks.value.has(task.task_id)) return
+  patchSet(retryingTasks, task.task_id, true)
+  try {
+    await retryTeamTask(props.projectId, task.task_id)
+  } catch (err) {
+    patchMap(taskDetailErrors, task.task_id, err.message || 'Retry failed')
+  } finally {
+    patchSet(retryingTasks, task.task_id, false)
+  }
+}
+
 function statusIcon(status) {
   const map = {
     pending: '…',
@@ -307,6 +325,14 @@ function navigateToWorker(session) {
                   @click="cancelTask(task)"
                 >
                   {{ cancellingTasks.has(task.task_id) ? 'Cancelling...' : 'Cancel' }}
+                </button>
+                <button
+                  v-if="isTaskRetryable(task)"
+                  class="task-action task-action--retry"
+                  :disabled="retryingTasks.has(task.task_id)"
+                  @click="retryTask(task)"
+                >
+                  {{ retryingTasks.has(task.task_id) ? 'Retrying...' : 'Retry' }}
                 </button>
               </div>
               <div v-if="expandedTasks.has(task.task_id)" class="task-detail">
@@ -539,6 +565,11 @@ function navigateToWorker(session) {
   background: color-mix(in srgb, var(--yellow, #e5c07b) 8%, var(--bg-tertiary));
 }
 
+.task-item.task-cancelled {
+  opacity: 0.6;
+  border-color: var(--border);
+}
+
 .task-icon {
   font-size: 12px;
   flex-shrink: 0;
@@ -583,6 +614,14 @@ function navigateToWorker(session) {
 
 .task-action--danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red, #e06c75) 15%, transparent);
+}
+
+.task-action--retry {
+  color: var(--accent);
+}
+
+.task-action--retry:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .task-actions {

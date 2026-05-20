@@ -37,3 +37,7 @@ export function getWorkerContext(sessionId) {
 export function cancelTeamTask(projectId, taskId) {
   return post(`/teams/${projectId}/tasks/${taskId}/cancel`)
 }
+
+export function retryTeamTask(projectId, taskId) {
+  return post(`/teams/${projectId}/tasks/${taskId}/retry`)
+}

@@ -21,3 +21,6 @@ class TeamTaskRepository(ABC):
 
     @abstractmethod
     async def remove(self, task_id: str) -> bool: ...
+
+    @abstractmethod
+    async def remove_by_project(self, main_project_id: str) -> int: ...

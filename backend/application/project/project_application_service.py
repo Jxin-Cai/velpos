@@ -25,6 +25,7 @@ from domain.project.model.plugin_type import PluginType
 from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from domain.session.repository.session_repository import SessionRepository
+from domain.team_task.repository.team_task_repository import TeamTaskRepository
 from domain.shared.business_exception import BusinessException
 from infr.im.lark.lark_init_spec import PLUGIN_INIT_SPECS
 
@@ -86,12 +87,14 @@ class ProjectApplicationService:
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         connection_manager: ConnectionManager,
         lark_config: Any = None,
+        team_task_repository: TeamTaskRepository | None = None,
     ) -> None:
         self._project_repository = project_repository
         self._session_repository = session_repository
         self._session_service_factory = session_service_factory
         self._connection_manager = connection_manager
         self._lark_config = lark_config
+        self._team_task_repository = team_task_repository
 
     # ------------------------------------------------------------------
     # CRUD
@@ -332,6 +335,15 @@ class ProjectApplicationService:
                 logger.debug("Failed to close cascade session DB session", exc_info=True)
 
         await self._project_repository.remove(project_id)
+
+        if self._team_task_repository:
+            try:
+                deleted_tasks = await self._team_task_repository.remove_by_project(project_id)
+                if deleted_tasks:
+                    logger.info("Deleted %d team tasks for project %s", deleted_tasks, project_id)
+            except Exception:
+                logger.warning("Failed to clean team tasks for project=%s", project_id, exc_info=True)
+
         logger.info("Project deleted: id=%s (cascade %d sessions)", project_id, len(sessions))
 
         # Clean up Claude Code session JSONL files so the project doesn't

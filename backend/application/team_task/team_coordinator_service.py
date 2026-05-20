@@ -690,6 +690,27 @@ class TeamCoordinatorService:
             except Exception:
                 logger.warning("Failed to interrupt worker session %s", task.worker_session_id)
 
+    async def retry_task(self, project_id: str, task_id: str) -> str:
+        """Retry a failed or cancelled task by dispatching a new task with the same parameters."""
+        task = await self._task_repo.find_by_id(task_id)
+        if not task:
+            raise BusinessException("Team task not found", "TEAM_TASK_NOT_FOUND")
+        if task.main_project_id != project_id:
+            raise BusinessException("Team task does not belong to this project", "TEAM_TASK_PROJECT_MISMATCH")
+        if task.status not in (TeamTaskStatus.FAILED, TeamTaskStatus.CANCELLED):
+            raise BusinessException("Only failed or cancelled tasks can be retried", "TEAM_TASK_NOT_RETRYABLE")
+
+        return await self.dispatch_task(
+            main_project_id=task.main_project_id,
+            coordinator_session_id=task.coordinator_session_id,
+            target_role=task.target_role,
+            prompt=task.prompt,
+            context=task.context,
+            parent_task_id=task.parent_task_id,
+            depth=task.depth,
+            trace_id=task.trace_id,
+        )
+
     async def cancel_team_session(self, coordinator_session_id: str) -> None:
         """Cancel all running tasks for a coordinator session."""
         tasks = await self._task_repo.find_running_by_coordinator(coordinator_session_id)

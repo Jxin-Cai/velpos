@@ -56,6 +56,16 @@ async def cancel_task(
     return ApiResponse.success({"task_id": task_id, "status": "cancelled"})
 
 
+@router.post("/{project_id}/tasks/{task_id}/retry", summary="Retry a failed or cancelled task")
+async def retry_task(
+    project_id: str,
+    task_id: str,
+    service: ServiceDep,
+) -> ApiResponse[dict]:
+    result = await service.retry_task(project_id, task_id)
+    return ApiResponse.success({"task_id": task_id, "result": result[:500]})
+
+
 @router.get("/worker-context/{session_id}", summary="Get coordinator info for a worker session")
 async def get_worker_context(
     session_id: str,

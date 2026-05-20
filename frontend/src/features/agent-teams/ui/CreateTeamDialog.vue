@@ -151,6 +151,10 @@ function applyTemplate(tpl) {
   workerMaxTurns.value = defaultConfig.worker_max_turns ?? workerMaxTurns.value
   workerMaxBudget.value = defaultConfig.worker_max_budget_usd ?? workerMaxBudget.value
   fileCheckpointing.value = defaultConfig.file_checkpointing ?? fileCheckpointing.value
+
+  if (tpl.default_workflow?.length) {
+    defaultWorkflow.value = tpl.default_workflow.join(' → ')
+  }
 }
 
 async function loadTemplates() {

@@ -101,6 +101,7 @@ def _localize_team_template(template: dict[str, Any], language: str) -> dict[str
         "mode": template.get("mode", "delegation"),
         "pipeline": template.get("pipeline", []),
         "members": template.get("members", []),
+        "default_workflow": template.get("default_workflow", []),
         "default_config": template.get("default_config", {}),
     }
 
