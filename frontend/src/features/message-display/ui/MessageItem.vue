@@ -129,10 +129,14 @@ watch(
     if (msg.type === 'system') {
       const subtype = content.subtype || ''
       let text = subtype
-      if (content.description) text += `: ${content.description}`
-      if (content.status) text += ` [${content.status}]`
-      if (content.summary) text += ` - ${content.summary}`
-      if (content.last_tool_name) text += ` (${content.last_tool_name})`
+      if (subtype === 'auto_continue') {
+        text = `Auto-continuing (${content.attempt}/${content.max})`
+      } else {
+        if (content.description) text += `: ${content.description}`
+        if (content.status) text += ` [${content.status}]`
+        if (content.summary) text += ` - ${content.summary}`
+        if (content.last_tool_name) text += ` (${content.last_tool_name})`
+      }
       renderedBlocks.value = [{ type: 'system', text: text || JSON.stringify(content) }]
       return
     }

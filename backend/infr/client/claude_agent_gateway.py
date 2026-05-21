@@ -683,7 +683,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         cwd: str = "",
         sdk_session_id: str | None = None,
     ) -> None:
-        """Open a persistent SDK connection without sending a query."""
+        """Open a persistent SDK connection without sending a query.
+
+        Raises RuntimeError if the target session cannot be resumed (e.g. the
+        CLI's JSONL file no longer exists).  Callers should clear stale
+        sdk_session_id on this error.
+        """
         raw_prev_sdk_sid = self._sdk_session_ids.get(session_id) if sdk_session_id is None else sdk_session_id
         fork_source_sid = self._fork_source_session_id(raw_prev_sdk_sid)
         prev_sdk_sid = fork_source_sid or raw_prev_sdk_sid
@@ -694,13 +699,20 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 "no SDK session to resume (run a query first)"
             )
 
-        await self._connect_and_register(
+        _, resume_failed = await self._connect_and_register(
             session_id=session_id,
             model=model,
             cwd=cwd,
             prev_sdk_sid=prev_sdk_sid,
             fork_session=bool(fork_source_sid),
         )
+
+        if resume_failed:
+            await self.disconnect(session_id)
+            raise RuntimeError(
+                f"Resume failed for session {session_id}: "
+                f"CLI session {prev_sdk_sid} no longer exists"
+            )
 
     async def open_fresh_connection(
         self,

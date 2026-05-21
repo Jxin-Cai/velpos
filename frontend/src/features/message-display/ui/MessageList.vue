@@ -48,13 +48,14 @@ const sentinelEl = ref(null)
 
 function setupSentinel() {
   if (!messagesContainer.value || !sentinelEl.value) return
+  if (sentinelObserver) sentinelObserver.disconnect()
   sentinelObserver = new IntersectionObserver(
     (entries) => {
       if (entries[0].isIntersecting && props.hasMore && !loadingMore.value) {
         triggerLoadMore()
       }
     },
-    { root: messagesContainer.value, threshold: 0 }
+    { root: messagesContainer.value, threshold: 0, rootMargin: '300px 0px 0px 0px' }
   )
   sentinelObserver.observe(sentinelEl.value)
 }
@@ -63,12 +64,19 @@ async function triggerLoadMore() {
   const el = messagesContainer.value
   if (!el) return
   loadingMore.value = true
+  if (sentinelObserver) sentinelObserver.disconnect()
   const prevScrollHeight = el.scrollHeight
   emit('load-more')
   await nextTick()
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
   const newScrollHeight = el.scrollHeight
-  el.scrollTop += newScrollHeight - prevScrollHeight
+  if (newScrollHeight !== prevScrollHeight) {
+    el.scrollTop += newScrollHeight - prevScrollHeight
+  }
   loadingMore.value = false
+  await nextTick()
+  setupSentinel()
 }
 
 // Auto-scroll when new messages arrive and user is near bottom
@@ -178,6 +186,7 @@ onBeforeUnmount(() => {
 .messages-area {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 24px 0 clamp(300px, 34vh, 380px);
   display: flex;
   flex-direction: column;

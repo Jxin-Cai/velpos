@@ -316,6 +316,12 @@ async def websocket_endpoint(
                             _submit_query_background(command),
                             name=f"run_claude_query_{session_id}",
                         )
+                    elif not service.is_agent_connected(session_id):
+                        await service.ensure_session_idle(session_id)
+                        safe_create_task(
+                            _submit_query_background(command),
+                            name=f"run_claude_query_{session_id}",
+                        )
                     else:
                         # Queue for after current query completes (latest-wins)
                         await service.queue_message(session_id, command)

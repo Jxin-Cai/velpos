@@ -326,6 +326,20 @@ function setupUnifiedHandler(connection, sessionId) {
         markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
         break
 
+      case 'auto_continue':
+        setStatusFor(sessionId, 'running')
+        updateSessionInList(sessionId, { status: 'running' })
+        markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
+        addMessageTo(sessionId, {
+          type: 'system',
+          content: {
+            subtype: 'auto_continue',
+            attempt: data.attempt,
+            max: data.max,
+          },
+        })
+        break
+
       case 'run_step_started':
       case 'run_step_progress':
       case 'run_step_completed':

@@ -13,6 +13,7 @@ class CommandInfo(BaseModel):
     enabled: bool = True
     visible: bool = True
     default_args: dict[str, Any] = {}
+    argumentHint: str = ""
     policy: dict[str, Any] | None = None
 
 

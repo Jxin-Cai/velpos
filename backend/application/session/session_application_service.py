@@ -1172,8 +1172,10 @@ class SessionApplicationService:
                     mcp_servers=team_config.get("mcp_servers"),
                 )
 
+            max_auto_continues = int(os.getenv("CLAUDE_MAX_AUTO_CONTINUES", "10"))
+
             try:
-                await self._consume_message_stream(session, msg_stream, run_id)
+                got_result = await self._consume_message_stream(session, msg_stream, run_id)
             except Exception as stream_err:
                 # If cancelled, don't retry — let cancel_query handle cleanup
                 if command.session_id in self._cancelled_sessions:
@@ -1214,9 +1216,91 @@ class SessionApplicationService:
                         system_prompt=team_config.get("system_prompt"),
                         mcp_servers=team_config.get("mcp_servers"),
                     )
-                    await self._consume_message_stream(session, msg_stream, run_id)
+                    got_result = await self._consume_message_stream(session, msg_stream, run_id)
                 else:
                     raise
+
+            # Auto-continue: when stream ends without ResultMessage, send "continue"
+            auto_continue_count = 0
+            while not got_result and auto_continue_count < max_auto_continues:
+                if command.session_id in self._cancelled_sessions:
+                    break
+                if not self._claude_agent_gateway.is_connected(command.session_id):
+                    break
+
+                auto_continue_count += 1
+                logger.info(
+                    "[session=%s] 未收到 ResultMessage, 自动继续 (%d/%d)",
+                    command.session_id,
+                    auto_continue_count,
+                    max_auto_continues,
+                )
+                await self._record_audit_event(
+                    command.session_id,
+                    "auto_continue",
+                    payload={
+                        "run_id": run_id,
+                        "attempt": auto_continue_count,
+                        "max": max_auto_continues,
+                    },
+                )
+                await self._record_timeline_event(
+                    command.session_id,
+                    run_id,
+                    "auto_continue",
+                    f"自动继续执行 ({auto_continue_count}/{max_auto_continues})",
+                    {"attempt": auto_continue_count, "max": max_auto_continues},
+                )
+                await self._connection_manager.broadcast(
+                    session.session_id,
+                    {
+                        "event": "auto_continue",
+                        "attempt": auto_continue_count,
+                        "max": max_auto_continues,
+                    },
+                )
+
+                try:
+                    continue_stream = self._claude_agent_gateway.send_query(
+                        session_id=command.session_id,
+                        prompt="Continue where you left off.",
+                    )
+                    got_result = await self._consume_message_stream(session, continue_stream, run_id)
+                except Exception as cont_err:
+                    logger.warning(
+                        "[session=%s] 自动继续失败: %s",
+                        command.session_id,
+                        cont_err,
+                    )
+                    break
+
+            # If we exhausted auto-continues without a result, synthesize one
+            if not got_result:
+                logger.warning(
+                    "[session=%s] 消息流结束但未收到 ResultMessage, 合成完成事件",
+                    command.session_id,
+                )
+                synthetic_result = Message.create(
+                    message_type=MessageType.RESULT,
+                    content={
+                        "text": "",
+                        "duration_ms": 0,
+                        "duration_api_ms": 0,
+                        "num_turns": 0,
+                        "is_error": False,
+                        "total_cost_usd": 0,
+                        "stop_reason": "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended",
+                        "usage": {
+                            "input_tokens": session.usage.input_tokens,
+                            "output_tokens": session.usage.output_tokens,
+                        },
+                    },
+                )
+                session.add_message(synthetic_result)
+                await self._connection_manager.broadcast(
+                    session.session_id,
+                    {"event": "message", "data": {"type": "result", "content": synthetic_result.content}},
+                )
 
             await self._refresh_context_usage(session)
 
@@ -1403,8 +1487,10 @@ class SessionApplicationService:
         session: "Session",
         msg_stream: "AsyncIterator[dict]",
         run_id: str,
-    ) -> None:
+    ) -> bool:
         """Iterate over the message stream, persist messages and broadcast to WS.
+
+        Returns True if a ResultMessage was received, False otherwise.
 
         Includes a per-message timeout combined with a CLI process health
         check so the stream never hangs indefinitely when the subprocess
@@ -1415,6 +1501,7 @@ class SessionApplicationService:
         save_interval = 2.0  # save at most every 2s for cross-session visibility
 
         saw_context_input_usage = False
+        got_result = False
         stream_step = await self._start_run_step(
             session.session_id,
             run_id,
@@ -1589,21 +1676,26 @@ class SessionApplicationService:
 
                 # Periodic save: ensure reconnecting clients see recent messages.
                 # Uses the same DB session with explicit commit for visibility.
+                # Skip if cancel has been requested — cancel_query handles final state.
                 now = loop.time()
                 is_result = msg_type_str == "result"
+                if is_result:
+                    got_result = True
                 if is_result or (now - last_save_time >= save_interval):
-                    try:
-                        await self._save_session(session, commit=True)
-                        last_save_time = now
-                    except Exception:
-                        logger.warning(
-                            "[session=%s] periodic save failed",
-                            session.session_id, exc_info=True,
-                        )
+                    if session.session_id not in self._cancelled_sessions:
+                        try:
+                            await self._save_session(session, commit=True)
+                            last_save_time = now
+                        except Exception:
+                            logger.warning(
+                                "[session=%s] periodic save failed",
+                                session.session_id, exc_info=True,
+                            )
             await self._complete_run_step(
                 stream_step,
-                {"message_count": message_count, "tool_count": tool_count},
+                {"message_count": message_count, "tool_count": tool_count, "got_result": got_result},
             )
+            return got_result
         except Exception as exc:
             await self._fail_run_step(stream_step, {"error": str(exc)[:500]})
             raise
@@ -1668,6 +1760,8 @@ class SessionApplicationService:
 
         Only works for sessions with an sdk_session_id (previously used).
         Skips silently if session not found, already connected, or no sdk_session_id.
+        If the CLI session no longer exists (resume fails), clears the stale
+        sdk_session_id so the next query starts fresh cleanly.
         """
         if self._claude_agent_gateway.is_connected(session_id):
             return
@@ -1687,6 +1781,16 @@ class SessionApplicationService:
                 sdk_session_id=resume_sdk_session_id,
             )
             logger.info("[session=%s] SDK 连接预热完成", session_id)
+        except RuntimeError as e:
+            if "resume failed" in str(e).lower() or "no longer exists" in str(e).lower():
+                session.update_sdk_session_id("")
+                await self._save_session(session, commit=True)
+                logger.warning(
+                    "[session=%s] SDK 连接预热 resume 失败, 已清除 stale sdk_session_id",
+                    session_id,
+                )
+            else:
+                logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
         except Exception as e:
             logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
 

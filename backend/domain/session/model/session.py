@@ -243,9 +243,10 @@ class Session:
         Returns the prompt text from the removed user message (for restoring to input).
         Raises ValueError if not currently RUNNING.
         """
-        if self._status != SessionStatus.RUNNING:
+        if self._status not in (SessionStatus.RUNNING, SessionStatus.IDLE):
             raise ValueError("Session is not running")
-        self._finish_running()
+        if self._status == SessionStatus.RUNNING:
+            self._finish_running()
 
         # Find and remove the last user message and everything after it
         prompt = ""

@@ -29,21 +29,30 @@ const emit = defineEmits(['select', 'close', 'update:searchQuery', 'policy-chang
 
 const popoverEl = ref(null)
 const searchEl = ref(null)
+const listEl = ref(null)
 const activeIndex = ref(0)
 const manageMode = ref(false)
+const activeTab = ref('all')
+
+function filterByTab(items, typeField = 'type') {
+  if (activeTab.value === 'all') return items
+  return items.filter(c => c[typeField] === activeTab.value)
+}
 
 const filteredCommands = computed(() => {
+  let list = filterByTab(props.commands)
   const q = props.searchQuery.toLowerCase()
-  if (!q) return props.commands
-  return props.commands.filter(
+  if (!q) return list
+  return list.filter(
     c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)
   )
 })
 
 const filteredPolicyRows = computed(() => {
+  let list = filterByTab(props.policyRows, 'command_type')
   const q = props.searchQuery.toLowerCase()
-  if (!q) return props.policyRows
-  return props.policyRows.filter(row => (
+  if (!q) return list
+  return list.filter(row => (
     row.command_name.toLowerCase().includes(q)
     || (row.description || '').toLowerCase().includes(q)
   ))
@@ -77,9 +86,11 @@ function handleKeydown(e) {
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     activeIndex.value = (activeIndex.value + 1) % len
+    nextTick(() => scrollActiveIntoView())
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
     activeIndex.value = (activeIndex.value - 1 + len) % len
+    nextTick(() => scrollActiveIntoView())
   } else if (e.key === 'Enter') {
     e.preventDefault()
     selectItem(filteredCommands.value[activeIndex.value])
@@ -93,6 +104,14 @@ function selectItem(cmd) {
   if (cmd) {
     emit('select', cmd)
   }
+}
+
+function scrollActiveIntoView() {
+  const container = listEl.value
+  if (!container) return
+  const items = container.querySelectorAll('.cmd-item')
+  const el = items[activeIndex.value]
+  if (el) el.scrollIntoView({ block: 'nearest' })
 }
 
 function onSearchInput(e) {
@@ -112,15 +131,27 @@ function onSearchInput(e) {
         class="cmd-search"
         :value="searchQuery"
         @input="onSearchInput"
-        placeholder="Search commands..."
+        placeholder="Search..."
         type="text"
       />
+    </div>
+
+    <div class="cmd-toolbar">
+      <div class="cmd-tabs">
+        <button
+          v-for="tab in [{ key: 'all', label: 'All' }, { key: 'skill', label: 'Skills' }, { key: 'command', label: 'Commands' }]"
+          :key="tab.key"
+          class="cmd-tab-btn"
+          :class="{ active: activeTab === tab.key }"
+          @click="activeTab = tab.key; activeIndex = 0"
+        >{{ tab.label }}</button>
+      </div>
       <button class="cmd-manage-btn" @click="manageMode = !manageMode">
         {{ manageMode ? 'Browse' : 'Manage' }}
       </button>
     </div>
 
-    <div class="cmd-list">
+    <div ref="listEl" class="cmd-list">
       <div v-if="loading" class="cmd-loading">Loading commands...</div>
       <template v-else-if="manageMode">
         <div v-if="filteredPolicyRows.length === 0" class="cmd-empty">No commands found</div>
@@ -131,8 +162,8 @@ function onSearchInput(e) {
         >
           <div class="cmd-policy-main">
             <span class="cmd-name">/{{ row.command_name }}</span>
-            <span class="cmd-tag" :class="row.command_type === 'prompt' ? 'cmd-tag--prompt' : 'cmd-tag--local'">
-              {{ row.command_type === 'prompt' ? 'skill' : row.command_type }}
+            <span class="cmd-tag" :class="row.command_type === 'skill' ? 'cmd-tag--prompt' : 'cmd-tag--local'">
+              {{ row.command_type === 'skill' ? 'skill' : 'built-in' }}
             </span>
             <span class="cmd-desc">{{ row.description || 'Policy override' }}</span>
           </div>
@@ -166,8 +197,8 @@ function onSearchInput(e) {
           @mouseenter="activeIndex = index"
         >
           <span class="cmd-name">/{{ cmd.name }}</span>
-          <span v-if="cmd.type === 'prompt'" class="cmd-tag cmd-tag--prompt">skill</span>
-          <span v-else-if="cmd.type === 'local' || cmd.type === 'local-jsx'" class="cmd-tag cmd-tag--local">built-in</span>
+          <span v-if="cmd.type === 'skill'" class="cmd-tag cmd-tag--prompt">skill</span>
+          <span v-else class="cmd-tag cmd-tag--local">built-in</span>
           <span class="cmd-desc">{{ cmd.description }}</span>
         </div>
       </template>
@@ -239,6 +270,42 @@ function onSearchInput(e) {
 
 .cmd-search::placeholder {
   color: var(--text-muted);
+}
+
+.cmd-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.cmd-tabs {
+  display: flex;
+  gap: 2px;
+  background: color-mix(in srgb, var(--glass-bg) 30%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.cmd-tab-btn {
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.cmd-tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.cmd-tab-btn.active {
+  color: var(--accent);
+  background: var(--layer-active);
 }
 
 .cmd-list {
