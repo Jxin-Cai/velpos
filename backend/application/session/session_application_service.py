@@ -1170,6 +1170,7 @@ class SessionApplicationService:
                     sdk_session_id=resume_sdk_session_id,
                     system_prompt=team_config.get("system_prompt"),
                     mcp_servers=team_config.get("mcp_servers"),
+                    enable_file_checkpointing=True,
                 )
 
             max_auto_continues = int(os.getenv("CLAUDE_MAX_AUTO_CONTINUES", "10"))
@@ -1586,6 +1587,11 @@ class SessionApplicationService:
 
                 session.add_message(message)
                 message_count += 1
+
+                sdk_uuid = msg_dict.get("sdk_user_message_uuid")
+                if sdk_uuid:
+                    session.set_sdk_uuid_for_last_user_message(sdk_uuid)
+
                 tool_names = self._tool_names_from_content(message.content)
                 tool_count += len(tool_names)
 
@@ -1895,6 +1901,20 @@ class SessionApplicationService:
                             exc_info=True,
                         )
 
+            # Step 5: Rewind files to the last remaining user message's checkpoint
+            if self._claude_agent_gateway.is_connected(session_id):
+                target_uuid = ""
+                for msg in reversed(session.messages):
+                    if msg.message_type == MessageType.USER:
+                        target_uuid = msg.content.get("sdk_user_message_uuid", "")
+                        break
+                if target_uuid:
+                    try:
+                        await self._claude_agent_gateway.rewind_files(session_id, target_uuid)
+                        logger.info("[session=%s] rewind_files completed: target=%s", session_id, target_uuid)
+                    except Exception as e:
+                        logger.warning("[session=%s] rewind_files failed: %s", session_id, e)
+
             # Broadcast rewind: full session state + messages + original prompt
             await self._broadcast_rewind_state(session_id, session, prompt)
         else:
@@ -1963,6 +1983,19 @@ class SessionApplicationService:
                     await self._save_session(session, commit=True)
                 except Exception:
                     logger.error("[session=%s] rewind_to SDK session_id rejected", session_id, exc_info=True)
+
+            # Rewind files to the last remaining user message's checkpoint
+            target_uuid = ""
+            for msg in reversed(session.messages):
+                if msg.message_type == MessageType.USER:
+                    target_uuid = msg.content.get("sdk_user_message_uuid", "")
+                    break
+            if target_uuid:
+                try:
+                    await self._claude_agent_gateway.rewind_files(session_id, target_uuid)
+                    logger.info("[session=%s] rewind_files to index %d: uuid=%s", session_id, message_index, target_uuid)
+                except Exception as e:
+                    logger.warning("[session=%s] rewind_files failed: %s", session_id, e)
 
         await self._broadcast_rewind_state(session_id, session, prompt)
 

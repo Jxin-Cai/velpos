@@ -234,6 +234,17 @@ class ClaudeAgentGateway(ABC):
         """
         pass
 
+    async def rewind_files(self, session_id: str, user_message_id: str) -> None:
+        """Rewind tracked files to their state at the specified user message.
+
+        Requires enable_file_checkpointing=True when connecting.
+
+        Args:
+            session_id: Session identifier.
+            user_message_id: UUID of the SDK UserMessage to rewind to.
+        """
+        pass
+
     async def disconnect_all(self) -> None:
         """Disconnect all active SDK clients (used during server shutdown)."""
         pass

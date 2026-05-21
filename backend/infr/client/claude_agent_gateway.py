@@ -162,6 +162,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         attempted resume but had to fall back to a fresh session.
         """
         stderr_lines, stderr_cb = self._create_stderr_collector()
+        extra_args = {}
+        if enable_file_checkpointing:
+            extra_args["replay-user-messages"] = None
         common_kwargs = dict(
             model=model,
             permission_mode=perm_mode,
@@ -178,6 +181,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             output_format=output_format,
             hooks=hooks,
             enable_file_checkpointing=enable_file_checkpointing,
+            extra_args=extra_args,
         )
         options = ClaudeAgentOptions(
             **common_kwargs,
@@ -376,6 +380,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         async for info in self._run_query(session_id, prompt):
             yield info
 
+    async def rewind_files(self, session_id: str, user_message_id: str) -> None:
+        """Rewind tracked files to their state at the specified user message."""
+        client = self._clients.get(session_id)
+        if client is None:
+            raise RuntimeError(f"No active connection for session {session_id}")
+        await client.rewind_files(user_message_id)
+
     async def compact(
         self,
         session_id: str,
@@ -398,6 +409,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             if info is not None:
                 if sdk_sid:
                     info["sdk_session_id"] = sdk_sid
+                msg_uuid = getattr(msg, "uuid", None)
+                if msg_uuid and msg.__class__.__name__ == "UserMessage" and not getattr(msg, "parent_tool_use_id", None):
+                    info["sdk_user_message_uuid"] = msg_uuid
                 yield info
 
     async def interrupt(self, session_id: str) -> None:

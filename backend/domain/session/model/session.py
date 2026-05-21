@@ -281,6 +281,13 @@ class Session:
         self._updated_time = datetime.now()
         return prompt
 
+    def set_sdk_uuid_for_last_user_message(self, sdk_uuid: str) -> None:
+        """Associate an SDK UserMessage UUID with the most recent user message that has no UUID yet."""
+        for msg in reversed(self._messages):
+            if msg.message_type == MessageType.USER and not msg.content.get("sdk_user_message_uuid"):
+                msg.content["sdk_user_message_uuid"] = sdk_uuid
+                break
+
     def fail_query(self) -> None:
         """Transition status from RUNNING to ERROR.
 
