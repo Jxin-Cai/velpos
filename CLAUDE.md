@@ -63,7 +63,7 @@ build/
 
 ### Ports
 - Backend: 8083 (API docs at http://localhost:8083/docs)
-- Frontend: 3000 (dev) / 80 (prod, via nginx)
+- Frontend: 3231 (dev) / 80 (prod, via nginx)
 - MySQL: 3307 (dev host) / 3306 (prod internal)
 
 ### Database Migrations (Alembic)
