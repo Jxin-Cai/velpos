@@ -6,6 +6,7 @@ import os
 import uuid
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from domain.shared.async_utils import KeyedLockPool, safe_create_task
@@ -24,6 +25,19 @@ from domain.session.repository.session_repository import SessionRepository
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _QueryContext:
+    """Internal state passed between query phases."""
+
+    session: Session
+    command: RunQueryCommand
+    run_id: str
+    run_step: Any
+    actual_prompt: str
+    team_config: dict[str, Any]
+    cancelled_during_stream: bool = False
 
 
 class SessionQueryEngine:
@@ -197,6 +211,21 @@ class SessionQueryEngine:
         }
 
     async def run_claude_query(self, command: RunQueryCommand) -> None:
+        ctx = await self._prepare_query(command)
+        try:
+            await self._execute_streaming(ctx)
+            if not ctx.cancelled_during_stream:
+                await self._handle_result(ctx)
+        except Exception as e:
+            await self._handle_error(ctx, e)
+        finally:
+            await self._finalize_query(ctx)
+
+    # ------------------------------------------------------------------
+    # Phase 1: Prepare query context
+    # ------------------------------------------------------------------
+
+    async def _prepare_query(self, command: RunQueryCommand) -> _QueryContext:
         session = await self._session_repository.find_by_id(command.session_id)
         if session is None:
             raise BusinessException("Session not found")
@@ -282,6 +311,26 @@ class SessionQueryEngine:
         )
         session.add_message(user_message)
 
+        return _QueryContext(
+            session=session,
+            command=command,
+            run_id=run_id,
+            run_step=run_step,
+            actual_prompt=actual_prompt,
+            team_config={},
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 2: Execute streaming SDK interaction
+    # ------------------------------------------------------------------
+
+    async def _execute_streaming(self, ctx: _QueryContext) -> None:
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+        run_step = ctx.run_step
+        actual_prompt = ctx.actual_prompt
+
         async def _save_and_broadcast():
             await self._save_session(session, commit=True)
             await self._connection_manager.broadcast(
@@ -309,44 +358,88 @@ class SessionQueryEngine:
                 return False
             return is_connected
 
-        try:
-            _, is_connected = await asyncio.gather(
-                _save_and_broadcast(),
-                _prepare_sdk_connection(),
+        _, is_connected = await asyncio.gather(
+            _save_and_broadcast(),
+            _prepare_sdk_connection(),
+        )
+
+        team_config = await self._resolve_team_connect_config(session)
+        ctx.team_config = team_config
+
+        trace_id = team_config.get("trace_id", "")
+        if trace_id:
+            from application.team_task.trace_file_manager import TraceFileManager
+            await TraceFileManager.create_trace(
+                project_dir=session.project_dir,
+                trace_id=trace_id,
+                requirement=actual_prompt,
+                coordinator_session_id=session.session_id,
+                project_id=session.project_id,
+            )
+            session.update_trace_id(trace_id)
+            await self._save_session(session, commit=True)
+
+        msg_stream = None
+        if is_connected:
+            try:
+                msg_stream = self._claude_agent_gateway.send_query(
+                    session_id=command.session_id,
+                    prompt=actual_prompt,
+                )
+            except Exception as send_err:
+                logger.warning(
+                    "[session=%s] send_query 失败 (%s), 回退到 connect",
+                    command.session_id,
+                    send_err,
+                )
+                await self._claude_agent_gateway.disconnect(command.session_id)
+                msg_stream = None
+
+        if msg_stream is None:
+            resume_sdk_session_id = await self._resolve_resume_sdk_session_id(session)
+            msg_stream = self._claude_agent_gateway.connect(
+                session_id=command.session_id,
+                model=session.model,
+                prompt=actual_prompt,
+                cwd=session.project_dir,
+                sdk_session_id=resume_sdk_session_id,
+                system_prompt=team_config.get("system_prompt"),
+                mcp_servers=team_config.get("mcp_servers"),
+                enable_file_checkpointing=True,
             )
 
-            team_config = await self._resolve_team_connect_config(session)
+        max_auto_continues = int(os.getenv("CLAUDE_MAX_AUTO_CONTINUES", "10"))
 
-            trace_id = team_config.get("trace_id", "")
-            if trace_id:
-                from application.team_task.trace_file_manager import TraceFileManager
-                await TraceFileManager.create_trace(
-                    project_dir=session.project_dir,
-                    trace_id=trace_id,
-                    requirement=actual_prompt,
-                    coordinator_session_id=session.session_id,
-                    project_id=session.project_id,
+        try:
+            got_result = await self._stream_consumer.consume(session, msg_stream, run_id)
+        except Exception as stream_err:
+            if command.session_id in self._cancelled_sessions:
+                logger.info(
+                    "[session=%s] 消息流因取消而中断, 跳过重试",
+                    command.session_id,
                 )
-                session.update_trace_id(trace_id)
-                await self._save_session(session, commit=True)
-
-            msg_stream = None
+                await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "stream"})
+                ctx.cancelled_during_stream = True
+                return
             if is_connected:
-                try:
-                    msg_stream = self._claude_agent_gateway.send_query(
-                        session_id=command.session_id,
-                        prompt=actual_prompt,
-                    )
-                except Exception as send_err:
-                    logger.warning(
-                        "[session=%s] send_query 失败 (%s), 回退到 connect",
-                        command.session_id,
-                        send_err,
-                    )
-                    await self._claude_agent_gateway.disconnect(command.session_id)
-                    msg_stream = None
-
-            if msg_stream is None:
+                await self._recorder.record_audit_event(
+                    command.session_id,
+                    "query_retrying",
+                    payload={"run_id": run_id, "error": str(stream_err)[:500]},
+                )
+                await self._recorder.record_timeline_event(
+                    command.session_id,
+                    run_id,
+                    "retry",
+                    "消息流中断，重新连接",
+                    {"error": str(stream_err)[:500]},
+                )
+                logger.warning(
+                    "[session=%s] 消息流中断 (%s), 重新 connect",
+                    command.session_id,
+                    stream_err,
+                )
+                await self._claude_agent_gateway.disconnect(command.session_id)
                 resume_sdk_session_id = await self._resolve_resume_sdk_session_id(session)
                 msg_stream = self._claude_agent_gateway.connect(
                     session_id=command.session_id,
@@ -356,287 +449,271 @@ class SessionQueryEngine:
                     sdk_session_id=resume_sdk_session_id,
                     system_prompt=team_config.get("system_prompt"),
                     mcp_servers=team_config.get("mcp_servers"),
-                    enable_file_checkpointing=True,
                 )
-
-            max_auto_continues = int(os.getenv("CLAUDE_MAX_AUTO_CONTINUES", "10"))
-
-            try:
                 got_result = await self._stream_consumer.consume(session, msg_stream, run_id)
-            except Exception as stream_err:
-                if command.session_id in self._cancelled_sessions:
-                    logger.info(
-                        "[session=%s] 消息流因取消而中断, 跳过重试",
-                        command.session_id,
-                    )
-                    await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "stream"})
-                    return
-                if is_connected:
-                    await self._recorder.record_audit_event(
-                        command.session_id,
-                        "query_retrying",
-                        payload={"run_id": run_id, "error": str(stream_err)[:500]},
-                    )
-                    await self._recorder.record_timeline_event(
-                        command.session_id,
-                        run_id,
-                        "retry",
-                        "消息流中断，重新连接",
-                        {"error": str(stream_err)[:500]},
-                    )
-                    logger.warning(
-                        "[session=%s] 消息流中断 (%s), 重新 connect",
-                        command.session_id,
-                        stream_err,
-                    )
-                    await self._claude_agent_gateway.disconnect(command.session_id)
-                    resume_sdk_session_id = await self._resolve_resume_sdk_session_id(session)
-                    msg_stream = self._claude_agent_gateway.connect(
-                        session_id=command.session_id,
-                        model=session.model,
-                        prompt=actual_prompt,
-                        cwd=session.project_dir,
-                        sdk_session_id=resume_sdk_session_id,
-                        system_prompt=team_config.get("system_prompt"),
-                        mcp_servers=team_config.get("mcp_servers"),
-                    )
-                    got_result = await self._stream_consumer.consume(session, msg_stream, run_id)
-                else:
-                    raise
+            else:
+                raise
 
-            auto_continue_count = 0
-            while not got_result and auto_continue_count < max_auto_continues:
-                if command.session_id in self._cancelled_sessions:
-                    break
-                if not self._claude_agent_gateway.is_connected(command.session_id):
-                    break
-
-                auto_continue_count += 1
-                logger.info(
-                    "[session=%s] 未收到 ResultMessage, 自动继续 (%d/%d)",
-                    command.session_id,
-                    auto_continue_count,
-                    max_auto_continues,
-                )
-                await self._recorder.record_audit_event(
-                    command.session_id,
-                    "auto_continue",
-                    payload={
-                        "run_id": run_id,
-                        "attempt": auto_continue_count,
-                        "max": max_auto_continues,
-                    },
-                )
-                await self._recorder.record_timeline_event(
-                    command.session_id,
-                    run_id,
-                    "auto_continue",
-                    f"自动继续执行 ({auto_continue_count}/{max_auto_continues})",
-                    {"attempt": auto_continue_count, "max": max_auto_continues},
-                )
-                await self._connection_manager.broadcast(
-                    session.session_id,
-                    {
-                        "event": "auto_continue",
-                        "attempt": auto_continue_count,
-                        "max": max_auto_continues,
-                    },
-                )
-
-                try:
-                    continue_stream = self._claude_agent_gateway.send_query(
-                        session_id=command.session_id,
-                        prompt="Continue where you left off.",
-                    )
-                    got_result = await self._stream_consumer.consume(session, continue_stream, run_id)
-                except Exception as cont_err:
-                    logger.warning(
-                        "[session=%s] 自动继续失败: %s",
-                        command.session_id,
-                        cont_err,
-                    )
-                    break
-
-            if not got_result:
-                logger.warning(
-                    "[session=%s] 消息流结束但未收到 ResultMessage, 合成完成事件",
-                    command.session_id,
-                )
-                synthetic_result = Message.create(
-                    message_type=MessageType.RESULT,
-                    content={
-                        "text": "",
-                        "duration_ms": 0,
-                        "duration_api_ms": 0,
-                        "num_turns": 0,
-                        "is_error": False,
-                        "total_cost_usd": 0,
-                        "stop_reason": "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended",
-                        "usage": {
-                            "input_tokens": session.usage.input_tokens,
-                            "output_tokens": session.usage.output_tokens,
-                        },
-                    },
-                )
-                session.add_message(synthetic_result)
-                await self._connection_manager.broadcast(
-                    session.session_id,
-                    {"event": "message", "data": {"type": "result", "content": synthetic_result.content}},
-                )
-
-            await self._refresh_context_usage(session)
-
+        auto_continue_count = 0
+        while not got_result and auto_continue_count < max_auto_continues:
             if command.session_id in self._cancelled_sessions:
-                session.clear_cancel_requested()
-                await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "completion"})
-                logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
-                return
+                break
+            if not self._claude_agent_gateway.is_connected(command.session_id):
+                break
 
-            session.complete_query()
-
-            if session.trace_id:
-                from application.team_task.trace_file_manager import TraceFileManager
-                await TraceFileManager.complete_trace(
-                    project_dir=session.project_dir,
-                    trace_id=session.trace_id,
-                )
-
-            if self._on_assistant_response:
-                text = MessageConversionService.extract_assistant_text(session.messages)
-                if text:
-                    safe_create_task(
-                        self._fire_outbound(session.session_id, text),
-                    )
-
+            auto_continue_count += 1
             logger.info(
-                "[session=%s] 查询完成, usage=%s",
+                "[session=%s] 未收到 ResultMessage, 自动继续 (%d/%d)",
                 command.session_id,
-                {"input_tokens": session.usage.input_tokens, "output_tokens": session.usage.output_tokens},
-            )
-            await self._recorder.record_usage_ledger(session)
-            await self._recorder.complete_run_step(
-                run_step,
-                {
-                    "input_tokens": session.usage.input_tokens,
-                    "output_tokens": session.usage.output_tokens,
-                    "message_count": session.message_count,
-                },
+                auto_continue_count,
+                max_auto_continues,
             )
             await self._recorder.record_audit_event(
                 command.session_id,
-                "query_finished",
+                "auto_continue",
                 payload={
                     "run_id": run_id,
-                    "input_tokens": session.usage.input_tokens,
-                    "output_tokens": session.usage.output_tokens,
-                    "message_count": session.message_count,
+                    "attempt": auto_continue_count,
+                    "max": max_auto_continues,
                 },
-            )
-
-        except Exception as e:
-            if command.session_id in self._cancelled_sessions:
-                session.clear_cancel_requested()
-                await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "error"})
-                logger.info("[session=%s] 查询异常但已取消, 跳过错误处理", command.session_id)
-                return
-            logger.error(
-                "[session=%s] Claude查询失败: %s",
-                command.session_id,
-                str(e),
-                exc_info=True,
-            )
-            session.fail_query()
-
-            if session.trace_id:
-                from application.team_task.trace_file_manager import TraceFileManager
-                await TraceFileManager.fail_trace(
-                    project_dir=session.project_dir,
-                    trace_id=session.trace_id,
-                )
-
-            await self._recorder.fail_run_step(run_step, {"error": str(e)[:500]})
-            await self._recorder.record_audit_event(
-                command.session_id,
-                "query_failed",
-                payload={"run_id": run_id, "error": str(e)[:500]},
             )
             await self._recorder.record_timeline_event(
                 command.session_id,
                 run_id,
-                "error",
-                "执行失败",
-                {"error": str(e)[:1000]},
-                status="failed",
+                "auto_continue",
+                f"自动继续执行 ({auto_continue_count}/{max_auto_continues})",
+                {"attempt": auto_continue_count, "max": max_auto_continues},
             )
             await self._connection_manager.broadcast(
                 session.session_id,
-                {"event": "error", "message": str(e)},
+                {
+                    "event": "auto_continue",
+                    "attempt": auto_continue_count,
+                    "max": max_auto_continues,
+                },
             )
 
-        finally:
-            self._claude_agent_gateway.mark_idle(command.session_id)
-            if command.session_id in self._cancelled_sessions:
-                async with self._queue_guard:
-                    self._cancelled_sessions.discard(command.session_id)
-                return
             try:
-                await self._save_session(session, commit=True)
+                continue_stream = self._claude_agent_gateway.send_query(
+                    session_id=command.session_id,
+                    prompt="Continue where you left off.",
+                )
+                got_result = await self._stream_consumer.consume(session, continue_stream, run_id)
+            except Exception as cont_err:
+                logger.warning(
+                    "[session=%s] 自动继续失败: %s",
+                    command.session_id,
+                    cont_err,
+                )
+                break
+
+        if not got_result:
+            logger.warning(
+                "[session=%s] 消息流结束但未收到 ResultMessage, 合成完成事件",
+                command.session_id,
+            )
+            synthetic_result = Message.create(
+                message_type=MessageType.RESULT,
+                content={
+                    "text": "",
+                    "duration_ms": 0,
+                    "duration_api_ms": 0,
+                    "num_turns": 0,
+                    "is_error": False,
+                    "total_cost_usd": 0,
+                    "stop_reason": "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended",
+                    "usage": {
+                        "input_tokens": session.usage.input_tokens,
+                        "output_tokens": session.usage.output_tokens,
+                    },
+                },
+            )
+            session.add_message(synthetic_result)
+            await self._connection_manager.broadcast(
+                session.session_id,
+                {"event": "message", "data": {"type": "result", "content": synthetic_result.content}},
+            )
+
+        await self._refresh_context_usage(session)
+
+    # ------------------------------------------------------------------
+    # Phase 3: Handle successful result
+    # ------------------------------------------------------------------
+
+    async def _handle_result(self, ctx: _QueryContext) -> None:
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+        run_step = ctx.run_step
+
+        if command.session_id in self._cancelled_sessions:
+            session.clear_cancel_requested()
+            await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "completion"})
+            logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
+            return
+
+        session.complete_query()
+
+        if session.trace_id:
+            from application.team_task.trace_file_manager import TraceFileManager
+            await TraceFileManager.complete_trace(
+                project_dir=session.project_dir,
+                trace_id=session.trace_id,
+            )
+
+        if self._on_assistant_response:
+            text = MessageConversionService.extract_assistant_text(session.messages)
+            if text:
+                safe_create_task(
+                    self._fire_outbound(session.session_id, text),
+                )
+
+        logger.info(
+            "[session=%s] 查询完成, usage=%s",
+            command.session_id,
+            {"input_tokens": session.usage.input_tokens, "output_tokens": session.usage.output_tokens},
+        )
+        await self._recorder.record_usage_ledger(session)
+        await self._recorder.complete_run_step(
+            run_step,
+            {
+                "input_tokens": session.usage.input_tokens,
+                "output_tokens": session.usage.output_tokens,
+                "message_count": session.message_count,
+            },
+        )
+        await self._recorder.record_audit_event(
+            command.session_id,
+            "query_finished",
+            payload={
+                "run_id": run_id,
+                "input_tokens": session.usage.input_tokens,
+                "output_tokens": session.usage.output_tokens,
+                "message_count": session.message_count,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 4: Handle error
+    # ------------------------------------------------------------------
+
+    async def _handle_error(self, ctx: _QueryContext, e: Exception) -> None:
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+        run_step = ctx.run_step
+
+        if command.session_id in self._cancelled_sessions:
+            session.clear_cancel_requested()
+            await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "error"})
+            logger.info("[session=%s] 查询异常但已取消, 跳过错误处理", command.session_id)
+            return
+        logger.error(
+            "[session=%s] Claude查询失败: %s",
+            command.session_id,
+            str(e),
+            exc_info=True,
+        )
+        session.fail_query()
+
+        if session.trace_id:
+            from application.team_task.trace_file_manager import TraceFileManager
+            await TraceFileManager.fail_trace(
+                project_dir=session.project_dir,
+                trace_id=session.trace_id,
+            )
+
+        await self._recorder.fail_run_step(run_step, {"error": str(e)[:500]})
+        await self._recorder.record_audit_event(
+            command.session_id,
+            "query_failed",
+            payload={"run_id": run_id, "error": str(e)[:500]},
+        )
+        await self._recorder.record_timeline_event(
+            command.session_id,
+            run_id,
+            "error",
+            "执行失败",
+            {"error": str(e)[:1000]},
+            status="failed",
+        )
+        await self._connection_manager.broadcast(
+            session.session_id,
+            {"event": "error", "message": str(e)},
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 5: Finalize (always runs)
+    # ------------------------------------------------------------------
+
+    async def _finalize_query(self, ctx: _QueryContext) -> None:
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+
+        self._claude_agent_gateway.mark_idle(command.session_id)
+        if command.session_id in self._cancelled_sessions:
+            async with self._queue_guard:
+                self._cancelled_sessions.discard(command.session_id)
+            return
+        try:
+            await self._save_session(session, commit=True)
+        except Exception:
+            logger.error(
+                "[session=%s] final save failed, retrying with fresh DB session",
+                command.session_id,
+                exc_info=True,
+                extra={"session_id": command.session_id, "run_id": run_id},
+            )
+            try:
+                from infr.config.database import async_session_factory
+                from infr.repository.session_repository_impl import SessionRepositoryImpl
+
+                async with async_session_factory() as fresh_db:
+                    fresh_repo = SessionRepositoryImpl(fresh_db)
+                    await fresh_repo.save(session)
+                    await fresh_db.commit()
+                    logger.warning(
+                        "[session=%s] final save recovered with fresh DB session",
+                        command.session_id,
+                        extra={"session_id": command.session_id, "run_id": run_id},
+                    )
             except Exception:
                 logger.error(
-                    "[session=%s] final save failed, retrying with fresh DB session",
+                    "[session=%s] retry save also failed",
                     command.session_id,
                     exc_info=True,
                     extra={"session_id": command.session_id, "run_id": run_id},
                 )
-                try:
-                    from infr.config.database import async_session_factory
-                    from infr.repository.session_repository_impl import SessionRepositoryImpl
+        await self._connection_manager.broadcast(
+            session.session_id,
+            {
+                "event": "status",
+                "session": SessionPresenter.session_to_dict(session),
+            },
+        )
 
-                    async with async_session_factory() as fresh_db:
-                        fresh_repo = SessionRepositoryImpl(fresh_db)
-                        await fresh_repo.save(session)
-                        await fresh_db.commit()
-                        logger.warning(
-                            "[session=%s] final save recovered with fresh DB session",
-                            command.session_id,
-                            extra={"session_id": command.session_id, "run_id": run_id},
-                        )
-                except Exception:
-                    logger.error(
-                        "[session=%s] retry save also failed",
-                        command.session_id,
-                        exc_info=True,
-                        extra={"session_id": command.session_id, "run_id": run_id},
-                    )
-            await self._connection_manager.broadcast(
-                session.session_id,
-                {
-                    "event": "status",
-                    "session": SessionPresenter.session_to_dict(session),
-                },
+        async with self._queue_guard:
+            queued = self._queued_messages.pop(command.session_id, None)
+        if queued:
+            await self._set_queued_command(command.session_id, None)
+            await self._recorder.record_audit_event(
+                command.session_id,
+                "queue_started",
+                payload={"prompt_length": len(queued.prompt), "attachment_count": len(queued.attachments)},
             )
+            logger.info("[session=%s] 执行排队的后续消息", command.session_id)
+            if self._session_service_factory is not None:
+                async def _run_queued_message(command: RunQueryCommand) -> None:
+                    queued_service = await self._session_service_factory()
+                    try:
+                        await queued_service.submit_query(command)
+                    finally:
+                        await queued_service.close()
 
-            async with self._queue_guard:
-                queued = self._queued_messages.pop(command.session_id, None)
-            if queued:
-                await self._set_queued_command(command.session_id, None)
-                await self._recorder.record_audit_event(
-                    command.session_id,
-                    "queue_started",
-                    payload={"prompt_length": len(queued.prompt), "attachment_count": len(queued.attachments)},
-                )
-                logger.info("[session=%s] 执行排队的后续消息", command.session_id)
-                if self._session_service_factory is not None:
-                    async def _run_queued_message(command: RunQueryCommand) -> None:
-                        queued_service = await self._session_service_factory()
-                        try:
-                            await queued_service.submit_query(command)
-                        finally:
-                            await queued_service.close()
-
-                    safe_create_task(_run_queued_message(queued))
-                else:
-                    safe_create_task(self.submit_query(queued))
+                safe_create_task(_run_queued_message(queued))
+            else:
+                safe_create_task(self.submit_query(queued))
 
     async def _fire_outbound(self, session_id: str, text: str) -> None:
         try:

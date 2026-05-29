@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import uuid
 
@@ -53,6 +54,214 @@ TeamServiceDep = Annotated[
     TeamCoordinatorService,
     Depends(get_team_coordinator_service),
 ]
+
+
+@dataclasses.dataclass
+class _WsContext:
+    """Holds shared dependencies for WebSocket action handlers."""
+
+    websocket: WebSocket
+    session_id: str
+    service: SessionApplicationService
+    manager: ConnectionManager
+    gateway: ClaudeAgentGatewayImpl
+    session_service_factory: Callable[[], Awaitable[SessionApplicationService]]
+    attachment_service: AttachmentApplicationService
+    team_service: TeamCoordinatorService
+    build_session_summary: Callable[..., Awaitable[dict]]
+    submit_query_background: Callable[[RunQueryCommand], Awaitable[None]]
+
+
+async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
+    prompt = data.get("prompt", "")
+    images = data.get("images", [])
+    incoming_attachments = list(data.get("attachments") or [])
+    for img in images:
+        incoming_attachments.append({
+            "name": img.get("name") or f"image-{uuid.uuid4().hex[:8]}.png",
+            "mime_type": img.get("media_type", "image/png"),
+            "data": img.get("data", ""),
+        })
+    current_session = await ctx.service.get_session(ctx.session_id)
+
+    # Protect listener sessions from manual input
+    if current_session.name.startswith("[SYSTEM] Lark Agent Listener"):
+        await ctx.websocket.send_json({
+            "event": "error",
+            "message": "Cannot send prompts to listener session",
+        })
+    elif prompt or incoming_attachments:
+        saved_attachments = []
+        image_paths = []
+        for item in incoming_attachments:
+            try:
+                raw_data = item.get("data", "")
+                if "," in raw_data and raw_data.startswith("data:"):
+                    raw_data = raw_data.split(",", 1)[1]
+                mime_type = item.get("mime_type") or item.get("media_type") or "application/octet-stream"
+                attachment = await ctx.attachment_service.save_base64_attachment(
+                    project_id=current_session.project_id,
+                    session_id=ctx.session_id,
+                    project_dir=current_session.project_dir,
+                    filename=item.get("name") or item.get("filename") or "attachment.bin",
+                    mime_type=mime_type,
+                    data_base64=raw_data,
+                )
+                ref = attachment.to_message_ref()
+                saved_attachments.append(ref)
+                if mime_type.startswith("image/"):
+                    image_paths.append(ref["path"])
+            except Exception as attachment_err:
+                logger.warning("Failed to save attachment: %s", attachment_err)
+
+        command = RunQueryCommand(
+            session_id=ctx.session_id,
+            prompt=prompt or "Please review the attached files.",
+            image_paths=image_paths,
+            attachments=saved_attachments,
+        )
+
+        if not current_session.is_running:
+            safe_create_task(
+                ctx.submit_query_background(command),
+                name=f"run_claude_query_{ctx.session_id}",
+            )
+        elif not ctx.service.is_agent_connected(ctx.session_id):
+            await ctx.service.ensure_session_idle(ctx.session_id)
+            safe_create_task(
+                ctx.submit_query_background(command),
+                name=f"run_claude_query_{ctx.session_id}",
+            )
+        else:
+            # Queue for after current query completes (latest-wins)
+            await ctx.service.queue_message(ctx.session_id, command)
+            await ctx.websocket.send_json({
+                "event": "message_queued",
+                "prompt": prompt,
+            })
+
+
+async def _handle_cancel(ctx: _WsContext, data: dict) -> None:
+    try:
+        async def _cancel_background() -> None:
+            bg_svc = await ctx.session_service_factory()
+            try:
+                await bg_svc.cancel_query(ctx.session_id)
+            finally:
+                await bg_svc.close()
+
+        safe_create_task(_cancel_background())
+        safe_create_task(ctx.team_service.cancel_team_session(ctx.session_id))
+        await ctx.websocket.send_json({
+            "event": "info",
+            "message": "Cancelling...",
+        })
+    except Exception as e:
+        await ctx.websocket.send_json({
+            "event": "error",
+            "message": str(e),
+        })
+
+
+async def _handle_rewind_to(ctx: _WsContext, data: dict) -> None:
+    message_id = data.get("message_id")
+    message_index = data.get("message_index")
+    if not message_id and message_index is None:
+        await ctx.websocket.send_json({
+            "event": "error",
+            "message": "message_id or message_index is required",
+        })
+    else:
+        async def _rewind_background(target_message_id=message_id, target_message_index=message_index) -> None:
+            bg_service = await ctx.session_service_factory()
+            try:
+                if target_message_id:
+                    await bg_service.rewind_to_message_id(ctx.session_id, str(target_message_id))
+                else:
+                    await bg_service.rewind_to_message(ctx.session_id, int(target_message_index))
+            except Exception as e:
+                try:
+                    await ctx.websocket.send_json({
+                        "event": "error",
+                        "message": str(e),
+                    })
+                except Exception:
+                    pass
+            finally:
+                await bg_service.close()
+
+        safe_create_task(_rewind_background())
+        await ctx.websocket.send_json({
+            "event": "info",
+            "message": "Rewinding...",
+        })
+
+
+async def _handle_get_status(ctx: _WsContext, data: dict) -> None:
+    current_session = await ctx.service.get_session(ctx.session_id)
+    summary = await ctx.build_session_summary(ctx.service, current_session)
+    await ctx.websocket.send_json({
+        "event": "status",
+        "session": summary,
+    })
+
+
+async def _handle_set_model(ctx: _WsContext, data: dict) -> None:
+    model = data.get("model", "")
+    if model:
+        try:
+            await ctx.service.set_model(ctx.session_id, model)
+            current_session = await ctx.service.get_session(ctx.session_id)
+            summary = await ctx.build_session_summary(
+                ctx.service, current_session, include_agent_state=True,
+            )
+            await ctx.websocket.send_json({
+                "event": "status",
+                "session": summary,
+            })
+        except Exception as e:
+            await ctx.websocket.send_json({
+                "event": "error",
+                "message": str(e),
+            })
+
+
+async def _handle_set_permission_mode(ctx: _WsContext, data: dict) -> None:
+    mode = data.get("mode", "")
+    if mode:
+        try:
+            await ctx.service.set_permission_mode(ctx.session_id, mode)
+            await ctx.websocket.send_json({
+                "event": "info",
+                "message": f"Permission mode changed to {mode}",
+            })
+        except Exception as e:
+            await ctx.websocket.send_json({
+                "event": "error",
+                "message": str(e),
+            })
+
+
+async def _handle_user_response(ctx: _WsContext, data: dict) -> None:
+    # Handle user choice answers (AskUserQuestion) or permission decisions (Allow/Deny)
+    response_data = data.get("data", {})
+    resolved = await ctx.service.resolve_user_response(ctx.session_id, response_data)
+    if not resolved:
+        await ctx.websocket.send_json({
+            "event": "info",
+            "message": "No pending request to respond to",
+        })
+
+
+_ACTION_HANDLERS: dict[str, Callable[[_WsContext, dict], Awaitable[None]]] = {
+    "send_prompt": _handle_send_prompt,
+    "cancel": _handle_cancel,
+    "rewind_to": _handle_rewind_to,
+    "get_status": _handle_get_status,
+    "set_model": _handle_set_model,
+    "set_permission_mode": _handle_set_permission_mode,
+    "user_response": _handle_user_response,
+}
 
 
 @router.websocket("/ws/terminal")
@@ -258,183 +467,25 @@ async def websocket_endpoint(
             finally:
                 await bg_service.close()
 
+        ctx = _WsContext(
+            websocket=websocket,
+            session_id=session_id,
+            service=service,
+            manager=manager,
+            gateway=gateway,
+            session_service_factory=session_service_factory,
+            attachment_service=attachment_service,
+            team_service=team_service,
+            build_session_summary=_build_session_summary,
+            submit_query_background=_submit_query_background,
+        )
+
         while True:
             data = await websocket.receive_json()
             action = data.get("action")
-
-            if action == "send_prompt":
-                prompt = data.get("prompt", "")
-                images = data.get("images", [])
-                incoming_attachments = list(data.get("attachments") or [])
-                for img in images:
-                    incoming_attachments.append({
-                        "name": img.get("name") or f"image-{uuid.uuid4().hex[:8]}.png",
-                        "mime_type": img.get("media_type", "image/png"),
-                        "data": img.get("data", ""),
-                    })
-                current_session = await service.get_session(session_id)
-
-                # Protect listener sessions from manual input
-                if current_session.name.startswith("[SYSTEM] Lark Agent Listener"):
-                    await websocket.send_json({
-                        "event": "error",
-                        "message": "Cannot send prompts to listener session",
-                    })
-                elif prompt or incoming_attachments:
-                    saved_attachments = []
-                    image_paths = []
-                    for item in incoming_attachments:
-                        try:
-                            raw_data = item.get("data", "")
-                            if "," in raw_data and raw_data.startswith("data:"):
-                                raw_data = raw_data.split(",", 1)[1]
-                            mime_type = item.get("mime_type") or item.get("media_type") or "application/octet-stream"
-                            attachment = await attachment_service.save_base64_attachment(
-                                project_id=current_session.project_id,
-                                session_id=session_id,
-                                project_dir=current_session.project_dir,
-                                filename=item.get("name") or item.get("filename") or "attachment.bin",
-                                mime_type=mime_type,
-                                data_base64=raw_data,
-                            )
-                            ref = attachment.to_message_ref()
-                            saved_attachments.append(ref)
-                            if mime_type.startswith("image/"):
-                                image_paths.append(ref["path"])
-                        except Exception as attachment_err:
-                            logger.warning("Failed to save attachment: %s", attachment_err)
-
-                    command = RunQueryCommand(
-                        session_id=session_id,
-                        prompt=prompt or "Please review the attached files.",
-                        image_paths=image_paths,
-                        attachments=saved_attachments,
-                    )
-
-                    if not current_session.is_running:
-                        safe_create_task(
-                            _submit_query_background(command),
-                            name=f"run_claude_query_{session_id}",
-                        )
-                    elif not service.is_agent_connected(session_id):
-                        await service.ensure_session_idle(session_id)
-                        safe_create_task(
-                            _submit_query_background(command),
-                            name=f"run_claude_query_{session_id}",
-                        )
-                    else:
-                        # Queue for after current query completes (latest-wins)
-                        await service.queue_message(session_id, command)
-                        await websocket.send_json({
-                            "event": "message_queued",
-                            "prompt": prompt,
-                        })
-
-            elif action == "cancel":
-                try:
-                    async def _cancel_background() -> None:
-                        bg_svc = await session_service_factory()
-                        try:
-                            await bg_svc.cancel_query(session_id)
-                        finally:
-                            await bg_svc.close()
-
-                    safe_create_task(_cancel_background())
-                    safe_create_task(team_service.cancel_team_session(session_id))
-                    await websocket.send_json({
-                        "event": "info",
-                        "message": "Cancelling...",
-                    })
-                except Exception as e:
-                    await websocket.send_json({
-                        "event": "error",
-                        "message": str(e),
-                    })
-
-            elif action == "rewind_to":
-                message_id = data.get("message_id")
-                message_index = data.get("message_index")
-                if not message_id and message_index is None:
-                    await websocket.send_json({
-                        "event": "error",
-                        "message": "message_id or message_index is required",
-                    })
-                else:
-                    async def _rewind_background(target_message_id=message_id, target_message_index=message_index) -> None:
-                        bg_service = await session_service_factory()
-                        try:
-                            if target_message_id:
-                                await bg_service.rewind_to_message_id(session_id, str(target_message_id))
-                            else:
-                                await bg_service.rewind_to_message(session_id, int(target_message_index))
-                        except Exception as e:
-                            try:
-                                await websocket.send_json({
-                                    "event": "error",
-                                    "message": str(e),
-                                })
-                            except Exception:
-                                pass
-                        finally:
-                            await bg_service.close()
-
-                    safe_create_task(_rewind_background())
-                    await websocket.send_json({
-                        "event": "info",
-                        "message": "Rewinding...",
-                    })
-
-            elif action == "get_status":
-                current_session = await service.get_session(session_id)
-                summary = await _build_session_summary(service, current_session)
-                await websocket.send_json({
-                    "event": "status",
-                    "session": summary,
-                })
-
-            elif action == "set_model":
-                model = data.get("model", "")
-                if model:
-                    try:
-                        await service.set_model(session_id, model)
-                        current_session = await service.get_session(session_id)
-                        summary = await _build_session_summary(
-                            service, current_session, include_agent_state=True,
-                        )
-                        await websocket.send_json({
-                            "event": "status",
-                            "session": summary,
-                        })
-                    except Exception as e:
-                        await websocket.send_json({
-                            "event": "error",
-                            "message": str(e),
-                        })
-
-            elif action == "set_permission_mode":
-                mode = data.get("mode", "")
-                if mode:
-                    try:
-                        await service.set_permission_mode(session_id, mode)
-                        await websocket.send_json({
-                            "event": "info",
-                            "message": f"Permission mode changed to {mode}",
-                        })
-                    except Exception as e:
-                        await websocket.send_json({
-                            "event": "error",
-                            "message": str(e),
-                        })
-
-            elif action == "user_response":
-                # Handle user choice answers (AskUserQuestion) or permission decisions (Allow/Deny)
-                response_data = data.get("data", {})
-                resolved = await service.resolve_user_response(session_id, response_data)
-                if not resolved:
-                    await websocket.send_json({
-                        "event": "info",
-                        "message": "No pending request to respond to",
-                    })
+            handler = _ACTION_HANDLERS.get(action)
+            if handler:
+                await handler(ctx, data)
 
     except WebSocketDisconnect:
         logger.info("websocket_disconnected", extra={"session_id": session_id})

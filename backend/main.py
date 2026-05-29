@@ -279,7 +279,7 @@ async def lifespan(app: FastAPI):
 
     scheduler_runner = None
     try:
-        from infr.scheduler.scheduler_runner import SchedulerRunner
+        from ohs.scheduler_runner import SchedulerRunner
         scheduler_runner = SchedulerRunner()
         scheduler_runner.start()
         logger.info("Scheduler runner started")
