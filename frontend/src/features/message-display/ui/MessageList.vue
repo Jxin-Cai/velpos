@@ -1,5 +1,6 @@
 <script setup>
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useSession } from '@entities/session'
 import MessageItem from './MessageItem.vue'
 
 const props = defineProps({
@@ -13,12 +14,72 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['load-more'])
+const emit = defineEmits(['load-more', 'open-trace'])
+
+const { currentSessionId, getTraceSpansFor } = useSession()
+
+const traceSummaryByRun = computed(() => {
+  const summaries = new Map()
+  for (const span of getTraceSpansFor(currentSessionId.value)) {
+    if (!span?.run_id) continue
+    if (!summaries.has(span.run_id)) {
+      summaries.set(span.run_id, {
+        statuses: new Set(),
+        spanCount: 0,
+        toolCallCount: 0,
+        subagentCount: 0,
+        runningSubagentCount: 0,
+      })
+    }
+    const summary = summaries.get(span.run_id)
+    summary.statuses.add(span.status)
+    summary.spanCount += 1
+    if (span.span_type === 'tool_call') summary.toolCallCount += 1
+    if (span.span_type === 'subagent') {
+      summary.subagentCount += 1
+      if (span.status === 'running') summary.runningSubagentCount += 1
+    }
+  }
+  for (const summary of summaries.values()) {
+    if (summary.statuses.has('running')) summary.status = 'running'
+    else if (summary.statuses.has('failed')) summary.status = 'failed'
+    else if (summary.statuses.has('cancelled')) summary.status = 'cancelled'
+    else if (summary.statuses.has('denied')) summary.status = 'denied'
+    else summary.status = 'completed'
+    delete summary.statuses
+  }
+  return summaries
+})
+
+function traceRunIdFor(message) {
+  if (message?.content?.run_id) return message.content.run_id
+  const messageId = message?.content?.message_id
+  if (!messageId) return ''
+  const root = getTraceSpansFor(currentSessionId.value).find(span => (
+    span.span_type === 'run' && span.metadata?.source_message_id === messageId
+  ))
+  return root?.run_id || ''
+}
+
+function traceSummaryFor(message) {
+  const runId = traceRunIdFor(message)
+  return runId ? (traceSummaryByRun.value.get(runId) || null) : null
+}
 
 const messagesContainer = ref(null)
 const isNearBottom = ref(true)
 const showScrollBtn = ref(false)
 const loadingMore = ref(false)
+const activeUserMessageIndex = ref(-1)
+
+const userMessageMarkers = computed(() => props.messages
+  .map((message, index) => ({ message, index }))
+  .filter(({ message }) => message?.type === 'user')
+  .map(({ message, index }) => ({
+    index,
+    key: message._id ?? message.id ?? `user-${index}`,
+    preview: userMessagePreview(message),
+  })))
 
 const BOTTOM_THRESHOLD = 150
 
@@ -28,6 +89,46 @@ function checkNearBottom() {
   const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
   isNearBottom.value = distanceFromBottom < BOTTOM_THRESHOLD
   showScrollBtn.value = !isNearBottom.value
+  updateActiveUserMessage()
+}
+
+function userMessagePreview(message) {
+  const text = String(message?.content?.text || '')
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (text) return text
+  const attachments = message?.content?.attachments || []
+  if (attachments.length) return attachments.map((item) => item.filename || item.name || 'attachment').join(', ')
+  return 'User message'
+}
+
+function updateActiveUserMessage() {
+  const container = messagesContainer.value
+  if (!container || !userMessageMarkers.value.length) {
+    activeUserMessageIndex.value = -1
+    return
+  }
+  const readingLine = container.scrollTop + 32
+  let active = userMessageMarkers.value[0].index
+  for (const marker of userMessageMarkers.value) {
+    const anchor = container.querySelector(`[data-message-index="${marker.index}"]`)
+    if (anchor && anchor.offsetTop <= readingLine) active = marker.index
+  }
+  activeUserMessageIndex.value = active
+}
+
+function scrollToUserMessage(index) {
+  const container = messagesContainer.value
+  const anchor = container?.querySelector(`[data-message-index="${index}"]`)
+  if (!container || !anchor) return
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  container.scrollTo({
+    top: Math.max(0, anchor.offsetTop - 20),
+    behavior: reducedMotion ? 'auto' : 'smooth',
+  })
+  activeUserMessageIndex.value = index
 }
 
 function scrollToBottom() {
@@ -105,6 +206,7 @@ onMounted(() => {
   observer.observe(el, { childList: true, subtree: true, characterData: true })
 
   setupSentinel()
+  nextTick(updateActiveUserMessage)
 })
 
 onBeforeUnmount(() => {
@@ -125,6 +227,21 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="messages-shell">
+    <nav v-if="userMessageMarkers.length" class="conversation-rail" aria-label="User prompts in this conversation">
+      <button
+        v-for="marker in userMessageMarkers"
+        :key="marker.key"
+        class="conversation-marker"
+        :class="{ active: activeUserMessageIndex === marker.index }"
+        :aria-label="`Jump to prompt: ${marker.preview}`"
+        @click="scrollToUserMessage(marker.index)"
+      >
+        <span class="marker-dash" aria-hidden="true"></span>
+        <span class="marker-tooltip" role="tooltip">
+          <span>{{ marker.preview }}</span>
+        </span>
+      </button>
+    </nav>
     <div ref="messagesContainer" class="messages-area" @scroll="handleScroll">
       <div class="messages-content">
         <div ref="sentinelEl" class="load-more-sentinel">
@@ -141,11 +258,19 @@ onBeforeUnmount(() => {
           <div class="empty-title">Velpos</div>
           <div class="empty-desc">Send a prompt to start interacting with Claude Code</div>
         </div>
-        <MessageItem
-          v-for="msg in messages"
-          :key="msg._id ?? msg.id"
-          :message="msg"
-        />
+        <div
+          v-for="(msg, index) in messages"
+          :key="msg._id ?? msg.id ?? index"
+          class="message-anchor"
+          :data-message-index="index"
+        >
+          <MessageItem
+            :message="msg"
+            :trace-run-id="traceRunIdFor(msg)"
+            :trace-summary="traceSummaryFor(msg)"
+            @open-trace="emit('open-trace', $event)"
+          />
+        </div>
         <slot name="footer"></slot>
       </div>
     </div>
@@ -169,6 +294,101 @@ onBeforeUnmount(() => {
   min-height: 0;
   position: relative;
   display: flex;
+}
+
+.conversation-rail {
+  position: absolute;
+  top: calc(50% - clamp(150px, 17vh, 190px));
+  left: 8px;
+  z-index: 32;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 22px;
+  padding: 4px 0;
+}
+
+.conversation-marker {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 7px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.marker-dash {
+  position: absolute;
+  top: 3px;
+  left: 7px;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.56;
+  transition: width var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.conversation-marker:hover,
+.conversation-marker:focus-visible,
+.conversation-marker.active {
+  color: var(--accent);
+}
+
+.conversation-marker:hover .marker-dash,
+.conversation-marker:focus-visible .marker-dash,
+.conversation-marker.active .marker-dash {
+  width: 14px;
+  opacity: 1;
+  transform: translateX(-3px);
+}
+
+.conversation-marker:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.marker-tooltip {
+  position: absolute;
+  top: 50%;
+  left: 25px;
+  width: min(288px, calc(100vw - 68px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(3px, -50%);
+  transition: opacity var(--transition-fast), transform var(--transition-fast), visibility var(--transition-fast);
+}
+
+.marker-tooltip span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.conversation-marker:hover .marker-tooltip,
+.conversation-marker:focus-visible .marker-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(0, -50%);
+}
+
+.message-anchor {
+  scroll-margin-top: 20px;
 }
 
 .load-more-sentinel {
@@ -200,7 +420,7 @@ onBeforeUnmount(() => {
 .messages-content {
   width: 100%;
   margin: 0;
-  padding: 0 clamp(18px, 2.4vw, 32px);
+  padding: 0 clamp(34px, 3vw, 44px);
   display: flex;
   flex-direction: column;
   gap: 0;

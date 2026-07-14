@@ -22,7 +22,10 @@ class ScheduledTaskRequest(BaseModel):
     session_id: str = Field(default="")
     channel_id: str = Field(default="", max_length=8)
     name: str = Field(default="Scheduled task", max_length=255)
-    prompt: str = Field(min_length=1)
+    prompt: str = Field(default="")
+    execution_mode: str = Field(default="new_session", max_length=24)
+    prompt_mode: str = Field(default="prompt", max_length=16)
+    skill_name: str = Field(default="", max_length=255)
     cron_expr: str = Field(default="*/30 * * * *", max_length=64)
     enabled: bool = True
     auto_unbind_after_run: bool = True
@@ -34,6 +37,9 @@ class ScheduledTaskPatchRequest(BaseModel):
     channel_id: str | None = Field(default=None, max_length=8)
     name: str | None = Field(default=None, max_length=255)
     prompt: str | None = None
+    execution_mode: str | None = Field(default=None, max_length=24)
+    prompt_mode: str | None = Field(default=None, max_length=16)
+    skill_name: str | None = Field(default=None, max_length=255)
     cron_expr: str | None = Field(default=None, max_length=64)
     enabled: bool | None = None
     auto_unbind_after_run: bool | None = None
@@ -63,6 +69,9 @@ async def create_schedule(
         channel_id=request.channel_id,
         auto_unbind_after_run=request.auto_unbind_after_run,
         delete_session_on_success=request.delete_session_on_success,
+        execution_mode=request.execution_mode,
+        prompt_mode=request.prompt_mode,
+        skill_name=request.skill_name,
     )
     return ApiResponse.success({"task": service.task_to_dict(task)})
 
@@ -83,6 +92,9 @@ async def update_schedule(
         channel_id=request.channel_id,
         auto_unbind_after_run=request.auto_unbind_after_run,
         delete_session_on_success=request.delete_session_on_success,
+        execution_mode=request.execution_mode,
+        prompt_mode=request.prompt_mode,
+        skill_name=request.skill_name,
     )
     return ApiResponse.success({"task": service.task_to_dict(task)})
 

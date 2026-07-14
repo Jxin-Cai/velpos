@@ -117,6 +117,7 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
         command = RunQueryCommand(
             session_id=ctx.session_id,
             prompt=prompt or "Please review the attached files.",
+            client_message_id=str(data.get("message_id", ""))[:64],
             image_paths=image_paths,
             attachments=saved_attachments,
         )
@@ -128,6 +129,20 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
             )
         elif not ctx.service.is_agent_connected(ctx.session_id):
             await ctx.service.ensure_session_idle(ctx.session_id)
+            await ctx.websocket.send_json({
+                "event": "prompt_started",
+                "message_id": command.client_message_id,
+                "prompt": prompt,
+                "image_count": len(image_paths),
+                "attachments": [
+                    {
+                        "filename": item.get("filename", "attachment"),
+                        "mime_type": item.get("mime_type", "application/octet-stream"),
+                        "size_bytes": item.get("size_bytes", 0),
+                    }
+                    for item in saved_attachments
+                ],
+            })
             safe_create_task(
                 ctx.submit_query_background(command),
                 name=f"run_claude_query_{ctx.session_id}",
@@ -137,8 +152,30 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
             await ctx.service.queue_message(ctx.session_id, command)
             await ctx.websocket.send_json({
                 "event": "message_queued",
+                "message_id": command.client_message_id,
                 "prompt": prompt,
+                "image_count": len(image_paths),
+                "attachment_count": len(saved_attachments),
             })
+
+
+async def _handle_clear_queue(ctx: _WsContext, data: dict) -> None:
+    await ctx.service.clear_queued_message(ctx.session_id)
+    await ctx.websocket.send_json({"event": "queue_cleared"})
+
+
+async def _handle_steer_queue(ctx: _WsContext, data: dict) -> None:
+    try:
+        result = await ctx.service.steer_queued_message(ctx.session_id)
+        await ctx.websocket.send_json({"event": "message_steered", **result})
+    except BusinessException as exc:
+        await ctx.websocket.send_json({"event": "steer_failed", "message": str(exc)})
+    except Exception:
+        logger.exception("[session=%s] steer queued message failed", ctx.session_id)
+        await ctx.websocket.send_json({
+            "event": "steer_failed",
+            "message": "Unable to steer the queued message; it remains queued",
+        })
 
 
 async def _handle_cancel(ctx: _WsContext, data: dict) -> None:
@@ -255,6 +292,8 @@ async def _handle_user_response(ctx: _WsContext, data: dict) -> None:
 
 _ACTION_HANDLERS: dict[str, Callable[[_WsContext, dict], Awaitable[None]]] = {
     "send_prompt": _handle_send_prompt,
+    "clear_queue": _handle_clear_queue,
+    "steer_queue": _handle_steer_queue,
     "cancel": _handle_cancel,
     "rewind_to": _handle_rewind_to,
     "get_status": _handle_get_status,

@@ -54,6 +54,7 @@ class SessionApplicationService:
         usage_recorder: Callable[[str, str, str, int, int, int, int], Awaitable[None]] | None = None,
         timeline_service: SessionRunTimelineService | None = None,
         timeline_event_service: SessionTimelineEventService | None = None,
+        trace_collector: Any | None = None,
         session_service_factory: Callable[[], Awaitable["SessionApplicationService"]] | None = None,
     ) -> None:
         self._session_repository = session_repository
@@ -65,6 +66,7 @@ class SessionApplicationService:
         self._project_repository = project_repository
         self._im_unbind_fn = im_unbind_fn
         self._audit_event_repository = audit_event_repository
+        self._trace_collector = trace_collector
         self._session_service_factory = session_service_factory
         self._recorder = SessionObservabilityRecorder(
             audit_event_repository=audit_event_repository,
@@ -81,6 +83,7 @@ class SessionApplicationService:
             save_session_fn=self._save_session,
             accept_sdk_session_id_fn=self._accept_or_reject_sdk_session_id,
             cancelled_sessions=SessionQueryEngine._cancelled_sessions,
+            trace_collector=trace_collector,
         )
         self._query_engine = SessionQueryEngine(
             session_repository=session_repository,
@@ -125,15 +128,28 @@ class SessionApplicationService:
     async def clear_queued_message(self, session_id: str) -> None:
         await self._query_engine.clear_queued_message(session_id)
 
+    async def steer_queued_message(self, session_id: str) -> dict:
+        return await self._query_engine.steer_queued_message(session_id)
+
     # ── Persistence helpers ──────────────────────────────────
 
     async def _save_session(self, session: Session, *, commit: bool = False) -> None:
         from sqlalchemy.exc import InterfaceError, OperationalError
+        from sqlalchemy.orm.exc import StaleDataError
 
         try:
             await self._session_repository.save(session)
             if commit:
                 await self._session_repository.commit()
+        except StaleDataError:
+            await self._session_repository.rollback()
+            if await self._session_repository.find_by_id(session.session_id) is None:
+                logger.info(
+                    "[session=%s] Save skipped because the session was deleted concurrently",
+                    session.session_id,
+                )
+                return
+            raise
         except (OperationalError, InterfaceError, OSError):
             logger.warning(
                 "[session=%s] DB connection lost during save, reconnecting",
@@ -404,6 +420,8 @@ class SessionApplicationService:
                 session_id, project_dir, sdk_session_id=session.sdk_session_id,
             )
 
+        if self._trace_collector is not None:
+            self._trace_collector.discard_session(session_id)
         await self._claude_agent_gateway.cleanup_session(session_id)
         await self._query_engine.cleanup_session_state(session_id)
 
@@ -518,6 +536,14 @@ class SessionApplicationService:
 
         session = await self._session_repository.find_by_id(session_id)
         if session is None or not session.sdk_session_id:
+            return
+
+        if session.project_dir and not os.path.isdir(os.path.expanduser(session.project_dir)):
+            logger.warning(
+                "[session=%s] SDK connection prewarm skipped: project directory does not exist: %s",
+                session_id,
+                session.project_dir,
+            )
             return
 
         try:

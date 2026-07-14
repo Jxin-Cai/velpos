@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,6 +131,28 @@ _claude_agent_gateway.set_broadcast_fn(_session_coordinator.broadcast_with_im)
 _claude_agent_gateway.set_is_im_bound_fn(_session_coordinator.is_session_im_bound)
 _claude_agent_gateway.set_persist_pending_request_context_fn(_session_coordinator.persist_pending_request_context)
 _connection_manager.register_broadcast_hook(_session_coordinator.timeline_broadcast_hook)
+
+# ── Trace Collector (observability spans) ──
+from application.session.trace_collector import TraceCollector
+from infr.repository.trace_span_repository_impl import TraceSpanRepositoryImpl
+
+
+@asynccontextmanager
+async def _trace_repository_scope():
+    from infr.config.database import async_session_factory
+    async with async_session_factory() as db_session:
+        yield TraceSpanRepositoryImpl(db_session)
+
+
+def _create_trace_collector() -> TraceCollector:
+    return TraceCollector(
+        repository_factory=_trace_repository_scope,
+        broadcast_fn=_connection_manager.broadcast,
+    )
+
+
+_trace_collector = _create_trace_collector()
+_claude_agent_gateway.set_trace_collector(_trace_collector)
 
 
 async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
@@ -374,6 +397,7 @@ async def _create_session_service(
             repository=SessionTimelineEventRepositoryImpl(db_session),
             connection_manager=_connection_manager,
         ),
+        trace_collector=_trace_collector,
         session_service_factory=_create_session_service,
     )
 
@@ -496,6 +520,16 @@ async def get_project_repository(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> ProjectRepositoryImpl:
     return ProjectRepositoryImpl(db_session)
+
+
+def get_trace_collector() -> TraceCollector:
+    return _trace_collector
+
+
+async def get_trace_span_repository(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> TraceSpanRepositoryImpl:
+    return TraceSpanRepositoryImpl(db_session)
 
 
 async def get_team_coordinator_service(

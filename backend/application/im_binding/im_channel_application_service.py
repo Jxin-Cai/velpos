@@ -529,6 +529,11 @@ class ImChannelApplicationService:
         try:
             async with async_session_factory() as db_session:
                 session_service = await self._session_service_factory(db_session)
+                # Disable IM sync callbacks — this inbound flow handles its own
+                # reply via adapter.send_message; letting the callbacks fire would
+                # cause duplicate messages back to the IM channel.
+                session_service._query_engine._on_assistant_response = None
+                session_service._query_engine._on_user_message = None
                 try:
                     session = await session_service.get_session(binding.session_id)
                 except BusinessException:

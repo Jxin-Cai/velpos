@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import uuid
+from pathlib import Path
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ class _QueryContext:
     run_id: str
     run_step: Any
     actual_prompt: str
+    message_id: str
     team_config: dict[str, Any]
     cancelled_during_stream: bool = False
 
@@ -44,6 +46,7 @@ class SessionQueryEngine:
     _session_lock_pool = KeyedLockPool(max_size=500)
     _cancelled_sessions: set[str] = set()
     _queued_messages: dict[str, RunQueryCommand] = {}
+    _active_contexts: dict[str, _QueryContext] = {}
     _waiting_for_slot: set[str] = set()
     _queue_guard = asyncio.Lock()
     _query_semaphore: asyncio.Semaphore | None = None
@@ -98,6 +101,7 @@ class SessionQueryEngine:
         async with self._queue_guard:
             self._cancelled_sessions.discard(session_id)
             self._queued_messages.pop(session_id, None)
+            self._active_contexts.pop(session_id, None)
             self._waiting_for_slot.discard(session_id)
         await self._session_lock_pool.release(session_id)
 
@@ -212,13 +216,49 @@ class SessionQueryEngine:
 
     async def run_claude_query(self, command: RunQueryCommand) -> None:
         ctx = await self._prepare_query(command)
+        async with self._queue_guard:
+            self._active_contexts[command.session_id] = ctx
+        self._stream_consumer.start_trace_run(
+            command.session_id,
+            ctx.run_id,
+            source_message_id=ctx.message_id,
+        )
+        try:
+            await self._connection_manager.broadcast(
+                command.session_id,
+                {
+                    "event": "trace_run_started",
+                    "run_id": ctx.run_id,
+                    "message_id": ctx.message_id,
+                },
+            )
+        except Exception:
+            logger.debug(
+                "[session=%s] trace run link broadcast failed",
+                command.session_id,
+                exc_info=True,
+            )
+        trace_error: str | None = None
         try:
             await self._execute_streaming(ctx)
             if not ctx.cancelled_during_stream:
                 await self._handle_result(ctx)
         except Exception as e:
+            trace_error = str(e)
             await self._handle_error(ctx, e)
         finally:
+            self._stream_consumer.finish_trace_run(
+                command.session_id,
+                ctx.run_id,
+                error=trace_error,
+                cancelled=(
+                    ctx.cancelled_during_stream
+                    or command.session_id in self._cancelled_sessions
+                ),
+            )
+            async with self._queue_guard:
+                if self._active_contexts.get(command.session_id) is ctx:
+                    self._active_contexts.pop(command.session_id, None)
             await self._finalize_query(ctx)
 
     # ------------------------------------------------------------------
@@ -300,11 +340,12 @@ class SessionQueryEngine:
         session.start_query()
         self._claude_agent_gateway.mark_active(command.session_id)
 
-        message_id = uuid.uuid4().hex[:12]
+        message_id = command.client_message_id or uuid.uuid4().hex[:12]
         user_message = Message.create(
             message_type=MessageType.USER,
             content={
                 "message_id": message_id,
+                "run_id": run_id,
                 "text": actual_prompt,
                 "attachments": command.attachments,
             },
@@ -317,6 +358,7 @@ class SessionQueryEngine:
             run_id=run_id,
             run_step=run_step,
             actual_prompt=actual_prompt,
+            message_id=message_id,
             team_config={},
         )
 
@@ -330,6 +372,12 @@ class SessionQueryEngine:
         run_id = ctx.run_id
         run_step = ctx.run_step
         actual_prompt = ctx.actual_prompt
+
+        if session.project_dir and not Path(session.project_dir).expanduser().is_dir():
+            raise BusinessException(
+                f"Project directory no longer exists: {session.project_dir}. "
+                "Please recreate or remove this session."
+            )
 
         async def _save_and_broadcast():
             await self._save_session(session, commit=True)
@@ -697,6 +745,23 @@ class SessionQueryEngine:
             queued = self._queued_messages.pop(command.session_id, None)
         if queued:
             await self._set_queued_command(command.session_id, None)
+            await self._connection_manager.broadcast(
+                command.session_id,
+                {
+                    "event": "queue_started",
+                    "message_id": queued.client_message_id,
+                    "prompt": queued.prompt,
+                    "image_count": len(queued.image_paths),
+                    "attachments": [
+                        {
+                            "filename": item.get("filename", "attachment"),
+                            "mime_type": item.get("mime_type", "application/octet-stream"),
+                            "size_bytes": item.get("size_bytes", 0),
+                        }
+                        for item in queued.attachments
+                    ],
+                },
+            )
             await self._recorder.record_audit_event(
                 command.session_id,
                 "queue_started",
@@ -936,6 +1001,118 @@ class SessionQueryEngine:
         if removed:
             logger.info("[session=%s] 已清除排队消息", session_id)
 
+    async def steer_queued_message(self, session_id: str) -> dict[str, Any]:
+        async with self._queue_guard:
+            queued = self._queued_messages.get(session_id)
+            ctx = self._active_contexts.get(session_id)
+            if queued is None:
+                raise BusinessException("No queued message to steer")
+            if (
+                ctx is None
+                or not self._claude_agent_gateway.is_active(session_id)
+                or self._claude_agent_gateway.get_state(session_id) != "streaming"
+            ):
+                raise BusinessException(
+                    "The current run has already finished; the message remains queued"
+                )
+
+            actual_prompt = self._compose_prompt(queued)
+            try:
+                await self._claude_agent_gateway.steer(session_id, actual_prompt)
+            except RuntimeError as exc:
+                raise BusinessException(
+                    "The current run has already finished; the message remains queued"
+                ) from exc
+
+            if self._queued_messages.get(session_id) is not queued:
+                raise BusinessException("The queued message changed; please try again")
+            self._queued_messages.pop(session_id, None)
+
+            message_id = queued.client_message_id or uuid.uuid4().hex[:12]
+            ctx.session.add_message(Message.create(
+                message_type=MessageType.USER,
+                content={
+                    "message_id": message_id,
+                    "run_id": ctx.run_id,
+                    "text": actual_prompt,
+                    "attachments": queued.attachments,
+                    "steered": True,
+                },
+            ))
+
+        try:
+            await self._set_queued_command(session_id, None)
+        except Exception:
+            # The active context already carries queued_command=None and will be
+            # persisted when the run completes. Do not report a failed steer
+            # after the SDK has already accepted the message.
+            logger.warning(
+                "[session=%s] 引导成功，但持久化队列清理失败，等待运行结束时重试",
+                session_id,
+                exc_info=True,
+            )
+        try:
+            await self._recorder.record_audit_event(
+                session_id,
+                "queue_steered",
+                actor="user",
+                payload={
+                    "run_id": ctx.run_id,
+                    "prompt_length": len(queued.prompt),
+                    "attachment_count": len(queued.attachments),
+                },
+            )
+            await self._recorder.record_timeline_event(
+                session_id,
+                ctx.run_id,
+                "user_input",
+                "用户引导",
+                {
+                    "prompt": queued.prompt[:1200],
+                    "prompt_length": len(queued.prompt),
+                    "steered": True,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "[session=%s] 引导成功，但审计事件记录失败",
+                session_id,
+                exc_info=True,
+            )
+        logger.info("[session=%s] 排队消息已引导到当前执行", session_id)
+        return {
+            "message_id": message_id,
+            "run_id": ctx.run_id,
+            "prompt": actual_prompt,
+            "image_count": len(queued.image_paths),
+            "attachments": [
+                {
+                    "filename": item.get("filename", "attachment"),
+                    "mime_type": item.get("mime_type", "application/octet-stream"),
+                    "size_bytes": item.get("size_bytes", 0),
+                }
+                for item in queued.attachments
+            ],
+        }
+
+    @staticmethod
+    def _compose_prompt(command: RunQueryCommand) -> str:
+        attachment_refs = []
+        image_paths = set(command.image_paths)
+        for attachment in command.attachments:
+            path = attachment.get("path", "")
+            filename = attachment.get("filename", "attachment")
+            mime_type = attachment.get("mime_type", "")
+            if not path:
+                continue
+            if mime_type.startswith("image/") or path in image_paths:
+                attachment_refs.append(f"[Image: {path}]")
+            else:
+                attachment_refs.append(f"[Attachment: {filename} path={path}]")
+        if not attachment_refs:
+            return command.prompt
+        return f"{command.prompt}\n\n" + "\n".join(attachment_refs)
+
     async def _set_cancel_requested(self, session_id: str, requested: bool) -> None:
         session = await self._session_repository.find_by_id(session_id)
         if session is None:
@@ -957,5 +1134,10 @@ class SessionQueryEngine:
         if command is None:
             session.clear_queued_command()
         else:
-            session.update_queued_command(command.prompt, command.image_paths, command.attachments)
+            session.update_queued_command(
+                command.prompt,
+                command.image_paths,
+                command.attachments,
+                command.client_message_id,
+            )
         await self._save_session(session, commit=True)

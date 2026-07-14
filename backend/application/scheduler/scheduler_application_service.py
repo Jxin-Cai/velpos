@@ -59,14 +59,19 @@ class SchedulerApplicationService:
         channel_id: str = "",
         auto_unbind_after_run: bool = True,
         delete_session_on_success: bool = False,
+        execution_mode: str = "new_session",
+        prompt_mode: str = "prompt",
+        skill_name: str = "",
     ) -> ScheduledTask:
-        if not prompt.strip():
-            raise BusinessException("Scheduled task prompt is required")
+        self._validate_content(prompt_mode, prompt, skill_name)
+        self._validate_execution_mode(execution_mode, session_id)
         self._validate_cron_expr(cron_expr)
         if project_id:
             project = await self._project_repository.find_by_id(project_id)
             if project is None:
                 raise BusinessException("Project not found")
+        if execution_mode == "existing_session":
+            await self._validate_existing_session(session_id, project_id)
         task = ScheduledTask.create(
             project_id,
             session_id.strip(),
@@ -77,6 +82,9 @@ class SchedulerApplicationService:
             channel_id=channel_id,
             auto_unbind_after_run=auto_unbind_after_run,
             delete_session_on_success=delete_session_on_success,
+            execution_mode=execution_mode,
+            prompt_mode=prompt_mode,
+            skill_name=skill_name,
         )
         await self._repository.save(task)
         return task
@@ -92,10 +100,22 @@ class SchedulerApplicationService:
         channel_id: str | None = None,
         auto_unbind_after_run: bool | None = None,
         delete_session_on_success: bool | None = None,
+        execution_mode: str | None = None,
+        prompt_mode: str | None = None,
+        skill_name: str | None = None,
     ) -> ScheduledTask:
         if cron_expr is not None:
             self._validate_cron_expr(cron_expr)
         task = await self._get_task(task_id)
+        resolved_execution_mode = task.execution_mode if execution_mode is None else execution_mode
+        resolved_session_id = task.session_id if session_id is None else session_id
+        resolved_prompt_mode = task.prompt_mode if prompt_mode is None else prompt_mode
+        resolved_prompt = task.prompt if prompt is None else prompt
+        resolved_skill_name = task.skill_name if skill_name is None else skill_name
+        self._validate_execution_mode(resolved_execution_mode, resolved_session_id)
+        self._validate_content(resolved_prompt_mode, resolved_prompt, resolved_skill_name)
+        if resolved_execution_mode == "existing_session":
+            await self._validate_existing_session(resolved_session_id, task.project_id)
         task.update(
             session_id=session_id,
             name=name,
@@ -105,6 +125,9 @@ class SchedulerApplicationService:
             channel_id=channel_id,
             auto_unbind_after_run=auto_unbind_after_run,
             delete_session_on_success=delete_session_on_success,
+            execution_mode=execution_mode,
+            prompt_mode=prompt_mode,
+            skill_name=skill_name,
         )
         await self._repository.save(task)
         return task
@@ -135,19 +158,25 @@ class SchedulerApplicationService:
         run = ScheduledTaskRun.start(task.id)
         await self._repository.save_run(run)
         await self._repository.commit()
+        service: SessionApplicationService | None = None
         try:
             service = await self._session_service_factory()
             project_dir = ""
             if task.project_id:
                 project = await self._project_repository.find_by_id(task.project_id)
                 project_dir = project.dir_path if project else ""
-            anchor_session_id = await self._resolve_anchor_session_id(service, task.session_id)
-            session = await service.create_session(CreateSessionCommand(
-                project_id=task.project_id,
-                project_dir=project_dir,
-                name=f"[Scheduled] {task.name}",
-            ))
-            notify_session_id = session.session_id if task.channel_id else anchor_session_id
+            created_new_session = task.execution_mode == "new_session"
+            if created_new_session:
+                session = await service.create_session(CreateSessionCommand(
+                    project_id=task.project_id,
+                    project_dir=project_dir,
+                    name=f"[Scheduled] {task.name}",
+                ))
+            else:
+                session = await service.get_session(task.session_id)
+                if task.project_id and session.project_id != task.project_id:
+                    raise BusinessException("Selected session does not belong to this project")
+            notify_session_id = session.session_id if task.channel_id else ""
             if task.channel_id:
                 await self._bind_im(session.session_id, task.channel_id)
             await self._connection_manager.broadcast_global({
@@ -155,14 +184,29 @@ class SchedulerApplicationService:
                 "task_id": task.id,
                 "project_id": task.project_id,
                 "session_id": session.session_id,
+                "created": created_new_session,
             })
             if notify_session_id:
-                await self._notify_im(notify_session_id, self._build_start_message(task, session.session_id))
-            safe_create_task(self._run_task_query(service, task, run, session.session_id, notify_session_id))
+                await self._notify_im(
+                    notify_session_id,
+                    self._build_start_message(task, session.session_id),
+                )
+            safe_create_task(
+                self._run_task_query(
+                    service,
+                    task,
+                    run,
+                    session.session_id,
+                    notify_session_id,
+                    created_new_session,
+                )
+            )
         except Exception as exc:
             run.fail(str(exc))
             await self._repository.save_run(run)
             await self._repository.commit()
+            if service is not None:
+                await service.close()
         return run
 
     async def _run_task_query(
@@ -172,10 +216,16 @@ class SchedulerApplicationService:
         run: ScheduledTaskRun,
         result_session_id: str,
         notify_session_id: str,
+        created_new_session: bool,
     ) -> None:
         succeeded = False
         try:
-            await service.submit_query(RunQueryCommand(session_id=result_session_id, prompt=task.prompt))
+            await service.submit_query(
+                RunQueryCommand(
+                    session_id=result_session_id,
+                    prompt=self._build_execution_prompt(task),
+                )
+            )
             session = await service.get_session(result_session_id)
             assistant_text = MessageConversionService.extract_assistant_text(session.messages)
             if notify_session_id:
@@ -196,11 +246,13 @@ class SchedulerApplicationService:
             try:
                 await self._save_run(run)
             finally:
-                if task.auto_unbind_after_run and task.channel_id:
-                    await self._unbind_im(result_session_id)
-                if succeeded and task.delete_session_on_success:
-                    await service.delete_session(result_session_id)
-                await service.close()
+                try:
+                    if task.auto_unbind_after_run and task.channel_id:
+                        await self._unbind_im(result_session_id)
+                    if succeeded and created_new_session and task.delete_session_on_success:
+                        await service.delete_session(result_session_id)
+                finally:
+                    await service.close()
 
     async def _save_run(self, run: ScheduledTaskRun) -> None:
         if self._save_run_fn is not None:
@@ -208,19 +260,6 @@ class SchedulerApplicationService:
             return
         await self._repository.save_run(run)
         await self._repository.commit()
-
-    async def _resolve_anchor_session_id(
-        self,
-        service: SessionApplicationService,
-        session_id: str,
-    ) -> str:
-        if not session_id:
-            return ""
-        try:
-            session = await service.get_session(session_id)
-        except Exception:
-            return ""
-        return session.session_id
 
     async def _notify_im(self, session_id: str, content: str) -> None:
         if not session_id or not content or self._notify_im_fn is None:
@@ -243,7 +282,7 @@ class SchedulerApplicationService:
             f"[Scheduled Task Started]\n"
             f"Task: {task.name}\n"
             f"Execution session: {result_session_id}\n\n"
-            f"{task.prompt.strip()}"
+            f"{SchedulerApplicationService._build_execution_prompt(task)}"
         )
 
     @staticmethod
@@ -275,6 +314,39 @@ class SchedulerApplicationService:
         if task is None:
             raise BusinessException("Scheduled task not found")
         return task
+
+    async def _validate_existing_session(self, session_id: str, project_id: str) -> None:
+        service = await self._session_service_factory()
+        try:
+            session = await service.get_session(session_id.strip())
+            if project_id and session.project_id != project_id:
+                raise BusinessException("Selected session does not belong to this project")
+        finally:
+            await service.close()
+
+    @staticmethod
+    def _validate_execution_mode(execution_mode: str, session_id: str) -> None:
+        if execution_mode not in {"new_session", "existing_session"}:
+            raise BusinessException("Execution mode is invalid")
+        if execution_mode == "existing_session" and not session_id.strip():
+            raise BusinessException("Select a session to reuse")
+
+    @staticmethod
+    def _validate_content(prompt_mode: str, prompt: str, skill_name: str) -> None:
+        if prompt_mode not in {"prompt", "skill"}:
+            raise BusinessException("Prompt mode is invalid")
+        if prompt_mode == "prompt" and not prompt.strip():
+            raise BusinessException("Scheduled task prompt is required")
+        if prompt_mode == "skill" and not skill_name.strip():
+            raise BusinessException("Select a skill to invoke")
+
+    @staticmethod
+    def _build_execution_prompt(task: ScheduledTask) -> str:
+        prompt = task.prompt.strip()
+        if task.prompt_mode != "skill":
+            return prompt
+        invocation = f"/{task.skill_name.strip()}"
+        return f"{invocation} {prompt}".strip()
 
     @staticmethod
     def _validate_cron_expr(cron_expr: str) -> None:
@@ -310,6 +382,9 @@ class SchedulerApplicationService:
             "name": task.name,
             "prompt": task.prompt,
             "cron_expr": task.cron_expr,
+            "execution_mode": task.execution_mode,
+            "prompt_mode": task.prompt_mode,
+            "skill_name": task.skill_name,
             "enabled": task.enabled,
             "auto_unbind_after_run": task.auto_unbind_after_run,
             "delete_session_on_success": task.delete_session_on_success,

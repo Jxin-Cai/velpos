@@ -12,13 +12,18 @@ import SystemBlock from './SystemBlock.vue'
 import UserChoiceBlock from './UserChoiceBlock.vue'
 import PermissionRequestBlock from './PermissionRequestBlock.vue'
 import TodoProgressBlock from './TodoProgressBlock.vue'
+import TraceButton from '@features/trace-viewer/ui/TraceButton.vue'
 
 const props = defineProps({
   message: {
     type: Object,
     required: true,
   },
+  traceRunId: { type: String, default: '' },
+  traceSummary: { type: Object, default: null },
 })
+
+const emit = defineEmits(['open-trace'])
 
 const wsConnection = inject('wsConnection')
 
@@ -205,16 +210,25 @@ function handleDelegatedClick(e) {
     <template v-for="(block, i) in renderedBlocks" :key="i">
       <!-- User message -->
       <div v-if="block.type === 'user'" class="msg-user" :class="{ 'msg-user--selected': isUserMsgSelected }">
-        <button
-          class="user-marker"
-          @click.stop="handleUserMarkerClick"
-          title="Click to select message text"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-        </button>
+        <div class="user-actions">
+          <button
+            type="button"
+            class="user-marker"
+            @click.stop="handleUserMarkerClick"
+            title="Click to select message text"
+            aria-label="选择该用户消息文本"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+          <TraceButton
+            :run-id="traceRunId"
+            :summary="traceSummary"
+            @open-trace="emit('open-trace', $event)"
+          />
+        </div>
         <div class="user-content">
           <div
             ref="userTextEl"
@@ -239,8 +253,10 @@ function handleDelegatedClick(e) {
           </div>
           <button
             v-if="isUserMsgOverflow"
+            type="button"
             class="user-expand-btn"
-            @click="isUserMsgExpanded = !isUserMsgExpanded"
+            :aria-expanded="isUserMsgExpanded"
+            @click.stop="isUserMsgExpanded = !isUserMsgExpanded"
           >
             {{ isUserMsgExpanded ? 'Show less' : 'Show more' }}
           </button>
@@ -320,6 +336,14 @@ function handleDelegatedClick(e) {
   gap: 8px;
 }
 
+.user-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
 .user-marker {
   flex-shrink: 0;
   color: var(--accent);
@@ -337,6 +361,12 @@ function handleDelegatedClick(e) {
 .user-marker:hover {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+.user-marker:focus-visible,
+.user-expand-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .msg-user--selected .user-marker {

@@ -86,6 +86,7 @@ class Session:
             return None
         return {
             "prompt": cmd.get("prompt", ""),
+            "client_message_id": cmd.get("client_message_id", ""),
             "image_paths": list(cmd.get("image_paths", [])),
             "attachments": list(cmd.get("attachments", [])),
         }
@@ -345,9 +346,11 @@ class Session:
         prompt: str,
         image_paths: list[str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        client_message_id: str = "",
     ) -> None:
         self._queued_command = self._normalize_queued_command({
             "prompt": prompt,
+            "client_message_id": client_message_id,
             "image_paths": image_paths or [],
             "attachments": attachments or [],
         })

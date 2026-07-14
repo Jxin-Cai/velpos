@@ -5,7 +5,7 @@ import { formatDuration } from '@features/message-display'
 import { useDialogManager } from '@shared/lib/useDialogManager'
 import { useSession, listModels, createSessionBranch, listSessionBranches, compareSessions, convergeSessionBranches } from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
-import { MessageInput, useSendMessage } from '@features/send-message'
+import { MessageInput, QueuedMessageCard, useSendMessage } from '@features/send-message'
 import { useCancelQuery } from '@features/cancel-query'
 import { MessageList, ThinkingIndicator } from '@features/message-display'
 import { ClearContextButton, useClearContext } from '@features/clear-context'
@@ -22,12 +22,13 @@ import { EvolutionDialog } from '@features/evolution'
 import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 import TeamRuntimePanel from '@features/agent-teams/ui/TeamRuntimePanel.vue'
 import WorkerSessionBreadcrumb from '@features/agent-teams/ui/WorkerSessionBreadcrumb.vue'
+import { TracePanel } from '@features/trace-viewer'
 import { usePermissionMode } from '../model/usePermissionMode'
 
 const {
-  session, messages, status, queued, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
+  session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
   queryHistory, setCurrentSessionId, updateSession, setError, setCanceling, addSession,
-  restoredPrompt, setRestoredPrompt,
+  restoredPrompt, setRestoredPrompt, setQueuedCommand, steeringQueued, setSteeringQueued,
 } = useSession()
 const { currentProject, updateProjectInList } = useProject()
 
@@ -53,6 +54,19 @@ const isTeamCoordinator = computed(() => {
 })
 const isTeamWorker = computed(() => Boolean(session.value?.team_task_id))
 const teamPanelVisible = ref(false)
+const tracePanelVisible = ref(false)
+const selectedTraceRunId = ref(null)
+
+function openMessageTrace(runId) {
+  if (!runId) return
+  selectedTraceRunId.value = runId
+  tracePanelVisible.value = true
+}
+
+function toggleTracePanel() {
+  if (!tracePanelVisible.value) selectedTraceRunId.value = null
+  tracePanelVisible.value = !tracePanelVisible.value
+}
 
 function handleTeamNavigate({ sessionId }) {
   if (sessionId) setCurrentSessionId(sessionId)
@@ -241,7 +255,7 @@ watch(() => currentProject.value?.plugins, () => {
 
 // Handle prompt-mode IM binding — send prompt via WS
 function handleImPrompt(prompt) {
-  useSendMessage(wsConnection.value).sendPrompt(prompt)
+  handleSend(prompt)
 }
 
 // History popover
@@ -430,16 +444,46 @@ const pendingSend = ref(false)
 let pendingSendTimer = null
 
 function handleSend(textOrData) {
-  useSendMessage(wsConnection.value).sendPrompt(textOrData)
+  const isFollowUp = isRunning.value
+  const result = useSendMessage(wsConnection.value).sendPrompt(textOrData, {
+    optimistic: !isFollowUp,
+  })
+  if (!result) return
+  if (isFollowUp) {
+    setQueuedCommand(result.queuedCommand)
+    return
+  }
   pendingSend.value = true
   clearTimeout(pendingSendTimer)
   pendingSendTimer = setTimeout(() => { pendingSend.value = false }, 5000)
 }
 
+function editQueuedMessage() {
+  if (!recoveryQueued.value?.prompt) return
+  messageInputRef.value?.setInput(recoveryQueued.value.prompt)
+}
+
+function removeQueuedMessage() {
+  if (!recoveryQueued.value) return
+  const sent = wsConnection.value?.send({ action: 'clear_queue' })
+  if (sent) setQueuedCommand(null)
+  else setError('Not connected')
+}
+
+function steerQueuedMessage() {
+  if (!recoveryQueued.value || !isRunning.value || steeringQueued.value) return
+  const sent = wsConnection.value?.send({ action: 'steer_queue' })
+  if (sent) setSteeringQueued(true)
+  else setError('Not connected')
+}
+
 watch(isRunning, (running) => {
   pendingSend.value = false
   clearTimeout(pendingSendTimer)
-  if (!running) setCanceling(false)
+  if (!running) {
+    setCanceling(false)
+    setSteeringQueued(false)
+  }
 })
 
 watch(restoredPrompt, (prompt) => {
@@ -997,7 +1041,13 @@ function formatMaxTokens(n) {
     <div v-if="isSessionLoading" class="session-loading-state">
       <div class="session-loading-spinner"></div>
     </div>
-    <MessageList v-else :messages="displayMessages" :has-more="hasMoreMessages" @load-more="loadMoreMessages">
+    <MessageList
+      v-else
+      :messages="displayMessages"
+      :has-more="hasMoreMessages"
+      @load-more="loadMoreMessages"
+      @open-trace="openMessageTrace"
+    >
       <template #footer>
         <div v-if="showRecoveryHint" class="recovery-indicator">
           <span class="recovery-badge">Recovered</span>
@@ -1016,10 +1066,6 @@ function formatMaxTokens(n) {
         <div v-if="waitingForSlot" class="queue-indicator">
           <span class="queue-dot"></span>
           Waiting for an available execution slot
-        </div>
-        <div v-if="queued && isRunning" class="queue-indicator">
-          <span class="queue-dot"></span>
-          Your message is queued — will run after current task
         </div>
       </template>
     </MessageList>
@@ -1124,6 +1170,7 @@ function formatMaxTokens(n) {
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': debugMode, 'debug-toggle--active': debugMode }"
           :aria-pressed="debugMode"
+          aria-label="Toggle debug messages"
           @click="toggleDebug"
           data-tooltip="Debug"
           :title="debugMode ? 'Debug is on — tool calls and system messages are visible' : 'Debug is off — only user-facing messages are visible'"
@@ -1146,6 +1193,7 @@ function formatMaxTokens(n) {
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': runtimePanelVisible }"
           :aria-pressed="runtimePanelVisible"
+          aria-label="Toggle runtime activity"
           @click="toggleRuntimePanel"
           data-tooltip="Runtime"
           title="Runtime — show current activity"
@@ -1158,10 +1206,25 @@ function formatMaxTokens(n) {
           </svg>
         </button>
         <button
+          v-if="debugMode"
+          class="toolbar-btn"
+          :class="{ 'toolbar-btn--active': tracePanelVisible }"
+          :aria-pressed="tracePanelVisible"
+          aria-label="Toggle trace tree"
+          @click="toggleTracePanel"
+          data-tooltip="Trace"
+          title="Trace tree — show execution spans"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </button>
+        <button
           v-if="isTeamCoordinator"
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': teamPanelVisible }"
           :aria-pressed="teamPanelVisible"
+          aria-label="Toggle team runtime"
           @click="teamPanelVisible = !teamPanelVisible"
           data-tooltip="Team"
           title="Team runtime — show task pipeline and worker sessions"
@@ -1180,6 +1243,7 @@ function formatMaxTokens(n) {
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': currentAgentInfo }"
           :disabled="!currentSessionId || !currentProject"
+          aria-label="Select agent"
           @click="agentDialogVisible = true"
           data-tooltip="Agent"
           :title="currentAgentInfo ? `Agent: ${currentAgentInfo.id}` : 'Select Agent'"
@@ -1194,6 +1258,7 @@ function formatMaxTokens(n) {
         <button
           class="toolbar-btn"
           :disabled="!currentSessionId"
+          aria-label="Manage plugins"
           @click="pluginDialogVisible = true"
           data-tooltip="Plugin"
           title="Plugin management"
@@ -1218,6 +1283,7 @@ function formatMaxTokens(n) {
         <button
           class="toolbar-btn multi-session-trigger"
           :disabled="isRunning || !currentSessionId || messages.length === 0"
+          aria-label="Create a parallel session"
           @click="openMultiSessionDialog"
           data-tooltip="Multi-session"
           title="Create a new session from selected context"
@@ -1240,6 +1306,7 @@ function formatMaxTokens(n) {
             class="toolbar-btn"
             :class="{ 'toolbar-btn--active': isVoiceRecording || isVideoCapturing }"
             :disabled="!voiceSupported && !videoSupported"
+            aria-label="Open media input menu"
             @click="toggleMediaMenu"
             data-tooltip="Media"
             title="Media input"
@@ -1299,6 +1366,7 @@ function formatMaxTokens(n) {
             ref="usageBtnRef"
             class="toolbar-btn"
             :disabled="!currentSessionId"
+            aria-label="View usage and agent timeline"
             @click="toggleUsagePanel"
             data-tooltip="Usage"
             title="Usage and agent timeline"
@@ -1354,8 +1422,25 @@ function formatMaxTokens(n) {
         />
         </div>
       </div>
+      <QueuedMessageCard
+        v-if="recoveryQueued"
+        :message="recoveryQueued"
+        :busy="canceling"
+        :can-steer="isRunning"
+        :steering="steeringQueued"
+        @steer="steerQueuedMessage"
+        @edit="editQueuedMessage"
+        @remove="removeQueuedMessage"
+      />
       <div class="input-row">
-        <MessageInput ref="messageInputRef" :running="isRunning" :disabled="canceling" @send="handleSend" />
+        <MessageInput
+          ref="messageInputRef"
+          :running="isRunning"
+          :canceling="canceling"
+          :disabled="canceling"
+          @send="handleSend"
+          @cancel="handleCancel"
+        />
       </div>
       <!-- Session Dashboard -->
       <div class="session-dashboard" v-if="currentSessionId">
@@ -1782,6 +1867,12 @@ function formatMaxTokens(n) {
     @navigate-to-session="handleTeamNavigate"
     @close="teamPanelVisible = false"
   />
+
+  <TracePanel
+    :visible="tracePanelVisible"
+    :initial-run-id="selectedTraceRunId"
+    @close="tracePanelVisible = false"
+  />
   </div>
 </template>
 
@@ -2035,6 +2126,21 @@ function formatMaxTokens(n) {
   white-space: nowrap;
 }
 
+:global([data-theme="dark"]) .toolbar-btn {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:global([data-theme="dark"]) .toolbar-btn:hover:not(:disabled),
+:global([data-theme="dark"]) .toolbar-btn--active {
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
 .toolbar-btn:hover:not(:disabled) {
   color: var(--accent);
   background: var(--layer-active);
@@ -2092,7 +2198,7 @@ function formatMaxTokens(n) {
   z-index: 100;
 }
 
-.toolbar-btn[data-tooltip]:hover:not(:disabled)::after {
+.toolbar-btn[data-tooltip]:is(:hover, :focus-visible)::after {
   opacity: 1;
   transform: translateX(-50%) scale(1);
 }

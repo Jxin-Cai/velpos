@@ -8,5 +8,6 @@ class RunQueryCommand(BaseModel):
 
     session_id: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
+    client_message_id: str = Field(default="", max_length=64)
     image_paths: list[str] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)

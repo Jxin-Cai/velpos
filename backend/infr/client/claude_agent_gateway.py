@@ -76,6 +76,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._lock = asyncio.Lock()
         # Lock for protecting client lifecycle (connect/disconnect)
         self._client_lock = asyncio.Lock()
+        # Trace collector for observability hooks (set externally)
+        self._trace_collector: Any | None = None
+        # session_id -> run_id ref (mutable list for hook closures to track current run)
+        self._trace_run_id_refs: dict[str, list[str]] = {}
 
     def _set_state(self, session_id: str, state: str) -> None:
         self._session_states[session_id] = state
@@ -98,6 +102,33 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     def set_persist_pending_request_context_fn(self, fn: Callable[[str, dict[str, Any] | None], Any]) -> None:
         """Set the callback for persisting pending request context."""
         self._persist_pending_request_context_fn = fn
+
+    def set_trace_collector(self, collector: Any) -> None:
+        """Set the TraceCollector for observability hooks injection."""
+        self._trace_collector = collector
+
+    def update_trace_run_id(self, session_id: str, run_id: str) -> None:
+        """Update the current run_id for a session's trace hooks."""
+        ref = self._trace_run_id_refs.get(session_id)
+        if ref:
+            ref[0] = run_id
+
+    def _merge_with_observability_hooks(
+        self,
+        session_id: str,
+        hooks: dict | None,
+    ) -> dict | None:
+        if not self._trace_collector or not self._trace_collector.enabled:
+            return hooks
+        from application.session.trace_hooks import create_observability_hooks, merge_hooks
+
+        run_id_ref = self._trace_run_id_refs.get(session_id)
+        if run_id_ref is None:
+            run_id_ref = [""]
+            self._trace_run_id_refs[session_id] = run_id_ref
+
+        obs_hooks = create_observability_hooks(session_id, run_id_ref, self._trace_collector)
+        return merge_hooks(hooks, obs_hooks)
 
     async def _persist_pending_request_context(
         self,
@@ -421,6 +452,15 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._set_state(session_id, "interrupted")
         await client.interrupt()
 
+    async def steer(self, session_id: str, prompt: str) -> None:
+        client = self._clients.get(session_id)
+        if client is None:
+            raise RuntimeError(f"No active connection for session {session_id}")
+        if not self.is_active(session_id) or self.get_state(session_id) != "streaming":
+            raise RuntimeError(f"No streaming query for session {session_id}")
+        self._touch(session_id)
+        await client.query(prompt=prompt)
+
     async def _connect_and_register(
         self,
         session_id: str,
@@ -438,6 +478,8 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     ) -> tuple[ClaudeSDKClient, bool]:
         perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
 
+        merged_hooks = self._merge_with_observability_hooks(session_id, hooks)
+
         async with self._client_lock:
             await self._disconnect_unlocked(session_id)
 
@@ -453,7 +495,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 max_turns=max_turns,
                 max_budget_usd=max_budget_usd,
                 output_format=output_format,
-                hooks=hooks,
+                hooks=merged_hooks,
                 enable_file_checkpointing=enable_file_checkpointing,
             )
             self._clients[session_id] = client
@@ -511,6 +553,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
     async def cleanup_session(self, session_id: str) -> None:
         """Remove all tracked state for a session (call after full deletion)."""
+        self._trace_run_id_refs.pop(session_id, None)
         self._sdk_session_ids.pop(session_id, None)
         self._session_cwds.pop(session_id, None)
         self._session_permission_modes.pop(session_id, None)
@@ -1029,6 +1072,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 "message_type": "assistant",
                 "content": {"blocks": blocks},
             }
+            parent_tool_use_id = getattr(msg, "parent_tool_use_id", None)
+            if parent_tool_use_id:
+                result["parent_tool_use_id"] = parent_tool_use_id
             # Extract per-turn usage for accurate context window estimation.
             # AssistantMessage.usage is per API call (not cumulative), so it
             # reflects the actual context window size at this turn.

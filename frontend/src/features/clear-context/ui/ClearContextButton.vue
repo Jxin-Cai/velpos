@@ -51,6 +51,7 @@ function handleClick() {
     @click="handleClick"
     data-tooltip="Clear"
     title="Clear context"
+    aria-label="Clear conversation context"
   >
     <template v-if="clearing">Clearing...</template>
     <template v-else-if="confirming">Confirm?</template>
@@ -98,6 +99,20 @@ function handleClick() {
   background: var(--layer-active);
   border-color: var(--accent);
   box-shadow: var(--shadow-sm);
+}
+
+:global([data-theme="dark"]) .clear-ctx-btn {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:global([data-theme="dark"]) .clear-ctx-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+  color: var(--text-primary);
+  box-shadow: none;
 }
 
 .clear-ctx-btn--confirming {
@@ -149,7 +164,7 @@ function handleClick() {
   z-index: 100;
 }
 
-.clear-ctx-btn[data-tooltip]:hover:not(:disabled)::after {
+.clear-ctx-btn[data-tooltip]:is(:hover, :focus-visible)::after {
   opacity: 1;
   transform: translateX(-50%) scale(1);
 }

@@ -31,8 +31,10 @@ class SessionAssembler:
         queued_summary = None
         if queued_command:
             queued_summary = {
+                "message_id": queued_command.get("client_message_id", ""),
                 "prompt": queued_command.get("prompt", ""),
                 "image_count": len(queued_command.get("image_paths", [])),
+                "attachment_count": len(queued_command.get("attachments", [])),
             }
 
         return {

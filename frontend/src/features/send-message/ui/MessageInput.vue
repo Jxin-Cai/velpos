@@ -12,20 +12,28 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  canceling: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['send'])
+const emit = defineEmits(['send', 'cancel'])
 
 const { shouldEnterSend, shouldCtrlEnterSend } = useUserPreferences()
 
 const input = ref('')
 const isComposing = ref(false)
 const compositionEndedRecently = ref(false)
+const pendingAttachments = ref([])
+const hasDraft = computed(() => Boolean(input.value.trim() || pendingAttachments.value.length))
+const primaryAction = computed(() => (props.running && !hasDraft.value ? 'stop' : 'send'))
 
 // 动态生成placeholder文本
 const placeholderText = computed(() => {
-  if (props.disabled) return 'Waiting for Claude to finish...'
-  if (props.running) return 'Send follow-up (queued until Claude finishes)...'
+  if (props.canceling) return 'Stopping…'
+  if (props.disabled) return 'Message unavailable'
+  if (props.running) return 'Add a follow-up for the next turn…'
 
   const sendShortcut = shouldEnterSend() ? 'Enter' : 'Ctrl+Enter'
   const newLineShortcut = shouldEnterSend() ? 'Ctrl+Enter' : 'Enter'
@@ -35,12 +43,20 @@ const placeholderText = computed(() => {
 
 // 动态生成发送按钮的提示文本
 const sendButtonTitle = computed(() => {
+  if (props.canceling) return 'Stopping current task…'
+  if (primaryAction.value === 'stop') return 'Stop current task (Esc)'
   const sendShortcut = shouldEnterSend() ? 'Enter' : 'Ctrl+Enter'
-  return `Send message (${sendShortcut})`
+  return props.running
+    ? `Queue follow-up (${sendShortcut})`
+    : `Send message (${sendShortcut})`
+})
+const sendButtonLabel = computed(() => {
+  if (props.canceling) return 'Stopping current task'
+  if (primaryAction.value === 'stop') return 'Stop current task'
+  return props.running ? 'Queue follow-up message' : 'Send message'
 })
 const inputEl = ref(null)
 const fileInputEl = ref(null)
-const pendingAttachments = ref([])
 
 function autoResize() {
   const el = inputEl.value
@@ -77,6 +93,15 @@ function handleSend() {
     autoResize()
     inputEl.value?.focus()
   })
+}
+
+function handlePrimaryAction() {
+  if (props.canceling || props.disabled) return
+  if (primaryAction.value === 'stop') {
+    emit('cancel')
+    return
+  }
+  handleSend()
 }
 
 function handleCompositionStart() {
@@ -222,7 +247,7 @@ function appendText(text) {
 
 function handleAreaClick(e) {
   // If clicking on the input area (but not on controls), focus the input
-  const isControl = e.target.closest('.send-btn, .attach-btn, .attachment-remove, .attachment-thumb, .attachment-file, input[type="file"]')
+  const isControl = e.target.closest('.primary-action-btn, .attach-btn, .attachment-remove, .attachment-thumb, .attachment-file, input[type="file"]')
 
   if (!isControl && !props.disabled) {
     inputEl.value?.focus()
@@ -254,7 +279,7 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
           <span class="attachment-name">{{ item.name }}</span>
           <span class="attachment-size">{{ formatSize(item.size) }}</span>
         </div>
-        <button class="attachment-remove" @click="removeAttachment(i)" title="Remove attachment" aria-label="Remove attachment">
+        <button type="button" class="attachment-remove" @click="removeAttachment(i)" title="Remove attachment" aria-label="Remove attachment">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
@@ -286,8 +311,10 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
         @change="handleFileSelect"
       />
       <button
+        type="button"
         class="attach-btn"
         :disabled="disabled"
+        data-tooltip="Attach files"
         title="Attach files"
         aria-label="Attach files"
         @click.stop="openFilePicker"
@@ -295,15 +322,24 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
         +
       </button>
       <button
-        class="send-btn"
-        :disabled="(!input.trim() && pendingAttachments.length === 0) || disabled"
+        type="button"
+        class="primary-action-btn"
+        :class="{
+          'primary-action-btn--stop': primaryAction === 'stop',
+          'primary-action-btn--canceling': canceling,
+        }"
+        :disabled="disabled || canceling || (primaryAction === 'send' && !hasDraft)"
+        :data-tooltip="sendButtonTitle"
         :title="sendButtonTitle"
-        aria-label="Send message"
-        @click="handleSend"
+        :aria-label="sendButtonLabel"
+        @click.stop="handlePrimaryAction"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        <svg v-if="primaryAction === 'stop'" class="stop-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
+        </svg>
+        <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 19V5" />
+          <path d="m6 11 6-6 6 6" />
         </svg>
       </button>
     </div>
@@ -502,15 +538,15 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
   cursor: not-allowed;
 }
 
-.send-btn {
+.primary-action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 36px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--accent), var(--purple));
+  border-radius: 50%;
+  background: var(--accent);
   color: var(--text-on-accent);
   cursor: pointer;
   transition:
@@ -523,19 +559,92 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
   align-self: flex-end;
 }
 
-.send-btn:hover:not(:disabled) {
+:global([data-theme="dark"]) .input-area {
+  background: var(--bg-input);
+  border-color: var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:global([data-theme="dark"]) .input-area:focus-within {
+  background: var(--bg-input);
+  border-color: #494949;
+  box-shadow: 0 0 0 1px var(--border-subtle), 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+
+:global([data-theme="dark"]) .attach-btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+:global([data-theme="dark"]) .primary-action-btn {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.primary-action-btn:hover:not(:disabled) {
   filter: brightness(1.08);
   transform: translateY(-1px);
   box-shadow: var(--shadow-lg), var(--shadow-glow);
 }
 
-.send-btn:active:not(:disabled) {
+.primary-action-btn:active:not(:disabled) {
   transform: translateY(0);
   box-shadow: var(--shadow-xs);
 }
 
-.send-btn:disabled {
+.primary-action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.primary-action-btn--stop {
+  background: var(--text-primary);
+  border-color: color-mix(in srgb, var(--text-primary) 72%, transparent);
+  color: var(--layer-base);
+  box-shadow: var(--shadow-sm);
+}
+
+.primary-action-btn--stop:hover:not(:disabled) {
+  filter: none;
+  background: color-mix(in srgb, var(--text-primary) 88%, var(--text-secondary));
+  box-shadow: var(--shadow-md);
+}
+
+.primary-action-btn--canceling .stop-icon {
+  animation: stop-pulse 900ms ease-in-out infinite;
+}
+
+.primary-action-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@keyframes stop-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-action-btn,
+  .primary-action-btn--canceling .stop-icon {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .input-area {
+    padding-right: 108px;
+    min-height: 58px;
+  }
+
+  .attach-btn,
+  .primary-action-btn {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+  }
 }
 </style>

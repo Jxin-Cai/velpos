@@ -40,7 +40,9 @@ function getLabel(bound, channelType, instanceName) {
     :class="{ 'im-btn--bound': bound }"
     :disabled="disabled"
     @click="emit('click')"
+    data-tooltip="IM integration"
     title="IM Integration"
+    aria-label="Open IM integration"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -53,7 +55,7 @@ function getLabel(bound, channelType, instanceName) {
 <style scoped>
 .im-btn {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .im-btn::before {
@@ -63,6 +65,7 @@ function getLabel(bound, channelType, instanceName) {
   background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
   transform: translateX(-120%);
   transition: transform 420ms ease;
+  border-radius: inherit;
 }
 
 .im-btn:hover:not(:disabled)::before {

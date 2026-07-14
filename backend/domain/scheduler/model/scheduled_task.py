@@ -14,6 +14,9 @@ class ScheduledTask:
     name: str
     prompt: str
     cron_expr: str
+    execution_mode: str = "new_session"
+    prompt_mode: str = "prompt"
+    skill_name: str = ""
     enabled: bool = True
     auto_unbind_after_run: bool = True
     delete_session_on_success: bool = False
@@ -32,6 +35,9 @@ class ScheduledTask:
         channel_id: str = "",
         auto_unbind_after_run: bool = True,
         delete_session_on_success: bool = False,
+        execution_mode: str = "new_session",
+        prompt_mode: str = "prompt",
+        skill_name: str = "",
     ) -> ScheduledTask:
         task = cls(
             id=uuid.uuid4().hex[:8],
@@ -41,6 +47,9 @@ class ScheduledTask:
             name=name.strip() or "Scheduled task",
             prompt=prompt,
             cron_expr=cron_expr.strip() or "*/30 * * * *",
+            execution_mode=execution_mode,
+            prompt_mode=prompt_mode,
+            skill_name=skill_name.strip(),
             enabled=enabled,
             auto_unbind_after_run=auto_unbind_after_run,
             delete_session_on_success=delete_session_on_success,
@@ -60,6 +69,9 @@ class ScheduledTask:
         channel_id: str | None = None,
         auto_unbind_after_run: bool | None = None,
         delete_session_on_success: bool | None = None,
+        execution_mode: str | None = None,
+        prompt_mode: str | None = None,
+        skill_name: str | None = None,
     ) -> None:
         if name is not None:
             self.name = name.strip() or self.name
@@ -77,6 +89,12 @@ class ScheduledTask:
             self.auto_unbind_after_run = auto_unbind_after_run
         if delete_session_on_success is not None:
             self.delete_session_on_success = delete_session_on_success
+        if execution_mode is not None:
+            self.execution_mode = execution_mode
+        if prompt_mode is not None:
+            self.prompt_mode = prompt_mode
+        if skill_name is not None:
+            self.skill_name = skill_name.strip()
         self.schedule_next()
 
     def schedule_next(self, now: datetime | None = None) -> None:

@@ -45,6 +45,8 @@ const vbMode = ref(false)
 const pendingSelection = ref(null)
 const reviewComment = ref('')
 const reviews = ref([])
+const selectionAnchorLine = ref(null)
+const isSelectingLines = ref(false)
 const compareMode = ref(false)
 const versionCursor = ref(0)
 const versionContents = ref({})
@@ -130,6 +132,10 @@ watch(projectId, (newProjectId, oldProjectId) => {
 
 watch(drawerWidth, emitWidth)
 
+watch(vbMode, (enabled) => {
+  if (!enabled) cancelPendingReview()
+})
+
 function emitWidth() {
   emit('width-change', drawerWidth.value)
 }
@@ -150,6 +156,7 @@ async function selectFile(path) {
   pendingSelection.value = null
   reviewComment.value = ''
   reviews.value = []
+  selectionAnchorLine.value = null
   emitWidth()
 }
 
@@ -246,6 +253,7 @@ function resetContentState() {
   pendingSelection.value = null
   reviewComment.value = ''
   reviews.value = []
+  selectionAnchorLine.value = null
 }
 
 function closeContent() {
@@ -349,21 +357,83 @@ function handleCodeMouseUp() {
   if (!startEl || !endEl) return
   const start = Number(startEl.dataset.line)
   const end = Number(endEl.dataset.line)
+  setPendingSelection(start, end, text)
+}
+
+function setPendingSelection(start, end, selectedText = '', shouldFocus = true) {
+  const startLine = Math.max(1, Math.min(Number(start), Number(end)))
+  const endLine = Math.min(fileLines.value.length, Math.max(Number(start), Number(end)))
   pendingSelection.value = {
-    start_line: Math.min(start, end),
-    end_line: Math.max(start, end),
-    selected_text: text,
+    start_line: startLine,
+    end_line: endLine,
+    selected_text: selectedText || fileLines.value.slice(startLine - 1, endLine).join('\n'),
   }
-  nextTick(() => document.querySelector('.vb-comment-input')?.focus())
+  if (shouldFocus) nextTick(() => document.querySelector('.review-composer .vb-comment-input')?.focus())
+}
+
+function handleLinePointerDown(line, event) {
+  if (!vbMode.value || event.button !== 0) return
+  event.preventDefault()
+  const anchor = event.shiftKey && selectionAnchorLine.value ? selectionAnchorLine.value : line
+  if (!event.shiftKey) selectionAnchorLine.value = line
+  isSelectingLines.value = true
+  setPendingSelection(anchor, line, '', false)
+}
+
+function handleLineClick(line, event) {
+  if (!vbMode.value || event.detail !== 0) return
+  const anchor = event.shiftKey && selectionAnchorLine.value ? selectionAnchorLine.value : line
+  if (!event.shiftKey) selectionAnchorLine.value = line
+  setPendingSelection(anchor, line)
+}
+
+function handleLinePointerEnter(line) {
+  if (!vbMode.value || !isSelectingLines.value || !selectionAnchorLine.value) return
+  setPendingSelection(selectionAnchorLine.value, line, '', false)
+}
+
+function stopLineSelection() {
+  const shouldFocus = isSelectingLines.value
+  isSelectingLines.value = false
+  if (shouldFocus) nextTick(() => document.querySelector('.review-composer .vb-comment-input')?.focus())
+}
+
+function isPendingLine(line) {
+  const selection = pendingSelection.value
+  return Boolean(selection && line >= selection.start_line && line <= selection.end_line)
+}
+
+function reviewsOnLine(line) {
+  return reviews.value.filter((review) => line >= review.start_line && line <= review.end_line)
+}
+
+function reviewsEndingAt(line) {
+  return reviews.value.filter((review) => review.end_line === line)
+}
+
+function cancelPendingReview() {
+  pendingSelection.value = null
+  reviewComment.value = ''
+  isSelectingLines.value = false
+  window.getSelection()?.removeAllRanges()
+}
+
+function handleReviewComposerKeydown(event) {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault()
+    addSelectionReview()
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    cancelPendingReview()
+  }
 }
 
 function addSelectionReview() {
   const comment = reviewComment.value.trim()
   if (!pendingSelection.value || !comment) return
   reviews.value.push({ ...pendingSelection.value, comment })
-  reviewComment.value = ''
-  pendingSelection.value = null
-  window.getSelection()?.removeAllRanges()
+  cancelPendingReview()
 }
 
 function removeReview(index) {
@@ -500,16 +570,22 @@ function handleKeydown(event) {
     return
   }
   if (event.key === 'Escape') {
+    if (pendingSelection.value) {
+      cancelPendingReview()
+      return
+    }
     emit('close')
   }
 }
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
+  document.addEventListener('pointerup', stopLineSelection)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('pointerup', stopLineSelection)
   clearHistoryTransition()
 })
 
@@ -716,7 +792,20 @@ function nextDifference() {
           </div>
           <div class="viewer-actions">
             <button class="secondary-btn" :class="{ active: compareMode }" :disabled="selectedFile.is_binary" @click="toggleCompare">History</button>
-            <button class="secondary-btn" :class="{ active: vbMode }" :disabled="selectedFile.is_binary" @click="vbMode = !vbMode">VB</button>
+            <button
+              class="secondary-btn review-mode-btn"
+              :class="{ active: vbMode }"
+              :disabled="selectedFile.is_binary"
+              :aria-pressed="vbMode"
+              title="Select lines, leave comments, then apply all changes at once"
+              @click="vbMode = !vbMode"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
+                <path d="M8 9h8M8 13h5"/>
+              </svg>
+              Review<span v-if="reviews.length" class="review-button-count">{{ reviews.length }}</span>
+            </button>
             <button class="icon-btn small-icon" :aria-label="contentFullscreen ? 'Shrink file' : 'Fullscreen file'" @click="contentFullscreen = !contentFullscreen">
               <svg v-if="!contentFullscreen" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M14 5h5v5"/>
@@ -786,11 +875,55 @@ function nextDifference() {
               </div>
             </div>
           </div>
-          <div v-else class="code-view" @mouseup="handleCodeMouseUp">
-            <div v-for="(line, index) in highlightedFileLines" :key="index" class="code-line" :data-line="index + 1">
-              <span class="line-no">{{ index + 1 }}</span>
-              <pre v-html="line"></pre>
+          <div v-else class="code-view" :class="{ 'review-mode': vbMode }" @mouseup="handleCodeMouseUp">
+            <div v-if="vbMode" class="review-mode-banner">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
+              <span>Select lines to leave a comment</span>
+              <kbd>⌘ Enter</kbd>
             </div>
+            <template v-for="(line, index) in highlightedFileLines" :key="index">
+              <div
+                class="code-line"
+                :class="{
+                  'pending-line': isPendingLine(index + 1),
+                  'reviewed-line': reviewsOnLine(index + 1).length,
+                }"
+                :data-line="index + 1"
+                @pointerenter="handleLinePointerEnter(index + 1)"
+              >
+                <button
+                  class="line-no line-no-button"
+                  :class="{ selectable: vbMode }"
+                  :aria-label="vbMode ? `Select line ${index + 1}` : `Line ${index + 1}`"
+                  :tabindex="vbMode ? 0 : -1"
+                  @pointerdown="handleLinePointerDown(index + 1, $event)"
+                  @click="handleLineClick(index + 1, $event)"
+                >{{ index + 1 }}</button>
+                <pre v-html="line"></pre>
+                <span v-if="reviewsEndingAt(index + 1).length" class="line-review-dot" :title="`${reviewsEndingAt(index + 1).length} review comment(s)`">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
+                  </svg>
+                </span>
+              </div>
+              <div v-if="pendingSelection?.end_line === index + 1" class="review-composer" @mouseup.stop>
+                <div class="review-composer-heading">
+                  <span>Comment on {{ pendingSelection.start_line === pendingSelection.end_line ? `line ${pendingSelection.start_line}` : `lines ${pendingSelection.start_line}–${pendingSelection.end_line}` }}</span>
+                  <button aria-label="Cancel comment" title="Cancel" @click.stop="cancelPendingReview">×</button>
+                </div>
+                <textarea
+                  v-model="reviewComment"
+                  class="vb-comment-input"
+                  rows="3"
+                  placeholder="Describe what Codex should change…"
+                  @keydown="handleReviewComposerKeydown"
+                ></textarea>
+                <div class="review-composer-actions">
+                  <span>⌘ Enter to add</span>
+                  <button class="primary-btn" :disabled="!reviewComment.trim()" @click.stop="addSelectionReview">Add comment</button>
+                </div>
+              </div>
+            </template>
           </div>
 
           <section v-if="selectedDiff?.patch && !compareMode" class="diff-box">
@@ -799,24 +932,24 @@ function nextDifference() {
           </section>
 
           <section v-if="vbMode" class="vb-panel">
-            <div v-if="pendingSelection" class="selection-card">
-              <span>L{{ pendingSelection.start_line }}-{{ pendingSelection.end_line }}</span>
-              <blockquote>{{ pendingSelection.selected_text }}</blockquote>
-              <textarea v-model="reviewComment" class="vb-comment-input" placeholder="给选中的内容写评语"></textarea>
-              <button class="secondary-btn" @click="addSelectionReview">Add review</button>
+            <div class="review-queue-heading">
+              <div>
+                <strong>Review comments</strong>
+                <span>{{ reviews.length ? `${reviews.length} queued` : 'Select one or more lines above' }}</span>
+              </div>
+              <button v-if="reviews.length" class="text-btn" @click="reviews.splice(0)">Clear all</button>
             </div>
-            <div v-else class="selection-hint">鼠标选中文件内容后写评语。</div>
             <div class="review-list">
               <div v-for="(review, index) in reviews" :key="index" class="review-item">
-                <span>L{{ review.start_line }}-{{ review.end_line }}</span>
+                <span>{{ review.start_line === review.end_line ? `L${review.start_line}` : `L${review.start_line}–${review.end_line}` }}</span>
                 <p>{{ review.comment }}</p>
-                <button @click="removeReview(index)">Remove</button>
+                <button :aria-label="`Remove comment on lines ${review.start_line} to ${review.end_line}`" @click="removeReview(index)">×</button>
               </div>
             </div>
             <div class="vb-actions">
               <span>{{ vbMessage }}</span>
               <button class="primary-btn" :disabled="!canApplyVb" @click="applyVb">
-                {{ vbRunning ? 'VB running...' : 'Start VB' }}
+                {{ vbRunning ? 'Applying changes…' : reviews.length ? `Apply ${reviews.length} comment${reviews.length === 1 ? '' : 's'}` : 'Apply comments' }}
               </button>
             </div>
           </section>
@@ -852,11 +985,9 @@ function nextDifference() {
   width: 540px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--glass-border);
-  background: var(--glass-bg-strong);
-  box-shadow: var(--shadow-glass);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  box-shadow: -12px 0 28px rgba(0, 0, 0, 0.16);
 }
 
 .file-content-panel.fullscreen {
@@ -882,6 +1013,12 @@ function nextDifference() {
   border-bottom: 1px solid var(--glass-border);
   background: var(--layer-glass);
   flex-shrink: 0;
+}
+
+.viewer-header {
+  padding: 10px 12px;
+  border-bottom-color: var(--border-subtle);
+  background: var(--bg-secondary);
 }
 
 .workspace-header h2 {
@@ -911,6 +1048,25 @@ function nextDifference() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.review-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-button-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font: 600 10px/1 var(--font-mono);
 }
 
 .icon-btn {
@@ -1059,8 +1215,38 @@ function nextDifference() {
   overflow: auto;
   background: var(--bg-primary);
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 12.5px;
+  line-height: 20px;
+}
+
+.review-mode-banner {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font: 11px/1.4 var(--font-sans);
+}
+
+.review-mode-banner svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.review-mode-banner kbd {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: 10px/1.2 var(--font-mono);
+  white-space: nowrap;
 }
 
 .compare-shell {
@@ -1077,20 +1263,70 @@ function nextDifference() {
 
 .code-line {
   display: grid;
-  grid-template-columns: 52px 1fr;
+  grid-template-columns: 48px minmax(max-content, 1fr) 26px;
   min-width: max-content;
+  min-height: 20px;
+  transition: background var(--transition-fast);
 }
 
-.code-line:hover {
-  background: var(--bg-hover);
+.code-view.review-mode .code-line:hover {
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.code-line.pending-line {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.code-line.reviewed-line:not(.pending-line) {
+  background: color-mix(in srgb, var(--purple) 5%, transparent);
 }
 
 .line-no {
-  border-right: 1px solid var(--border-subtle);
+  border: 0;
   color: var(--text-muted);
   text-align: right;
-  padding: 0 10px;
+  padding: 0 9px 0 0;
   user-select: none;
+}
+
+.line-no-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: default;
+}
+
+.line-no-button.selectable {
+  color: var(--text-secondary);
+  cursor: crosshair;
+}
+
+.line-no-button.selectable:hover,
+.line-no-button.selectable:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.code-line.pending-line .line-no-button,
+.code-line.reviewed-line .line-no-button {
+  color: var(--accent);
+}
+
+.line-review-dot {
+  position: sticky;
+  right: 4px;
+  align-self: center;
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--purple);
+  color: var(--text-on-accent);
 }
 
 .code-line pre,
@@ -1098,7 +1334,110 @@ function nextDifference() {
 .history-line pre {
   margin: 0;
   white-space: pre;
-  padding: 0 12px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  line-height: inherit;
+}
+
+.code-line pre,
+.history-line pre {
+  overflow: visible;
+}
+
+.code-line pre {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.code-line pre::selection,
+.code-line pre :deep(*)::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.review-composer {
+  position: sticky;
+  left: 56px;
+  z-index: 5;
+  display: grid;
+  gap: 6px;
+  width: min(460px, calc(100vw - 456px));
+  margin: 5px 12px 10px 50px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.review-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim), 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+
+.file-content-panel.fullscreen .review-composer {
+  width: min(560px, calc(100vw - 96px));
+}
+
+.review-composer-heading,
+.review-composer-actions,
+.review-queue-heading,
+.review-queue-heading > div {
+  display: flex;
+  align-items: center;
+}
+
+.review-composer-heading,
+.review-composer-actions,
+.review-queue-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-composer-heading > span {
+  color: var(--text-secondary);
+  font: 500 11px/1.3 var(--font-sans);
+}
+
+.review-composer-heading button,
+.text-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.review-composer-heading button {
+  width: 26px;
+  height: 26px;
+  font-size: 18px;
+}
+
+.review-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 58px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: 12px/1.5 var(--font-sans);
+}
+
+.review-composer textarea:focus {
+  box-shadow: none;
+}
+
+.review-composer-actions > span {
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .code-line pre :deep(.hljs-keyword),
@@ -1156,10 +1495,35 @@ function nextDifference() {
 }
 
 .vb-panel {
-  border-top: 1px solid var(--border);
-  padding: 12px;
+  border-top: 1px solid var(--border-subtle);
+  padding: 10px 12px;
   background: var(--bg-secondary);
   flex-shrink: 0;
+}
+
+.review-queue-heading > div {
+  gap: 8px;
+}
+
+.review-queue-heading strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.review-queue-heading span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.text-btn {
+  min-height: 28px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.text-btn:hover,
+.text-btn:focus-visible {
+  color: var(--accent);
 }
 
 .selection-card {
@@ -1187,9 +1551,9 @@ function nextDifference() {
 
 .review-list {
   display: grid;
-  gap: 6px;
-  margin-top: 10px;
-  max-height: 120px;
+  gap: 0;
+  margin-top: 6px;
+  max-height: 150px;
   overflow: auto;
 }
 
@@ -1198,9 +1562,13 @@ function nextDifference() {
   grid-template-columns: 80px 1fr auto;
   gap: 8px;
   align-items: center;
-  padding: 6px 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  padding: 7px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.review-item:hover {
+  background: transparent;
 }
 
 .review-item p {
@@ -1214,6 +1582,10 @@ function nextDifference() {
   background: transparent;
   color: var(--red);
   cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  font-size: 17px;
 }
 
 .vb-actions {
@@ -1469,6 +1841,15 @@ function nextDifference() {
     top: 48px;
     right: 0;
     width: 100vw;
+  }
+
+  .file-content-panel {
+    z-index: 71;
+  }
+
+  .review-composer,
+  .file-content-panel.fullscreen .review-composer {
+    width: calc(100vw - 88px);
   }
 }
 </style>

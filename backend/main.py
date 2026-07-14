@@ -33,6 +33,7 @@ from ohs.http.project_router import router as project_router
 from ohs.http.scheduler_router import router as scheduler_router
 from ohs.http.session_router import router as session_router
 from ohs.http.session_timeline_router import router as session_timeline_router
+from ohs.http.trace_router import router as trace_router
 from ohs.http.settings_router import router as settings_router
 from ohs.http.terminal_router import router as terminal_router
 from ohs.http.usage_router import router as usage_router
@@ -114,6 +115,7 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.project_command_policy_model  # noqa: F401
     import infr.repository.project_memory_entry_model  # noqa: F401
     import infr.repository.claude_md_revision_model  # noqa: F401
+    import infr.repository.trace_span_model  # noqa: F401
 
     connectable = async_engine_from_config(
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
@@ -301,6 +303,7 @@ async def lifespan(app: FastAPI):
         get_weixin_adapter,
         get_lark_adapter,
         get_claude_agent_gateway,
+        get_trace_collector,
     )
 
     # Disconnect all Claude SDK clients (CLI subprocesses)
@@ -308,6 +311,11 @@ async def lifespan(app: FastAPI):
         await get_claude_agent_gateway().disconnect_all()
     except Exception:
         logger.error("Failed to disconnect SDK clients", exc_info=True)
+
+    try:
+        await get_trace_collector().stop()
+    except Exception:
+        logger.error("Failed to flush trace spans", exc_info=True)
 
     # Stop IM channel adapters
     try:
@@ -360,6 +368,7 @@ app.include_router(attachment_router)
 app.include_router(evolution_router)
 app.include_router(scheduler_router)
 app.include_router(session_timeline_router)
+app.include_router(trace_router)
 app.include_router(agent_router)
 app.include_router(plugin_router)
 app.include_router(command_router)

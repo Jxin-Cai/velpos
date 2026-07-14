@@ -11,6 +11,7 @@ import { SessionSidebar, useSessionList } from '@features/session-list'
 import { NotificationBell, useNotifications } from '@features/notification-center'
 import { WorkingSessionsButton, useWorkingSessions } from '@features/working-sessions'
 import { fetchSessionRunSteps } from '@features/task-progress'
+import { fetchTraceRuns } from '@features/trace-viewer'
 import { SettingsButton, SettingsDialog } from '@features/settings-manager'
 import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
@@ -30,13 +31,19 @@ const {
   // Targeted APIs (write to specific session by ID)
   updateSessionFor,
   addMessageTo,
+  removeMessageByClientIdFor,
   setMessagesFor,
   setRunStepsFor,
   upsertRunStepFor,
   setTimelineEventsFor,
   upsertTimelineEventFor,
+  upsertTraceSpanFor,
+  mergeTraceSpansFor,
+  linkUserMessageToRunFor,
   setStatusFor,
   setQueuedFor,
+  setQueuedCommandFor,
+  setSteeringQueuedFor,
   setErrorFor,
   setCancelingFor,
   getCancelingFor,
@@ -90,7 +97,7 @@ let vbRefresh = null
 async function handleApplyVb(payload) {
   if (!currentSessionId.value || !currentProject.value || vbRunning.value) return
   vbRunning.value = true
-  vbMessage.value = 'VB task started'
+  vbMessage.value = 'Review changes queued'
   vbRefresh = payload.refresh
   try {
     await applyVbReviews(currentSessionId.value, {
@@ -100,7 +107,7 @@ async function handleApplyVb(payload) {
     })
   } catch (e) {
     vbRunning.value = false
-    vbMessage.value = e.message || 'VB failed to start'
+    vbMessage.value = e.message || 'Could not start review changes'
     vbRefresh = null
   }
 }
@@ -216,9 +223,7 @@ provide('wsConnections', _connections) // 提供整个连接池给全局快捷�
 provide('switchSession', switchSession) // 提供session切换函数
 
 function syncRecoveryState(sessionId, sessionData) {
-  const hasQueued = Boolean(sessionData?.recovery?.queued_command)
-  const status = sessionData?.status || 'idle'
-  setQueuedFor(sessionId, hasQueued && status === 'running')
+  setQueuedCommandFor(sessionId, sessionData?.recovery?.queued_command || null)
 }
 
 async function loadLatestRunSteps(sessionId) {
@@ -236,6 +241,15 @@ async function loadTimelineEvents(sessionId) {
     setTimelineEventsFor(sessionId, data?.events || [])
   } catch (e) {
     console.debug('[VP] load timeline events failed:', e?.message || e)
+  }
+}
+
+async function loadTraceSpans(sessionId) {
+  try {
+    const data = await fetchTraceRuns(sessionId)
+    mergeTraceSpansFor(sessionId, data?.spans || [])
+  } catch (e) {
+    console.debug('[VP] load trace spans failed:', e?.message || e)
   }
 }
 
@@ -266,6 +280,7 @@ function setupUnifiedHandler(connection, sessionId) {
         }
         loadLatestRunSteps(sessionId)
         loadTimelineEvents(sessionId)
+        loadTraceSpans(sessionId)
         break
 
       case 'message':
@@ -313,7 +328,57 @@ function setupUnifiedHandler(connection, sessionId) {
         break
 
       case 'message_queued':
-        setQueuedFor(sessionId, true)
+        setSteeringQueuedFor(sessionId, false)
+        removeMessageByClientIdFor(sessionId, data.message_id)
+        setQueuedCommandFor(sessionId, {
+          message_id: data.message_id || '',
+          prompt: data.prompt || '',
+          image_count: data.image_count || 0,
+          attachment_count: data.attachment_count || 0,
+        })
+        break
+
+      case 'prompt_started':
+      case 'queue_started':
+        setSteeringQueuedFor(sessionId, false)
+        setQueuedCommandFor(sessionId, null)
+        removeMessageByClientIdFor(sessionId, data.message_id)
+        addMessageTo(sessionId, {
+          type: 'user',
+          content: {
+            message_id: data.message_id || '',
+            text: data.prompt || '',
+            ...(data.image_count ? { image_count: data.image_count } : {}),
+            ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+          },
+        })
+        break
+
+      case 'message_steered':
+        setSteeringQueuedFor(sessionId, false)
+        setQueuedCommandFor(sessionId, null)
+        removeMessageByClientIdFor(sessionId, data.message_id)
+        addMessageTo(sessionId, {
+          type: 'user',
+          content: {
+            message_id: data.message_id || '',
+            run_id: data.run_id || '',
+            text: data.prompt || '',
+            steered: true,
+            ...(data.image_count ? { image_count: data.image_count } : {}),
+            ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+          },
+        })
+        break
+
+      case 'steer_failed':
+        setSteeringQueuedFor(sessionId, false)
+        setErrorFor(sessionId, data.message || 'Unable to steer the queued message')
+        break
+
+      case 'queue_cleared':
+        setSteeringQueuedFor(sessionId, false)
+        setQueuedCommandFor(sessionId, null)
         break
 
       case 'resource_waiting':
@@ -349,6 +414,14 @@ function setupUnifiedHandler(connection, sessionId) {
 
       case 'timeline_event':
         upsertTimelineEventFor(sessionId, data.timeline_event)
+        break
+
+      case 'trace_span':
+        upsertTraceSpanFor(sessionId, data.span)
+        break
+
+      case 'trace_run_started':
+        linkUserMessageToRunFor(sessionId, data.message_id, data.run_id)
         break
 
       case 'user_choice_request':
@@ -396,14 +469,14 @@ function setupUnifiedHandler(connection, sessionId) {
       case 'vb_started':
         if (isCurrent) {
           vbRunning.value = true
-          vbMessage.value = 'VB is modifying the file...'
+          vbMessage.value = 'Codex is applying review comments…'
         }
         break
 
       case 'vb_completed':
         if (isCurrent) {
           vbRunning.value = false
-          vbMessage.value = 'VB completed'
+          vbMessage.value = 'Review changes applied'
           vbRefresh?.()
           vbRefresh = null
         }
@@ -412,7 +485,7 @@ function setupUnifiedHandler(connection, sessionId) {
       case 'vb_failed':
         if (isCurrent) {
           vbRunning.value = false
-          vbMessage.value = data.message || 'VB failed'
+          vbMessage.value = data.message || 'Could not apply review changes'
           vbRefresh = null
         }
         break
@@ -798,10 +871,7 @@ useGlobalHotkeys({
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background:
-    linear-gradient(135deg, rgba(97, 175, 239, 0.08), transparent 34%),
-    radial-gradient(circle at 82% 14%, rgba(198, 120, 221, 0.1), transparent 30%),
-    var(--layer-base);
+  background: var(--layer-base);
   transition: background var(--transition-base);
 }
 
@@ -840,7 +910,7 @@ useGlobalHotkeys({
   overflow: hidden;
   position: relative;
   background: var(--layer-workspace);
-  border-top: 1px solid rgba(255, 255, 255, 0.02);
+  border-top: 1px solid var(--border-subtle);
   transition:
     padding-bottom var(--motion-emphasis) var(--ease-out),
     padding-right var(--motion-medium) var(--ease-out),

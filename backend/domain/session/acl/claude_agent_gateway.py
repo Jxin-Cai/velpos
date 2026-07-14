@@ -71,6 +71,11 @@ class ClaudeAgentGateway(ABC):
         ...
 
     @abstractmethod
+    async def steer(self, session_id: str, prompt: str) -> None:
+        """Insert a user message into the query currently streaming for a session."""
+        ...
+
+    @abstractmethod
     async def disconnect(self, session_id: str) -> None:
         """Disconnect and cleanup the SDK client for a session.
 

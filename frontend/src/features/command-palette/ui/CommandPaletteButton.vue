@@ -16,6 +16,7 @@ const emit = defineEmits(['click'])
     @click="emit('click')"
     data-tooltip="Skills"
     title="View available commands"
+    aria-label="View available commands and skills"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="4 17 10 11 4 5" />
@@ -70,7 +71,7 @@ const emit = defineEmits(['click'])
   z-index: 100;
 }
 
-.cmd-btn[data-tooltip]:hover:not(:disabled)::after {
+.cmd-btn[data-tooltip]:is(:hover, :focus-visible)::after {
   opacity: 1;
   transform: translateX(-50%) scale(1);
 }

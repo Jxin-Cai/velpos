@@ -11,6 +11,7 @@ const emit = defineEmits(['click'])
     :disabled="disabled"
     data-tooltip="Rule"
     title="Project Rules — View and edit CLAUDE.md and rules"
+    aria-label="View and edit project rules"
     @click="emit('click')"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -49,7 +50,7 @@ const emit = defineEmits(['click'])
   box-shadow: var(--shadow-sm);
   z-index: 100;
 }
-.toolbar-btn[data-tooltip]:hover:not(:disabled)::after {
+.toolbar-btn[data-tooltip]:is(:hover, :focus-visible)::after {
   opacity: 1;
   transform: translateX(-50%) scale(1);
 }
