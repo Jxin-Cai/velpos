@@ -5,6 +5,7 @@ import hljs from 'highlight.js/lib/common'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useTimeout } from '@shared/lib/useTimeout'
 import { escapeHtml } from '@shared/lib/escapeHtml'
+import { cachedParse } from '@features/message-display/lib/markdownConfig'
 import { useWorkspace } from '../model/useWorkspace'
 import { getFilePreviewType, getFileRawUrl } from '../lib/fileTypes'
 import ImagePreview from './ImagePreview.vue'
@@ -48,6 +49,7 @@ const reviews = ref([])
 const selectionAnchorLine = ref(null)
 const isSelectingLines = ref(false)
 const compareMode = ref(false)
+const markdownMode = ref('preview')
 const versionCursor = ref(0)
 const versionContents = ref({})
 const diffCursor = ref(-1)
@@ -69,6 +71,13 @@ const binaryPreviewUrl = computed(() => {
   if (!selectedFile.value || !projectId.value) return ''
   return getFileRawUrl(projectId.value, selectedFile.value.path)
 })
+const isMarkdownFile = computed(() => {
+  const path = selectedFile.value?.path || ''
+  return /\.md(?:own)?$/i.test(path)
+})
+const renderedMarkdown = computed(() => (
+  isMarkdownFile.value ? cachedParse(selectedFile.value?.content || '') : ''
+))
 const drawerWidth = computed(() => {
   if (!props.visible) return 0
   if (contentFullscreen.value) return 0
@@ -149,6 +158,7 @@ async function selectFile(path) {
   contentOpen.value = true
   vbMode.value = false
   compareMode.value = false
+  markdownMode.value = 'preview'
   versionCursor.value = 0
   versionContents.value = {}
   clearHistoryTransition()
@@ -246,6 +256,7 @@ function resetContentState() {
   contentOpen.value = false
   contentFullscreen.value = false
   compareMode.value = false
+  markdownMode.value = 'preview'
   versionCursor.value = 0
   versionContents.value = {}
   clearHistoryTransition()
@@ -791,11 +802,23 @@ function nextDifference() {
             <span v-if="selectedFile.is_binary">binary</span>
           </div>
           <div class="viewer-actions">
+            <div v-if="isMarkdownFile" class="viewer-mode-toggle" role="group" aria-label="Markdown view mode">
+              <button
+                class="secondary-btn"
+                :class="{ active: markdownMode === 'preview' }"
+                @click="markdownMode = 'preview'"
+              >Preview</button>
+              <button
+                class="secondary-btn"
+                :class="{ active: markdownMode === 'code' }"
+                @click="markdownMode = 'code'"
+              >Code</button>
+            </div>
             <button class="secondary-btn" :class="{ active: compareMode }" :disabled="selectedFile.is_binary" @click="toggleCompare">History</button>
             <button
               class="secondary-btn review-mode-btn"
               :class="{ active: vbMode }"
-              :disabled="selectedFile.is_binary"
+              :disabled="selectedFile.is_binary || (isMarkdownFile && markdownMode === 'preview')"
               :aria-pressed="vbMode"
               title="Select lines, leave comments, then apply all changes at once"
               @click="vbMode = !vbMode"
@@ -875,7 +898,7 @@ function nextDifference() {
               </div>
             </div>
           </div>
-          <div v-else class="code-view" :class="{ 'review-mode': vbMode }" @mouseup="handleCodeMouseUp">
+          <div v-else-if="!isMarkdownFile || markdownMode === 'code'" class="code-view" :class="{ 'review-mode': vbMode }" @mouseup="handleCodeMouseUp">
             <div v-if="vbMode" class="review-mode-banner">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
               <span>Select lines to leave a comment</span>
@@ -925,6 +948,8 @@ function nextDifference() {
               </div>
             </template>
           </div>
+
+          <article v-else class="markdown-file-preview markdown-body" v-html="renderedMarkdown"></article>
 
           <section v-if="selectedDiff?.patch && !compareMode" class="diff-box">
             <div class="diff-title">Diff</div>
@@ -1048,6 +1073,23 @@ function nextDifference() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.viewer-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.viewer-mode-toggle .secondary-btn {
+  min-height: 26px;
+  padding: 3px 8px;
+  border-color: transparent;
+  font-size: 11px;
 }
 
 .review-mode-btn {
@@ -1217,6 +1259,28 @@ function nextDifference() {
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 20px;
+}
+
+.markdown-file-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 48px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+.markdown-file-preview :deep(pre) {
+  overflow-x: auto;
+}
+
+.markdown-file-preview :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-file-preview :deep(a) {
+  color: var(--accent);
 }
 
 .review-mode-banner {

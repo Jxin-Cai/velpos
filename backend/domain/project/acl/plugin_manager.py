@@ -67,6 +67,31 @@ class PluginManager(ABC):
         ...
 
     @abstractmethod
+    async def upgrade_plugin(self, plugin: str, project_dir: str) -> str:
+        """Upgrade a single plugin to the latest version.
+
+        Args:
+            plugin: Plugin identifier (e.g. "tw-all@thoughtworks").
+            project_dir: Project directory for scope=project.
+
+        Returns:
+            CLI output message.
+        """
+        ...
+
+    @abstractmethod
+    async def upgrade_all_plugins(self, project_dir: str) -> str:
+        """Upgrade all installed plugins to their latest versions.
+
+        Args:
+            project_dir: Project directory for scope=project.
+
+        Returns:
+            CLI output message.
+        """
+        ...
+
+    @abstractmethod
     def is_marketplace_added(self, name: str) -> bool:
         """Check if a marketplace is already configured.
 

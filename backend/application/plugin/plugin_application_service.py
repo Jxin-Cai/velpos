@@ -23,3 +23,11 @@ class PluginApplicationService:
     async def uninstall_plugin(self, plugin: str, project_dir: str) -> str:
         logger.info("Uninstalling plugin: %s (project=%s)", plugin, project_dir)
         return await self._plugin_manager.uninstall_plugin(plugin, project_dir)
+
+    async def upgrade_plugin(self, plugin: str, project_dir: str) -> str:
+        logger.info("Upgrading plugin: %s (project=%s)", plugin, project_dir)
+        return await self._plugin_manager.upgrade_plugin(plugin, project_dir)
+
+    async def upgrade_all_plugins(self, project_dir: str) -> str:
+        logger.info("Upgrading all plugins (project=%s)", project_dir)
+        return await self._plugin_manager.upgrade_all_plugins(project_dir)

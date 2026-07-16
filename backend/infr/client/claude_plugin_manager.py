@@ -143,6 +143,48 @@ class ClaudePluginManager(PluginManagerPort):
             args.append(name)
         return await self._run_cli(args, cwd=str(Path.home()))
 
+    async def upgrade_plugin(self, plugin: str, project_dir: str) -> str:
+        return await self._run_cli(
+            ["plugin", "install", plugin, "-s", "project"],
+            cwd=project_dir,
+        )
+
+    async def upgrade_all_plugins(self, project_dir: str) -> str:
+        installed = self._read_installed_plugins()
+        project_enabled = self._read_project_enabled(project_dir)
+
+        project_plugins: list[str] = []
+        for plugin_key, installs in installed.items():
+            for install_info in installs:
+                if (
+                    install_info.get("scope") == "project"
+                    and install_info.get("projectPath", "") == project_dir
+                ):
+                    project_plugins.append(plugin_key)
+                    break
+
+        # Also include plugins from project enabledPlugins not yet in installed list
+        for enabled_key in project_enabled:
+            if enabled_key not in project_plugins:
+                project_plugins.append(enabled_key)
+
+        if not project_plugins:
+            return "No project-scoped plugins to upgrade."
+
+        results: list[str] = []
+        for plugin_key in project_plugins:
+            try:
+                output = await self._run_cli(
+                    ["plugin", "install", plugin_key, "-s", "project"],
+                    cwd=project_dir,
+                )
+                results.append(f"{plugin_key}: {output}")
+            except RuntimeError as e:
+                results.append(f"{plugin_key}: FAILED - {e}")
+                logger.warning("Failed to upgrade plugin %s: %s", plugin_key, e)
+
+        return "\n".join(results)
+
     def is_marketplace_added(self, name: str) -> bool:
         marketplaces_json = self._plugins_dir / "known_marketplaces.json"
         if not marketplaces_json.exists():

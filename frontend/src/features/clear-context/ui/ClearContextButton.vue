@@ -42,7 +42,7 @@ function handleClick() {
 
 <template>
   <button
-    class="clear-ctx-btn"
+    class="glass-btn glass-btn--accent clear-ctx-btn"
     :class="{
       'clear-ctx-btn--confirming': confirming,
       'clear-ctx-btn--disabled': disabled || clearing,
@@ -70,49 +70,8 @@ function handleClick() {
 <style scoped>
 .clear-ctx-btn {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
-  color: var(--text-secondary);
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
   padding: 6px 8px;
   min-height: 30px;
-  border-radius: var(--radius-md);
-  font-size: 11px;
-  cursor: pointer;
-  backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(var(--glass-saturate));
-  transition:
-    color var(--transition-fast),
-    background var(--transition-fast),
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
-  font-family: var(--font-sans);
-  white-space: nowrap;
-}
-
-
-.clear-ctx-btn:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--layer-active);
-  border-color: var(--accent);
-  box-shadow: var(--shadow-sm);
-}
-
-:global([data-theme="dark"]) .clear-ctx-btn {
-  background: transparent;
-  border-color: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-:global([data-theme="dark"]) .clear-ctx-btn:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-  border-color: var(--border);
-  color: var(--text-primary);
-  box-shadow: none;
 }
 
 .clear-ctx-btn--confirming {
@@ -135,11 +94,6 @@ function handleClick() {
 .clear-ctx-btn--disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-.clear-ctx-btn:active:not(:disabled) {
-  transform: scale(0.96);
-  transition-duration: 100ms;
 }
 
 .clear-ctx-btn[data-tooltip]::after {

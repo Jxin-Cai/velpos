@@ -36,3 +36,12 @@ class PluginListResponse(BaseModel):
 
 class PluginActionResponse(BaseModel):
     message: str
+
+
+class PluginUpgradeAllRequest(BaseModel):
+    project_dir: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Project directory path for scope=project",
+    )
