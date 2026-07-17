@@ -270,11 +270,11 @@ function nextRuleDiff() {
 <template>
   <Teleport to="body">
     <Transition name="dialog-fade">
-      <div v-if="visible" class="memory-overlay" @click.self="emit('close')">
+      <div v-if="visible" class="memory-overlay" @click.self="emit('close')" role="dialog" aria-modal="true" aria-labelledby="memory-dialog-title">
         <div class="memory-dialog" :class="{ 'memory-dialog--editing': editing || ruleEditing }">
           <div class="memory-header">
             <div>
-              <h3 class="memory-title">Project Rules</h3>
+              <h3 id="memory-dialog-title" class="memory-title">Project Rules</h3>
               <div class="memory-subtitle">CLAUDE.md and project rules</div>
             </div>
             <div class="header-actions">
@@ -317,7 +317,7 @@ function nextRuleDiff() {
                   <button class="action-btn cancel" @click="cancelRuleEdit">Cancel</button>
                 </template>
               </template>
-              <button class="close-btn" @click="emit('close')">
+              <button class="close-btn" type="button" aria-label="Close Project Rules" @click="emit('close')">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
@@ -499,15 +499,17 @@ function nextRuleDiff() {
 <style scoped>
 .memory-overlay {
   position: fixed; inset: 0; z-index: 100;
-  background: var(--bg-overlay);
+  padding: var(--dialog-gutter);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
   display: flex; align-items: center; justify-content: center;
 }
 .memory-dialog {
-  width: 1040px; max-width: 94vw; max-height: 84vh;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  width: 1040px; max-width: 100%; max-height: calc(100dvh - (var(--dialog-gutter) * 2));
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex; flex-direction: column;
   overflow: hidden;
   transition: width 0.2s ease;
@@ -516,7 +518,7 @@ function nextRuleDiff() {
 .memory-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--dialog-divider);
   flex-shrink: 0;
 }
 .memory-title {
@@ -549,9 +551,10 @@ function nextRuleDiff() {
   background: var(--accent-dim);
 }
 .close-btn {
-  background: transparent; border: none;
+  width: 36px; height: 36px; justify-content: center;
+  background: transparent; border: 1px solid transparent;
   color: var(--text-muted); cursor: pointer;
-  padding: 4px; border-radius: var(--radius-sm);
+  padding: 0; border-radius: var(--radius-md);
   transition: color var(--transition-fast), background var(--transition-fast);
   display: flex; align-items: center;
 }

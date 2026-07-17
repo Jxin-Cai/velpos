@@ -120,11 +120,11 @@ watch(() => props.visible, (val) => {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')">
+    <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')" role="dialog" aria-modal="true" aria-labelledby="git-dialog-title">
       <div class="dialog">
         <div class="dialog-header">
-          <h2>Git Management</h2>
-          <button class="close-btn" @click="emit('close')" title="Close">
+          <h2 id="git-dialog-title">Git Management</h2>
+          <button class="close-btn" type="button" aria-label="Close Git Management" @click="emit('close')">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
@@ -256,29 +256,29 @@ watch(() => props.visible, (val) => {
 
 <style scoped>
 .dialog-overlay {
-  background: var(--overlay-glass);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   z-index: 1000;
 }
 
 .dialog {
-  background: var(--glass-bg-strong);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg, 12px);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
   width: 560px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-glass);
+  box-shadow: var(--dialog-shadow);
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 .dialog-header {
-  border-bottom: 1px solid var(--glass-border);
-  background: var(--layer-glass);
+  border-bottom: 1px solid var(--dialog-divider);
+  background: transparent;
 }
 
 .dialog-header h2 {

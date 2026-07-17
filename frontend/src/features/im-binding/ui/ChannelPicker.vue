@@ -279,7 +279,7 @@ function cancelRename() {
     <!-- Delete confirmation -->
     <Transition name="confirm-fade">
       <div v-if="confirmingDelete" class="confirm-overlay" @click.self="cancelDelete">
-        <div class="confirm-card">
+        <div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="delete-instance-title" aria-describedby="delete-instance-description">
           <div class="confirm-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
@@ -287,8 +287,8 @@ function cancelRename() {
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
           </div>
-          <p class="confirm-title">Delete instance?</p>
-          <p class="confirm-desc">
+          <p id="delete-instance-title" class="confirm-title">Delete instance?</p>
+          <p id="delete-instance-description" class="confirm-desc">
             <strong>{{ confirmingDelete.name || confirmingDelete.id }}</strong> will be removed.
             <template v-if="confirmingDelete.bound_session_id">The bound session will be disconnected.</template>
           </p>
@@ -629,7 +629,9 @@ function cancelRename() {
 .confirm-overlay {
   position: absolute;
   inset: 0;
-  background: var(--bg-overlay, rgba(0, 0, 0, 0.4));
+  padding: 12px;
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(6px);
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
@@ -643,10 +645,10 @@ function cancelRename() {
   align-items: center;
   gap: 10px;
   padding: 20px 24px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   max-width: 280px;
   text-align: center;
 }

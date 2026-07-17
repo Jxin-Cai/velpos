@@ -42,7 +42,7 @@ function handleClick() {
 
 <template>
   <button
-    class="glass-btn glass-btn--accent clear-ctx-btn"
+    class="toolbar-btn clear-ctx-btn"
     :class="{
       'clear-ctx-btn--confirming': confirming,
       'clear-ctx-btn--disabled': disabled || clearing,

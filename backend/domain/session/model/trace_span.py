@@ -27,6 +27,7 @@ class TraceSpan:
 
     SPAN_TYPE_LLM_TURN = "llm_turn"
     SPAN_TYPE_TOOL_CALL = "tool_call"
+    SPAN_TYPE_AGENT = "agent"
     SPAN_TYPE_SUBAGENT = "subagent"
     SPAN_TYPE_RUN = "run"
 
@@ -72,7 +73,11 @@ class TraceSpan:
 
     def complete(self, output_preview: str | None = None, metadata: dict[str, Any] | None = None) -> None:
         self.status = self.STATUS_COMPLETED
-        self.output_preview = output_preview
+        # A turn gets its assistant preview when it is created, then is closed by
+        # the next stream event or Stop hook.  Do not erase that useful payload
+        # when the closing event has no additional output.
+        if output_preview is not None:
+            self.output_preview = output_preview
         if metadata:
             self.metadata.update(metadata)
         self.ended_time = datetime.now()

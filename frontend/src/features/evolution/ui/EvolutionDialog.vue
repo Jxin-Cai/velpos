@@ -68,14 +68,16 @@ async function handleCreateDraft() {
 <template>
   <Teleport to="body">
     <Transition name="dialog-fade">
-      <div v-if="visible" class="evolution-overlay" @click.self="emit('close')">
+      <div v-if="visible" class="evolution-overlay" @click.self="emit('close')" role="dialog" aria-modal="true" aria-labelledby="evolution-dialog-title">
         <div class="evolution-dialog">
           <div class="evolution-header">
             <div>
-              <h3>Evolution</h3>
+              <h3 id="evolution-dialog-title">Evolution</h3>
               <p>Extract reusable lessons from this session and turn them into a CLAUDE.md version or rule draft</p>
             </div>
-            <button class="close-btn" @click="emit('close')">×</button>
+            <button class="close-btn" type="button" aria-label="Close Evolution" @click="emit('close')">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </div>
 
           <div v-if="error" class="notice">{{ error }}</div>
@@ -151,12 +153,12 @@ async function handleCreateDraft() {
 </template>
 
 <style scoped>
-.evolution-overlay { position: fixed; inset: 0; z-index: 100; background: var(--bg-overlay); display: flex; align-items: center; justify-content: center; }
-.evolution-dialog { width: 860px; max-width: 94vw; max-height: 84vh; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); overflow: hidden; display: flex; flex-direction: column; }
+.evolution-overlay { position: fixed; inset: 0; z-index: 100; padding: var(--dialog-gutter); background: var(--dialog-overlay); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; }
+.evolution-dialog { width: 860px; max-width: 100%; max-height: calc(100dvh - (var(--dialog-gutter) * 2)); background: var(--dialog-surface); border: 1px solid var(--dialog-border); border-radius: var(--dialog-radius); box-shadow: var(--dialog-shadow); overflow: hidden; display: flex; flex-direction: column; }
 .evolution-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .evolution-header h3 { margin: 0; font-size: 15px; color: var(--text-primary); }
 .evolution-header p { margin: 3px 0 0; font-size: 12px; color: var(--text-muted); max-width: 560px; }
-.close-btn { border: none; background: transparent; color: var(--text-muted); font-size: 24px; cursor: pointer; }
+.close-btn { flex: 0 0 36px; border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; }
 .notice { padding: 8px 18px; color: var(--danger, #ef4444); background: var(--bg-tertiary); border-bottom: 1px solid var(--border); font-size: 12px; }
 .success { padding: 8px 18px; color: var(--success, #22c55e); background: var(--bg-tertiary); border-bottom: 1px solid var(--border); font-size: 12px; }
 .evolution-body { padding: 14px; overflow-y: auto; min-height: 460px; }

@@ -31,14 +31,13 @@ def create_observability_hooks(
                 collector, session_id, run_id_ref[0], agent_id,
             )
 
-            collector.create_span(
+            collector.ensure_tool_span(
                 session_id=session_id,
                 run_id=run_id_ref[0],
-                span_type=TraceSpan.SPAN_TYPE_TOOL_CALL,
+                tool_use_id=actual_tool_use_id,
                 name=tool_name,
                 parent_span_id=parent_span_id,
                 agent_id=agent_id,
-                tool_use_id=actual_tool_use_id,
                 input_preview=sanitize_and_truncate(tool_input),
                 metadata={"agent_type": hook_input.get("agent_type", "")},
             )
@@ -75,6 +74,16 @@ def create_observability_hooks(
         try:
             agent_id = hook_input.get("agent_id", "")
             agent_type = hook_input.get("agent_type", "subagent")
+            invocation = next((
+                hook_input.get(key) for key in (
+                    "prompt", "description", "task", "subagent_prompt", "input",
+                ) if hook_input.get(key) is not None
+            ), None)
+            if invocation is None and tool_use_id:
+                parent_tool = collector.find_span_by_tool_use_id(
+                    session_id, run_id_ref[0], tool_use_id,
+                )
+                invocation = parent_tool.input_preview if parent_tool else None
 
             parent_span_id = _resolve_parent_for_subagent(
                 collector, session_id, run_id_ref[0], tool_use_id,
@@ -88,7 +97,14 @@ def create_observability_hooks(
                 parent_span_id=parent_span_id,
                 agent_id=agent_id,
                 tool_use_id=tool_use_id,
-                metadata={"agent_type": agent_type},
+                input_preview=sanitize_and_truncate(invocation),
+                metadata={
+                    "agent_type": agent_type,
+                    "agent_id": agent_id,
+                    "tool_use_id": tool_use_id or "",
+                    "model": hook_input.get("model", ""),
+                    "permission_mode": hook_input.get("permission_mode", ""),
+                },
             )
         except Exception:
             logger.debug("trace hook on_subagent_start error", exc_info=True)
@@ -99,10 +115,21 @@ def create_observability_hooks(
             agent_id = hook_input.get("agent_id", "")
             span = collector.find_running_by_agent_id(session_id, agent_id)
             if span:
+                child_turn = collector.find_latest_turn_for_parent(span.id)
+                returned = next((
+                    hook_input.get(key) for key in (
+                        "result", "output", "summary", "response", "agent_output",
+                    ) if hook_input.get(key) is not None
+                ), None)
+                returned_preview = sanitize_and_truncate(returned) if returned is not None else None
+                if returned_preview is None and child_turn:
+                    returned_preview = child_turn.output_preview
                 collector.complete_span(
                     span.id,
+                    output_preview=returned_preview,
                     metadata={
                         "agent_type": hook_input.get("agent_type", ""),
+                        "agent_id": agent_id,
                         "transcript_path": hook_input.get("agent_transcript_path", ""),
                     },
                 )

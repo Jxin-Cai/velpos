@@ -140,10 +140,10 @@ function handleCancel() {
       @click.self="handleCancel"
       role="dialog"
       aria-modal="true"
-      aria-label="Create new project"
+      aria-labelledby="create-project-dialog-title"
     >
       <div class="dialog">
-        <h2 class="dialog-title">New Project</h2>
+        <h2 id="create-project-dialog-title" class="dialog-title">New Project</h2>
 
         <div class="mode-switch">
           <button
@@ -261,11 +261,11 @@ function handleCancel() {
 .dialog {
   width: 520px;
   max-width: calc(100vw - 32px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
   padding: 24px;
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--dialog-shadow);
 }
 
 .dialog-title {

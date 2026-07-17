@@ -78,12 +78,14 @@ function handleClose() {
       @click.self="handleClose"
       role="dialog"
       aria-modal="true"
-      aria-label="Plugin Manager"
+      aria-labelledby="plugin-dialog-title"
     >
       <div class="dialog">
         <div class="dialog-header">
-          <h2 class="dialog-title">Plugin Manager</h2>
-          <button class="close-btn" @click="handleClose">&times;</button>
+          <h2 id="plugin-dialog-title" class="dialog-title">Plugin Manager</h2>
+          <button class="close-btn" type="button" aria-label="Close Plugin Manager" @click="handleClose">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+          </button>
         </div>
 
         <div v-if="error" class="error-banner">
@@ -179,10 +181,10 @@ function handleClose() {
   width: 560px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
 }

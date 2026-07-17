@@ -643,6 +643,10 @@ let _parallelBranchSeq = 0
 const compareResult = ref(null)
 const showCompareResult = ref(false)
 const convergingBranchId = ref('')
+const pendingConvergeBranch = ref(null)
+const convergeConfirmMessage = computed(() => pendingConvergeBranch.value?.worktree_enabled
+  ? '保留该 worktree 会话会把已提交内容 merge 回主干；若有未提交变更会失败并保留现场。'
+  : '保留该会话会删除其他并行会话。')
 
 const multiSessionCandidates = computed(() => messages.value.map((message, index) => ({
   index,
@@ -681,12 +685,15 @@ function branchDisplayName(branch) {
   return branch.name || branch.branch_session_id
 }
 
-async function handleKeepBranch(branch) {
+function handleKeepBranch(branch) {
   if (!branch?.branch_session_id || !currentSessionId.value) return
-  const message = branch.worktree_enabled
-    ? '保留该 worktree 会话会把已提交内容 merge 回主干；若有未提交变更会失败并保留现场。继续？'
-    : '保留该会话会删除其他并行会话。继续？'
-  if (!window.confirm(message)) return
+  pendingConvergeBranch.value = branch
+}
+
+async function confirmKeepBranch() {
+  const branch = pendingConvergeBranch.value
+  if (!branch?.branch_session_id || !currentSessionId.value) return
+  pendingConvergeBranch.value = null
   convergingBranchId.value = branch.branch_session_id
   try {
     await convergeSessionBranches(currentSessionId.value, branch.branch_session_id)
@@ -1075,15 +1082,20 @@ function formatMaxTokens(n) {
         <div
           ref="rewindPickerRef"
           class="rewind-picker"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rewind-dialog-title"
           tabindex="-1"
           @keydown="handleRewindKeydown"
         >
           <div class="rewind-header">
             <div>
-              <div class="rewind-title">回退到历史输入</div>
+              <div id="rewind-dialog-title" class="rewind-title">回退到历史输入</div>
               <div class="rewind-subtitle">选择后会撤回该输入及之后的上下文，并恢复到输入框</div>
             </div>
-            <button class="rewind-close" type="button" aria-label="关闭回退面板" @click="closeRewindPicker">×</button>
+            <button class="rewind-close" type="button" aria-label="关闭回退面板" @click="closeRewindPicker">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </div>
           <div class="rewind-search-wrapper">
             <svg class="rewind-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1677,7 +1689,9 @@ function formatMaxTokens(n) {
                 <h3 id="multi-session-title">多会话分支</h3>
                 <p>从指定消息复制上下文，快速创建并行会话用于方案探索、对比和收敛。</p>
               </div>
-              <button class="close-btn" type="button" aria-label="Close multi-session dialog" @click="showMultiSessionDialog = false">×</button>
+              <button class="close-btn" type="button" aria-label="Close multi-session dialog" @click="showMultiSessionDialog = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+              </button>
             </div>
             <div class="multi-session-body">
               <section class="multi-session-card multi-session-card--setup">
@@ -1776,6 +1790,21 @@ function formatMaxTokens(n) {
               <button class="primary-btn" type="button" :disabled="isRunning" @click="handleBranchSession">Create {{ multiSessionCount }} session{{ multiSessionCount === 1 ? '' : 's' }}</button>
             </div>
           </div>
+          <div v-if="pendingConvergeBranch" class="converge-confirm-overlay" @click.self="pendingConvergeBranch = null">
+            <section class="converge-confirm" role="alertdialog" aria-modal="true" aria-labelledby="converge-confirm-title" aria-describedby="converge-confirm-description">
+              <div class="confirm-symbol" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 9v4m0 4h.01M10.3 3.7 2.4 17.3A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.7L13.7 3.7a2 2 0 0 0-3.4 0Z" /></svg>
+              </div>
+              <div>
+                <h3 id="converge-confirm-title">保留这个并行分支？</h3>
+                <p id="converge-confirm-description">{{ convergeConfirmMessage }}</p>
+              </div>
+              <div class="converge-confirm-actions">
+                <button class="secondary-btn" type="button" @click="pendingConvergeBranch = null">取消</button>
+                <button class="danger-btn" type="button" @click="confirmKeepBranch">保留并收敛</button>
+              </div>
+            </section>
+          </div>
         </div>
       </Transition>
     </Teleport>
@@ -1783,13 +1812,15 @@ function formatMaxTokens(n) {
     <Teleport to="body">
       <Transition name="dialog-fade">
         <div v-if="showCompareResult" class="multi-session-overlay" @click.self="closeCompareResult">
-          <div class="compare-dialog">
+          <div class="compare-dialog" role="dialog" aria-modal="true" aria-labelledby="compare-dialog-title">
             <div class="multi-session-header">
               <div>
-                <h3>Compare Sessions</h3>
+                <h3 id="compare-dialog-title">Compare Sessions</h3>
                 <p>Common prefix and diverged message counts.</p>
               </div>
-              <button class="close-btn" @click="closeCompareResult">×</button>
+              <button class="close-btn" type="button" aria-label="Close session comparison" @click="closeCompareResult">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+              </button>
             </div>
             <div v-if="compareResult" class="compare-grid">
               <div><strong>{{ compareResult.common_prefix_count }}</strong><span>Common</span></div>
@@ -2438,20 +2469,21 @@ function formatMaxTokens(n) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--overlay-glass);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  padding: var(--dialog-gutter);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .multi-session-dialog,
 .compare-dialog {
   width: 720px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 64px);
-  background: var(--glass-bg-strong);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-glass);
+  max-width: 100%;
+  max-height: calc(100dvh - (var(--dialog-gutter) * 2));
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2462,6 +2494,45 @@ function formatMaxTokens(n) {
 .compare-dialog {
   width: 420px;
 }
+
+.converge-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: var(--dialog-gutter);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
+}
+
+.converge-confirm {
+  width: min(420px, 100%);
+  padding: 22px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
+}
+
+.confirm-symbol {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.converge-confirm h3 { margin: 0; color: var(--text-primary); font-size: 15px; }
+.converge-confirm p { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.converge-confirm-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.danger-btn { min-height: 36px; padding: 7px 14px; border: 1px solid var(--red); border-radius: var(--radius-sm); background: var(--red); color: #fff; font: 600 12px/1 var(--font-sans); cursor: pointer; }
+.danger-btn:hover { filter: brightness(1.08); }
 
 .multi-session-header {
   display: flex;
@@ -3232,7 +3303,7 @@ button.dash-chip[disabled] {
 
 .multi-session-trigger {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .multi-session-badge {
@@ -3240,11 +3311,9 @@ button.dash-chip[disabled] {
 }
 
 .multi-session-dialog {
-  width: min(920px, calc(100vw - 32px));
-  background:
-    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 32%),
-    var(--bg-secondary);
-  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  width: min(920px, 100%);
+  background: var(--dialog-surface);
+  border-color: var(--dialog-border);
 }
 
 .multi-session-header {
@@ -3490,9 +3559,9 @@ button.dash-chip[disabled] {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  background: var(--overlay-glass);
-  backdrop-filter: blur(8px) saturate(var(--glass-saturate));
+  padding: var(--dialog-gutter);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
 }
 
 .rewind-picker {
@@ -3500,10 +3569,10 @@ button.dash-chip[disabled] {
   max-height: min(680px, 78vh);
   display: flex;
   flex-direction: column;
-  background: linear-gradient(145deg, var(--glass-bg-strong), var(--glass-bg));
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-glass);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   overflow: hidden;
 }
 

@@ -249,12 +249,14 @@ onBeforeUnmount(() => {
         @click.self="handleClose"
         role="dialog"
         aria-modal="true"
-        aria-label="IM Integration"
+        aria-labelledby="im-dialog-title"
       >
         <div class="dialog">
           <div class="dialog-header">
-            <h2 class="dialog-title">IM Integration</h2>
-            <button class="close-btn" @click="handleClose" aria-label="Close">&times;</button>
+            <h2 id="im-dialog-title" class="dialog-title">IM Integration</h2>
+            <button class="close-btn" type="button" @click="handleClose" aria-label="Close IM Integration">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </div>
 
           <Transition name="banner-slide" mode="out-in">
@@ -472,10 +474,10 @@ onBeforeUnmount(() => {
   width: 440px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
 }

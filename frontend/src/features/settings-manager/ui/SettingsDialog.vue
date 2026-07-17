@@ -246,11 +246,13 @@ async function copyJsonPreview() {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')" role="dialog" aria-modal="true">
+    <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
       <div class="dialog">
         <div class="dialog-header">
-          <h2 class="dialog-title">Settings</h2>
-          <button class="close-btn" @click="emit('close')">&times;</button>
+          <h2 id="settings-dialog-title" class="dialog-title">Settings</h2>
+          <button class="close-btn" type="button" aria-label="Close Settings" @click="emit('close')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+          </button>
         </div>
 
         <div v-if="error" class="error-banner">{{ error }}</div>
@@ -594,19 +596,19 @@ async function copyJsonPreview() {
 
 <style scoped>
 .dialog-overlay {
-  background: var(--overlay-glass);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .dialog {
   width: 720px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
-  background: var(--glass-bg-strong);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-glass);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
@@ -614,8 +616,8 @@ async function copyJsonPreview() {
 }
 
 .dialog-header {
-  border-bottom: 1px solid var(--glass-border);
-  background: var(--layer-glass);
+  border-bottom: 1px solid var(--dialog-divider);
+  background: transparent;
 }
 
 .close-btn {

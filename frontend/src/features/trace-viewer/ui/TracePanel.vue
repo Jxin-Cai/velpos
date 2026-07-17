@@ -86,7 +86,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
                   {{ overallStatus.label }}
                 </span>
               </div>
-              <p class="trace-subtitle">Inspect agent, subagent, and tool activity for this message.</p>
+              <p class="trace-subtitle">Follow each agent turn and inspect every tool request and response in context.</p>
             </div>
             <button class="close-btn" type="button" title="Close" aria-label="关闭历史树" @click="emit('close')">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -137,8 +137,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
             </div>
             <div v-else class="trace-tree">
               <div class="tree-caption">
-                <span>Activity</span>
-                <span>{{ stats.spanCount }} events</span>
+                <span>Execution flow</span>
+                <span>{{ stats.turnCount }} turns · {{ stats.toolCallCount }} tools</span>
               </div>
               <TraceSpanRow v-for="node in traceTree" :key="node.id" :node="node" :depth="0" />
             </div>
@@ -147,6 +147,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
           <footer v-if="traceTree.length > 0" class="trace-footer">
             <div class="footer-stat"><span>Duration</span><strong>{{ formatDuration(stats.totalDurationMs) }}</strong></div>
             <div class="footer-divider" aria-hidden="true"></div>
+            <div class="footer-stat"><span>Turns</span><strong>{{ stats.turnCount }}</strong></div>
             <div class="footer-stat"><span>Tools</span><strong>{{ stats.toolCallCount }}</strong></div>
             <div class="footer-stat"><span>Subagents</span><strong>{{ stats.subagentCount }}</strong></div>
             <div class="footer-spacer"></div>
@@ -167,21 +168,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
-  padding: 12px;
-  background: color-mix(in srgb, #000 38%, transparent);
-  backdrop-filter: blur(2px);
+  padding: var(--dialog-gutter);
+  background: var(--dialog-overlay);
+  backdrop-filter: blur(8px);
 }
 .trace-panel {
-  width: min(760px, calc(100vw - 24px));
-  height: calc(100vh - 24px);
+  width: min(860px, calc(100vw - (var(--dialog-gutter) * 2)));
+  height: calc(100dvh - (var(--dialog-gutter) * 2));
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 16px;
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
   outline: none;
-  background: var(--bg-primary);
-  box-shadow: -12px 0 48px rgba(0, 0, 0, 0.18), 0 24px 80px rgba(0, 0, 0, 0.24);
+  background: var(--dialog-surface);
+  box-shadow: var(--dialog-shadow);
 }
 .trace-header {
   display: flex;

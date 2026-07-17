@@ -11,7 +11,7 @@ const emit = defineEmits(['click'])
 
 <template>
   <button
-    class="glass-btn glass-btn--accent cmd-btn"
+    class="toolbar-btn cmd-btn"
     :disabled="disabled"
     @click="emit('click')"
     data-tooltip="Skills"
@@ -30,19 +30,6 @@ const emit = defineEmits(['click'])
   position: relative;
   padding: 6px 8px;
   min-height: 30px;
-}
-
-.cmd-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
-  transform: translateX(-120%);
-  transition: transform 420ms ease;
-}
-
-.cmd-btn:hover:not(:disabled)::before {
-  transform: translateX(120%);
 }
 
 .cmd-btn > * {

@@ -243,7 +243,9 @@ function taskPromptLabel(task) {
               <h3 id="scheduler-title">Scheduled tasks</h3>
               <p>Run a durable prompt in a fresh session or continue an existing conversation.</p>
             </div>
-            <button class="close-btn" type="button" aria-label="Close scheduler" @click="emit('close')">×</button>
+            <button class="close-btn" type="button" aria-label="Close scheduler" @click="emit('close')">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </div>
 
           <div v-if="error" class="notice">{{ error }}</div>
@@ -467,14 +469,14 @@ function taskPromptLabel(task) {
 </template>
 
 <style scoped>
-.scheduler-overlay { position: fixed; inset: 0; z-index: 100; background: color-mix(in srgb, var(--bg-overlay) 88%, transparent); backdrop-filter: blur(14px); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.scheduler-dialog { width: min(1060px, 96vw); max-height: min(860px, 88vh); background: radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 30%), var(--bg-secondary); border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: calc(var(--radius-lg) + 6px); box-shadow: var(--shadow-xl), 0 24px 80px color-mix(in srgb, var(--accent) 12%, transparent); overflow: hidden; display: flex; flex-direction: column; }
+.scheduler-overlay { position: fixed; inset: 0; z-index: 100; background: var(--dialog-overlay); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; padding: var(--dialog-gutter); }
+.scheduler-dialog { width: min(1060px, 100%); max-height: min(860px, calc(100dvh - (var(--dialog-gutter) * 2))); background: var(--dialog-surface); border: 1px solid var(--dialog-border); border-radius: var(--dialog-radius); box-shadow: var(--dialog-shadow); overflow: hidden; display: flex; flex-direction: column; }
 .scheduler-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding: 20px 22px 18px; border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent); }
 .scheduler-eyebrow { display: inline-flex; margin-bottom: 6px; color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
 .scheduler-header h3 { margin: 0; font-size: 20px; color: var(--text-primary); letter-spacing: -0.02em; }
 .scheduler-header p { margin: 6px 0 0; font-size: 13px; color: var(--text-muted); }
-.close-btn { width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--bg-primary) 80%, transparent); color: var(--text-muted); font-size: 22px; line-height: 1; cursor: pointer; transition: transform 180ms ease, color 180ms ease, border-color 180ms ease, background 180ms ease; }
-.close-btn:hover { color: var(--text-primary); border-color: var(--accent); background: var(--bg-hover); transform: rotate(90deg); }
+.close-btn { width: 36px; height: 36px; border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--text-muted); line-height: 1; cursor: pointer; transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast); }
+.close-btn:hover { color: var(--text-primary); border-color: var(--dialog-divider); background: var(--bg-hover); }
 .notice { padding: 10px 22px; color: var(--danger, #ef4444); background: color-mix(in srgb, var(--danger, #ef4444) 10%, var(--bg-tertiary)); border-bottom: 1px solid var(--border); font-size: 12px; }
 .scheduler-body { display: grid; grid-template-columns: minmax(320px, 360px) 1fr; min-height: 520px; overflow: hidden; }
 .schedule-form { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--bg-primary) 86%, transparent); overflow-y: auto; }

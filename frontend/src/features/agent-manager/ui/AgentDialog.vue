@@ -89,11 +89,11 @@ function handleClose() {
       @click.self="handleClose"
       role="dialog"
       aria-modal="true"
-      aria-label="Agent Manager"
+      aria-labelledby="agent-dialog-title"
     >
       <div class="dialog">
         <div class="dialog-header">
-          <h2 class="dialog-title">Agent</h2>
+          <h2 id="agent-dialog-title" class="dialog-title">Agent</h2>
           <div class="header-actions">
             <div class="lang-toggle">
               <button
@@ -107,7 +107,9 @@ function handleClose() {
                 @click="setLanguage('en')"
               >EN</button>
             </div>
-            <button class="close-btn" @click="handleClose">&times;</button>
+            <button class="close-btn" type="button" aria-label="Close Agent dialog" @click="handleClose">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </div>
         </div>
 
@@ -187,10 +189,10 @@ function handleClose() {
   width: 640px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
 }

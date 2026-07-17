@@ -262,14 +262,16 @@ onMounted(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="dialog-overlay" @click.self="handleCancel" role="dialog" aria-modal="true">
+    <div v-if="visible" class="dialog-overlay" @click.self="handleCancel" role="dialog" aria-modal="true" aria-labelledby="create-team-dialog-title">
       <div class="dialog">
         <header class="dialog-header">
           <div>
-            <h2 class="dialog-title">Create Agent Teams Project</h2>
+            <h2 id="create-team-dialog-title" class="dialog-title">Create Agent Teams Project</h2>
             <p class="dialog-subtitle">Pick agent-enabled projects, then assign them to each team role.</p>
           </div>
-          <button class="close-btn" @click="handleCancel" aria-label="Close">&times;</button>
+          <button class="close-btn" type="button" aria-label="Close team project dialog" @click="handleCancel">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+          </button>
         </header>
 
         <div class="dialog-body">
@@ -482,10 +484,10 @@ onMounted(() => {
   width: 920px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -504,8 +506,8 @@ onMounted(() => {
 }
 
 .close-btn {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 

@@ -38,49 +38,54 @@ class SessionStreamConsumer:
         self._trace_collector = trace_collector
 
     @staticmethod
-    def _tool_names_from_content(content: dict[str, Any]) -> list[str]:
-        names: list[str] = []
-        if isinstance(content, dict):
-            for block in content.get("blocks", []):
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    name = str(block.get("name") or "")
-                    if name:
-                        names.append(name)
-        return names
+    def _tool_uses_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(content, dict):
+            return []
+        return [
+            block for block in content.get("blocks", [])
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
 
     def _create_llm_turn_span(
         self,
         session_id: str,
         run_id: str,
         content: dict[str, Any],
-        tool_names: list[str],
+        tool_uses: list[dict[str, Any]],
         parent_tool_use_id: str | None = None,
     ) -> None:
         from application.session.trace_redaction import sanitize_and_truncate
 
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         if isinstance(content, dict):
             for block in content.get("blocks", []):
                 if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(str(block.get("text", ""))[:200])
-        preview = "\n".join(text_parts)[:500] if text_parts else None
+                    text_parts.append(str(block.get("text", "")))
+                elif isinstance(block, dict) and block.get("type") == "thinking":
+                    thinking_parts.append(str(block.get("thinking", "")))
+        preview = "\n".join(text_parts) if text_parts else None
+        thinking_preview = "\n".join(thinking_parts) if thinking_parts else None
 
         metadata = {}
-        if tool_names:
-            metadata["tool_names"] = tool_names
+        if tool_uses:
+            metadata["tool_names"] = [str(item.get("name") or "unknown") for item in tool_uses]
+            metadata["tool_use_ids"] = [str(item.get("id") or "") for item in tool_uses]
         if parent_tool_use_id:
             metadata["parent_tool_use_id"] = parent_tool_use_id
+        if thinking_preview:
+            metadata["thinking_preview"] = sanitize_and_truncate(thinking_preview, max_chars=4000)
 
         previous = self._trace_collector.find_latest_running_llm_turn(session_id, run_id)
         if previous:
             self._trace_collector.complete_span(previous.id)
-        run_span = self._trace_collector.find_run_span(session_id, run_id)
+        main_agent_span = self._trace_collector.find_main_agent_span(session_id, run_id)
         subagent_span = self._trace_collector.find_running_subagent_by_tool_use_id(
             session_id,
             parent_tool_use_id,
         )
 
-        self._trace_collector.create_span(
+        turn_span_id = self._trace_collector.create_span(
             session_id=session_id,
             run_id=run_id,
             span_type="llm_turn",
@@ -88,11 +93,40 @@ class SessionStreamConsumer:
             parent_span_id=(
                 subagent_span.id
                 if subagent_span
-                else (run_span.id if run_span else None)
+                else (main_agent_span.id if main_agent_span else None)
             ),
-            output_preview=sanitize_and_truncate(preview, max_chars=500),
+            agent_id=subagent_span.agent_id if subagent_span else "main",
+            output_preview=sanitize_and_truncate(preview, max_chars=4000),
             metadata=metadata,
         )
+        if turn_span_id and tool_uses:
+            self._trace_collector.reconcile_turn_tools(
+                session_id,
+                run_id,
+                turn_span_id,
+                tool_uses,
+            )
+
+    def _record_tool_results(
+        self,
+        session_id: str,
+        run_id: str,
+        content: dict[str, Any],
+    ) -> None:
+        from application.session.trace_redaction import sanitize_and_truncate
+
+        if not isinstance(content, dict):
+            return
+        for result in content.get("results", []):
+            if not isinstance(result, dict):
+                continue
+            self._trace_collector.record_tool_result(
+                session_id=session_id,
+                run_id=run_id,
+                tool_use_id=str(result.get("tool_use_id") or "") or None,
+                output_preview=sanitize_and_truncate(result.get("content")),
+                is_error=bool(result.get("is_error", False)),
+            )
 
     def finish_trace_run(
         self,
@@ -225,7 +259,8 @@ class SessionStreamConsumer:
                 if sdk_uuid:
                     session.set_sdk_uuid_for_last_user_message(sdk_uuid)
 
-                tool_names = self._tool_names_from_content(message.content)
+                tool_uses = self._tool_uses_from_content(message.content)
+                tool_names = [str(item.get("name") or "") for item in tool_uses if item.get("name")]
                 tool_count += len(tool_names)
 
                 if msg_type_str == "assistant" and self._trace_collector and self._trace_collector.enabled:
@@ -233,9 +268,11 @@ class SessionStreamConsumer:
                         session.session_id,
                         run_id,
                         message.content,
-                        tool_names,
+                        tool_uses,
                         parent_tool_use_id=msg_dict.get("parent_tool_use_id"),
                     )
+                elif msg_type_str == "tool_result" and self._trace_collector and self._trace_collector.enabled:
+                    self._record_tool_results(session.session_id, run_id, message.content)
 
                 logger.info(
                     "[session=%s] Claude回复 [%s]",

@@ -9,13 +9,21 @@ const props = defineProps({
 const expanded = ref(false)
 const PREVIEW_LIMIT = 500
 
-const isLong = computed(() => (props.payload || '').length > PREVIEW_LIMIT)
-const displayText = computed(() => {
+const formattedPayload = computed(() => {
   if (!props.payload) return ''
-  if (!expanded.value && isLong.value) {
-    return props.payload.slice(0, PREVIEW_LIMIT) + '...'
+  try {
+    return JSON.stringify(JSON.parse(props.payload), null, 2)
+  } catch {
+    return props.payload
   }
-  return props.payload
+})
+const isLong = computed(() => formattedPayload.value.length > PREVIEW_LIMIT)
+const displayText = computed(() => {
+  if (!formattedPayload.value) return ''
+  if (!expanded.value && isLong.value) {
+    return formattedPayload.value.slice(0, PREVIEW_LIMIT) + '…'
+  }
+  return formattedPayload.value
 })
 </script>
 
@@ -30,7 +38,7 @@ const displayText = computed(() => {
       :aria-expanded="expanded"
       @click.stop="expanded = !expanded"
     >
-      {{ expanded ? '收起' : '展开全部' }}
+      {{ expanded ? 'Show less' : 'Show all' }}
     </button>
   </div>
 </template>

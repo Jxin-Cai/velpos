@@ -213,10 +213,10 @@ function onSearchInput(e) {
   left: 0;
   right: 0;
   margin-bottom: 6px;
-  background: var(--glass-bg-strong);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-glass);
+  background: var(--dialog-surface);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
   max-height: 320px;
   display: flex;
   flex-direction: column;
@@ -231,8 +231,8 @@ function onSearchInput(e) {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--glass-border);
-  background: var(--layer-glass);
+  border-bottom: 1px solid var(--dialog-divider);
+  background: transparent;
 }
 
 .cmd-search-icon {
