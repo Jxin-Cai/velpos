@@ -2,6 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTraceTree } from '../model/useTraceTree'
 import TraceSpanRow from './TraceSpanRow.vue'
+import ExecutionTreePanel from './ExecutionTreePanel.vue'
+
+const ViewMode = Object.freeze({ EXECUTION: 'execution', RAW_SPAN: 'raw_span' })
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -10,6 +13,7 @@ const props = defineProps({
 
 const emit = defineEmits(['close'])
 const dialogEl = ref(null)
+const viewMode = ref(ViewMode.EXECUTION)
 
 const {
   currentSessionId,
@@ -117,31 +121,52 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
             </label>
           </div>
 
+          <nav class="view-mode-bar" aria-label="View mode">
+            <button
+              type="button"
+              class="view-mode-btn"
+              :class="{ active: viewMode === ViewMode.EXECUTION }"
+              @click="viewMode = ViewMode.EXECUTION"
+            >Task call chain</button>
+            <button
+              type="button"
+              class="view-mode-btn"
+              :class="{ active: viewMode === ViewMode.RAW_SPAN }"
+              @click="viewMode = ViewMode.RAW_SPAN"
+            >Raw spans</button>
+          </nav>
+
           <main class="trace-body">
-            <div v-if="loading" class="trace-empty">
-              <span class="loading-ring" aria-hidden="true"></span>
-              <p>Loading execution history…</p>
-            </div>
-            <div v-else-if="error" class="trace-empty trace-empty--error">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                <circle cx="10" cy="10" r="7.25"/><path d="M10 6.5v4.25M10 13.5h.01"/>
-              </svg>
-              <p>{{ error }}</p>
-            </div>
-            <div v-else-if="traceTree.length === 0" class="trace-empty">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-                <circle cx="6" cy="5" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="10" cy="19" r="2"/><path d="M6 7v8a4 4 0 0 0 4 4M8 5h3a7 7 0 0 1 7 7"/>
-              </svg>
-              <p>No execution history yet</p>
-              <p class="trace-empty-hint">Trace activity appears here while the agent works.</p>
-            </div>
-            <div v-else class="trace-tree">
-              <div class="tree-caption">
-                <span>Execution flow</span>
-                <span>{{ stats.turnCount }} turns · {{ stats.toolCallCount }} tools</span>
+            <template v-if="viewMode === ViewMode.EXECUTION">
+              <ExecutionTreePanel :run-id="selectedRunId" />
+            </template>
+
+            <template v-else>
+              <div v-if="loading" class="trace-empty">
+                <span class="loading-ring" aria-hidden="true"></span>
+                <p>Loading execution history…</p>
               </div>
-              <TraceSpanRow v-for="node in traceTree" :key="node.id" :node="node" :depth="0" />
-            </div>
+              <div v-else-if="error" class="trace-empty trace-empty--error">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <circle cx="10" cy="10" r="7.25"/><path d="M10 6.5v4.25M10 13.5h.01"/>
+                </svg>
+                <p>{{ error }}</p>
+              </div>
+              <div v-else-if="traceTree.length === 0" class="trace-empty">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <circle cx="6" cy="5" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="10" cy="19" r="2"/><path d="M6 7v8a4 4 0 0 0 4 4M8 5h3a7 7 0 0 1 7 7"/>
+                </svg>
+                <p>No execution history yet</p>
+                <p class="trace-empty-hint">Trace activity appears here while the agent works.</p>
+              </div>
+              <div v-else class="trace-tree">
+                <div class="tree-caption">
+                  <span>Execution flow</span>
+                  <span>{{ stats.turnCount }} turns · {{ stats.toolCallCount }} tools</span>
+                </div>
+                <TraceSpanRow v-for="node in traceTree" :key="node.id" :node="node" :depth="0" />
+              </div>
+            </template>
           </main>
 
           <footer v-if="traceTree.length > 0" class="trace-footer">
@@ -272,6 +297,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
   white-space: nowrap;
 }
 .run-position { padding-left: 8px; border-left: 1px solid var(--border-subtle); font-family: var(--font-mono); }
+.view-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+.view-mode-btn {
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.view-mode-btn:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.view-mode-btn.active { color: var(--text-primary); background: var(--bg-primary); border-color: var(--border-subtle); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.view-mode-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
 .run-picker {
   position: relative;
   display: flex;

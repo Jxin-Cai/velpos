@@ -54,6 +54,7 @@ from infr.im.qq.qq_api import QqApiClient
 from infr.im.qq.qq_ws_client import QqWsClient
 from infr.im.weixin.weixin_adapter import WEIXIN_CHANNEL_SPEC, WeixinAdapter
 from infr.repository.attachment_repository_impl import AttachmentRepositoryImpl
+from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
 from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
 from infr.repository.channel_profile_repository_impl import ChannelProfileRepositoryImpl
 from infr.repository.claude_md_revision_repository_impl import ClaudeMdRevisionRepositoryImpl
@@ -62,6 +63,7 @@ from infr.repository.im_binding_repository_impl import ImBindingRepositoryImpl
 from infr.repository.project_command_policy_repository_impl import ProjectCommandPolicyRepositoryImpl
 from infr.repository.project_memory_repository_impl import ProjectMemoryRepositoryImpl
 from infr.repository.project_repository_impl import ProjectRepositoryImpl
+from infr.repository.handoff_repository_impl import HandoffRepositoryImpl
 from infr.repository.scheduled_task_repository_impl import ScheduledTaskRepositoryImpl
 from infr.repository.session_audit_event_repository_impl import SessionAuditEventRepositoryImpl
 from infr.repository.session_branch_repository_impl import SessionBranchRepositoryImpl
@@ -69,7 +71,9 @@ from infr.repository.session_repository_impl import SessionRepositoryImpl
 from infr.repository.session_run_step_repository_impl import SessionRunStepRepositoryImpl
 from infr.repository.session_timeline_event_repository_impl import SessionTimelineEventRepositoryImpl
 from infr.repository.session_snapshot_repository_impl import SessionSnapshotRepositoryImpl
+from infr.repository.team_repository_impl import TeamRepositoryImpl
 from infr.repository.team_task_repository_impl import TeamTaskRepositoryImpl
+from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
 from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 from domain.im_binding.model.channel_registry import ImChannelRegistry
@@ -522,6 +526,30 @@ async def get_project_repository(
     return ProjectRepositoryImpl(db_session)
 
 
+async def get_team_repository(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> TeamRepositoryImpl:
+    return TeamRepositoryImpl(db_session)
+
+
+async def get_wish_card_repository(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> WishCardRepositoryImpl:
+    return WishCardRepositoryImpl(db_session)
+
+
+async def get_card_execution_repository(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> CardExecutionRepositoryImpl:
+    return CardExecutionRepositoryImpl(db_session)
+
+
+async def get_handoff_repository(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> HandoffRepositoryImpl:
+    return HandoffRepositoryImpl(db_session)
+
+
 def get_trace_collector() -> TraceCollector:
     return _trace_collector
 
@@ -530,6 +558,20 @@ async def get_trace_span_repository(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> TraceSpanRepositoryImpl:
     return TraceSpanRepositoryImpl(db_session)
+
+
+async def get_execution_trace_query_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> "ExecutionTraceQueryService":
+    from application.session.execution_trace_query_service import ExecutionTraceQueryService
+    from infr.client.transcript_reader import ClaudeTranscriptReader
+
+    return ExecutionTraceQueryService(
+        session_repository=SessionRepositoryImpl(db_session),
+        project_repository=ProjectRepositoryImpl(db_session),
+        trace_span_repository=TraceSpanRepositoryImpl(db_session),
+        transcript_reader=ClaudeTranscriptReader(),
+    )
 
 
 async def get_team_coordinator_service(

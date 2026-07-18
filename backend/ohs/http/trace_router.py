@@ -4,13 +4,17 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 
+from application.session.execution_trace_query_service import ExecutionTraceQueryService
 from domain.session.repository.trace_span_repository import TraceSpanRepository
-from ohs.dependencies import get_trace_span_repository
+from ohs.dependencies import get_execution_trace_query_service, get_trace_span_repository
 from ohs.http.api_response import ApiResponse
+from ohs.http.assembler.execution_trace_assembler import ExecutionTraceAssembler
+from ohs.http.dto.execution_trace_dto import ExecutionTreeResponse, LoopDetailPageResponse
 
 router = APIRouter(prefix="/api/sessions", tags=["Trace"])
 
 TraceRepoDep = Annotated[TraceSpanRepository, Depends(get_trace_span_repository)]
+ExecutionTraceQueryDep = Annotated[ExecutionTraceQueryService, Depends(get_execution_trace_query_service)]
 
 
 def _build_tree(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -88,3 +92,30 @@ async def get_span_detail(
     if span is None or span.session_id != session_id:
         return ApiResponse.fail(code=404, message="Span not found")
     return ApiResponse.success(span.to_dict())
+
+
+@router.get("/{session_id}/runs/{run_id}/execution-tree", summary="Get execution tree for a run")
+async def get_execution_tree(
+    session_id: str,
+    run_id: str,
+    service: ExecutionTraceQueryDep,
+    agent_span_id: str | None = Query(default=None, description="Optional agent span to scope the tree"),
+) -> ApiResponse[ExecutionTreeResponse]:
+    agent = await service.get_execution_tree(session_id, run_id, agent_span_id)
+    dto = ExecutionTraceAssembler.to_tree_response(agent)
+    return ApiResponse.success(dto)
+
+
+@router.get("/{session_id}/runs/{run_id}/execution-loops/{loop_id}", summary="Get loop detail page")
+async def get_execution_loop_detail(
+    session_id: str,
+    run_id: str,
+    loop_id: str,
+    service: ExecutionTraceQueryDep,
+    agent_span_id: str | None = Query(default=None, description="Optional agent span to scope the tree"),
+    cursor: int = Query(default=0, ge=0, description="Pagination cursor"),
+    limit: int = Query(default=100, ge=1, le=500, description="Page size"),
+) -> ApiResponse[LoopDetailPageResponse]:
+    page = await service.get_loop_detail(session_id, run_id, loop_id, agent_span_id, cursor, limit)
+    dto = ExecutionTraceAssembler.to_loop_detail_response(page)
+    return ApiResponse.success(dto)

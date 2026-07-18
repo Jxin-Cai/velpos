@@ -1,5 +1,7 @@
 export { default as TracePanel } from './ui/TracePanel.vue'
 export { default as TraceButton } from './ui/TraceButton.vue'
 export { default as TraceSpanRow } from './ui/TraceSpanRow.vue'
+export { default as ExecutionTreePanel } from './ui/ExecutionTreePanel.vue'
 export { useTraceTree } from './model/useTraceTree'
-export { fetchTraceTree, fetchTraceRuns, fetchSpanDetail } from './api/traceApi'
+export { useExecutionTree } from './model/useExecutionTree'
+export { fetchTraceTree, fetchTraceRuns, fetchSpanDetail, fetchExecutionTree, fetchLoopDetail } from './api/traceApi'

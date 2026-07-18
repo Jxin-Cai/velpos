@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, SmallInteger
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, SmallInteger
 from sqlalchemy.dialects.mysql import MEDIUMTEXT, TEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,8 +57,15 @@ class SessionModel(Base):
     cancel_requested: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=0, server_default="0",
     )
-    team_task_id: Mapped[str] = mapped_column(
-        String(8), nullable=False, default="", server_default="",
+    card_execution_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("card_executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent_slot_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("team_agent_slots.id", ondelete="SET NULL"),
+        nullable=True,
     )
     trace_id: Mapped[str] = mapped_column(
         String(8), nullable=False, default="", server_default="",
@@ -68,4 +75,9 @@ class SessionModel(Base):
     )
     updated_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now, onupdate=datetime.now,
+    )
+
+    __table_args__ = (
+        Index("idx_sessions_card_execution", "card_execution_id"),
+        Index("idx_sessions_agent_slot", "agent_slot_id"),
     )
