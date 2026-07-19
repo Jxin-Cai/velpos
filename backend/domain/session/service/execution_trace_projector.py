@@ -34,6 +34,7 @@ class ExecutionTraceProjector:
 
     IMPLICIT_TASK_ID = "implicit-user-task"
     _CREATED_TASK_ID_PATTERN = re.compile(r"\bTask\s+#?([A-Za-z0-9_-]+)\s+created\b", re.IGNORECASE)
+    _SUBAGENT_TOOL_NAMES = frozenset({"Agent", "Task"})
 
     def project(
         self,
@@ -41,8 +42,14 @@ class ExecutionTraceProjector:
         spans: Iterable[TraceSpan] = (),
         agent_id: str = "main",
     ) -> ExecutionAgent:
-        span_by_tool = {span.tool_use_id: span for span in spans if span.tool_use_id}
-        tasks = {self.IMPLICIT_TASK_ID: _TaskState(self.IMPLICIT_TASK_ID, "User request", False, status="in_progress")}
+        span_by_tool: dict[str, TraceSpan] = {}
+        for span in spans:
+            if not span.tool_use_id:
+                continue
+            current = span_by_tool.get(span.tool_use_id)
+            if current is None or span.span_type == TraceSpan.SPAN_TYPE_SUBAGENT:
+                span_by_tool[span.tool_use_id] = span
+        tasks = {self.IMPLICIT_TASK_ID: _TaskState(self.IMPLICIT_TASK_ID, "Direct execution", False, status="in_progress")}
         dependencies: list[TaskDependency] = []
         subagents: list[SubagentPlaceholder] = []
         loops: list[AgentLoop] = []
@@ -51,6 +58,7 @@ class ExecutionTraceProjector:
         history: list[dict[str, Any]] = []
         warnings: list[str] = []
         previous_timestamp: datetime | None = None
+        request: Any = None
 
         for record in records:
             message = record.get("message")
@@ -103,18 +111,23 @@ class ExecutionTraceProjector:
                         timestamp=record_timestamp,
                     ))
                     pending[tool_id] = loop_index
-                    if tool_name in {"TaskCreate", "TaskUpdate"}:
+                    task_operation = self._task_operation(tool_name, block.get("input"))
+                    if task_operation:
                         affected_task_id = self._apply_task_tool(
-                            tool_name,
+                            task_operation,
                             block.get("input"),
                             tasks,
                             dependencies,
                             warnings,
                             fallback_id=f"pending:{tool_id}",
                         )
-                        if tool_name == "TaskCreate" and affected_task_id:
+                        if task_operation == "TaskCreate" and affected_task_id:
                             pending_task_creates[tool_id] = affected_task_id
-                    if tool_name == "Agent":
+                    if tool_name == "Agent" or (
+                        tool_name in self._SUBAGENT_TOOL_NAMES
+                        and task_operation is None
+                        and self._is_subagent_input(block.get("input"))
+                    ):
                         placeholder = self._subagent(tool_id, block.get("input"), span_by_tool.get(tool_id))
                         subagents.append(placeholder)
                         events.append(ExecutionEvent(
@@ -150,6 +163,11 @@ class ExecutionTraceProjector:
                 loops.append(loop)
                 tasks[task_id].loops.append(loop)
             elif role == "user":
+                if request is None and any(
+                    not isinstance(block, Mapping) or block.get("type") != "tool_result"
+                    for block in blocks
+                ):
+                    request = message.get("content")
                 for block in blocks:
                     if not isinstance(block, Mapping) or block.get("type") != "tool_result":
                         continue
@@ -207,7 +225,7 @@ class ExecutionTraceProjector:
             ExecutionTask(t.id, t.subject, t.description, t.status, t.explicit, tuple(t.loops))
             for t in visible_tasks
         )
-        return ExecutionAgent(agent_id, projected_tasks, tuple(dependencies), tuple(subagents), provenance)
+        return ExecutionAgent(agent_id, projected_tasks, tuple(dependencies), tuple(subagents), provenance, request)
 
     @staticmethod
     def _content_blocks(content: Any, warnings: list[str]) -> list[Any]:
@@ -234,7 +252,9 @@ class ExecutionTraceProjector:
     ) -> str:
         updated_task_ids: list[str] = []
         for block in blocks:
-            if not isinstance(block, Mapping) or block.get("type") != "tool_use" or block.get("name") != "TaskUpdate":
+            if not isinstance(block, Mapping) or block.get("type") != "tool_use":
+                continue
+            if self._task_operation(self._text(block.get("name")), block.get("input")) != "TaskUpdate":
                 continue
             value = block.get("input")
             if not isinstance(value, Mapping):
@@ -333,6 +353,33 @@ class ExecutionTraceProjector:
             transcript_path=self._text(metadata.get("transcript_path") or metadata.get("agent_transcript_path")),
             span_id=span.id if span else None,
         )
+
+    @staticmethod
+    def _is_subagent_input(value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        # The Task tool is overloaded by Claude integrations. Task-manager
+        # payloads must never be mistaken for a subagent invocation.
+        if any(value.get(key) is not None for key in ("subject", "activeForm", "taskId", "task_id", "blockedBy", "blocked_by", "status")):
+            return False
+        return any(
+            value.get(key) is not None
+            for key in ("subagent_type", "agent_type", "prompt", "subagent_prompt", "agent_prompt")
+        )
+
+    @staticmethod
+    def _task_operation(tool_name: str | None, value: Any) -> str | None:
+        if tool_name in {"TaskCreate", "TaskUpdate"}:
+            return tool_name
+        if tool_name != "Task" or not isinstance(value, Mapping):
+            return None
+        has_task_id = value.get("taskId") is not None or value.get("task_id") is not None
+        has_subject = value.get("subject") is not None or value.get("activeForm") is not None
+        if has_subject and not has_task_id:
+            return "TaskCreate"
+        if has_task_id and any(value.get(key) is not None for key in ("status", "subject", "description", "activeForm", "addBlockedBy", "add_blocked_by")):
+            return "TaskUpdate"
+        return None
 
     @staticmethod
     def _replace_task_loop(task: _TaskState, loop: AgentLoop) -> None:

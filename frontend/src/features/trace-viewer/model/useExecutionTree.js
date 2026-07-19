@@ -44,16 +44,18 @@ export function useExecutionTree() {
     try {
       const result = await fetchExecutionTree(sessionId, runId, agentSpanId)
       tree.value = result
+      // A run is scoped to one user message. Never carry the previously
+      // selected step or loaded subagent details into the new message tree.
+      selectedLoopId.value = null
+      loopDetails.clear()
+      loopLoadState.clear()
+      expandedSubagents.clear()
+      inlineSubagents.clear()
       expandedTasks.clear()
       expandedLoops.clear()
       if (result?.tasks?.length) {
         for (const task of result.tasks) {
           expandedTasks.add(task.id)
-          for (const loop of task.loops || []) {
-            // Surface agent calls immediately in the task chain so the
-            // internal-process control is discoverable without extra clicks.
-            if (loop.subagents?.length || loop.subagent_tool_use_ids?.length) expandedLoops.add(loop.id)
-          }
         }
       }
     } catch (err) {
@@ -177,8 +179,9 @@ export function useExecutionTree() {
 
   function selectLoop(loopId) {
     selectedLoopId.value = loopId
-    if (!expandedLoops.has(loopId)) {
-      expandLoop(loopId)
+    const state = getLoopLoadState(loopId)
+    if (state === NodeStatus.IDLE || state === NodeStatus.ERROR) {
+      loadLoopDetail(loopId)
     }
   }
 

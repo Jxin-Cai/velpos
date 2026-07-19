@@ -160,3 +160,4 @@ class ExecutionAgent:
     dependencies: tuple[TaskDependency, ...]
     subagents: tuple[SubagentPlaceholder, ...]
     provenance: ProjectionProvenance
+    request: Any = None

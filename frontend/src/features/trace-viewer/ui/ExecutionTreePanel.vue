@@ -1,5 +1,5 @@
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useSession } from '@entities/session'
 import { useExecutionTree } from '../model/useExecutionTree'
 import ExecutionTreeRow from './ExecutionTreeRow.vue'
@@ -11,6 +11,7 @@ const props = defineProps({
 })
 
 const { currentSessionId } = useSession()
+const detailSection = ref(null)
 const {
   tree,
   loading,
@@ -43,6 +44,23 @@ const selectedLoop = computed(() => {
   return null
 })
 
+const displayTasks = computed(() => tasks.value.map((task, index) => ({ ...task, sequence: index + 1 })))
+const plannedTaskCount = computed(() => tasks.value.filter(task => task.explicit).length)
+const totalSteps = computed(() => tasks.value.reduce((count, task) => count + (task.loops?.length || 0), 0))
+const totalSubagents = computed(() => tasks.value.reduce((count, task) => (
+  count + (task.loops || []).reduce((loopCount, loop) => loopCount + (loop.subagent_count || 0), 0)
+), 0))
+const requestSummary = computed(() => {
+  const value = tree.value?.request
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    const text = value.filter(block => block?.type === 'text').map(block => block.text).filter(Boolean).join('\n')
+    if (text) return text
+  }
+  if (value == null) return 'Current user message'
+  try { return JSON.stringify(value, null, 2) } catch { return String(value) }
+})
+
 function formatThinking(content) {
   if (content == null) return ''
   if (typeof content === 'string') return content
@@ -65,6 +83,14 @@ watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
     loadTree(sessionId, runId)
   }
 }, { immediate: true })
+
+watch(selectedLoopId, async (loopId) => {
+  if (!loopId) return
+  await nextTick()
+  if (window.matchMedia('(max-width: 899px)').matches) {
+    detailSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+})
 </script>
 
 <template>
@@ -93,14 +119,28 @@ watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
     <template v-else>
       <div class="exec-tree-body" :class="{ 'has-detail': selectedLoopId }">
         <div class="exec-tree-section">
+          <section class="message-scope" aria-label="Current user message execution summary">
+            <div class="message-scope-mark" aria-hidden="true">
+              <svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-6l-3.5 2v-2h-1.5z"/></svg>
+            </div>
+            <div class="message-scope-content">
+              <div class="message-scope-kicker">This message</div>
+              <p>{{ requestSummary }}</p>
+              <div class="message-scope-stats">
+                <span><strong>{{ plannedTaskCount }}</strong> planned tasks</span>
+                <span><strong>{{ totalSteps }}</strong> steps</span>
+                <span><strong>{{ totalSubagents }}</strong> subagents</span>
+              </div>
+            </div>
+          </section>
           <div class="tree-caption tree-caption--sticky">
-            <span>Task call chain</span>
-            <span class="tree-count">{{ tasks.length }} tasks</span>
+            <span>{{ plannedTaskCount ? 'Tasks created for this message' : 'Direct execution for this message' }}</span>
+            <span class="tree-count">{{ plannedTaskCount || totalSteps }}</span>
           </div>
 
           <!-- Main agent tasks -->
           <ExecutionTreeRow
-            v-for="task in tasks"
+            v-for="task in displayTasks"
             :key="task.id"
             :node="task"
             node-type="task"
@@ -156,7 +196,7 @@ watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
         </div>
 
         <!-- Loop detail pane -->
-        <div v-if="selectedLoopId" class="exec-detail-section">
+        <div v-if="selectedLoopId" ref="detailSection" class="exec-detail-section" aria-live="polite">
           <div class="detail-section-header">
             <span class="detail-section-title">
               Step {{ selectedLoop?.sequence || '—' }} detail
@@ -228,6 +268,41 @@ watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
   padding: 0 10px 20px 4px;
   scrollbar-gutter: stable;
 }
+.message-scope {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 11px;
+  margin: 8px 8px 4px;
+  padding: 13px 14px 13px 12px;
+  border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-primary));
+}
+.message-scope::after {
+  position: absolute;
+  bottom: -13px;
+  left: 28px;
+  width: 1px;
+  height: 13px;
+  background: color-mix(in srgb, var(--text-accent) 36%, var(--border-subtle));
+  content: '';
+}
+.message-scope-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-accent) 13%, var(--bg-secondary));
+  color: var(--text-accent);
+}
+.message-scope-mark svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; }
+.message-scope-content { min-width: 0; }
+.message-scope-kicker { color: var(--text-accent); font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.message-scope p { display: -webkit-box; margin: 4px 0 9px; overflow: hidden; color: var(--text-primary); font-size: 12px; line-height: 1.5; white-space: pre-wrap; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.message-scope-stats { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
+.message-scope-stats strong { color: var(--text-secondary); font-weight: 650; }
 .tree-caption {
   display: flex;
   align-items: center;

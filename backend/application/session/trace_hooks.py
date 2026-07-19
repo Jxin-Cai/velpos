@@ -130,7 +130,11 @@ def create_observability_hooks(
                     metadata={
                         "agent_type": hook_input.get("agent_type", ""),
                         "agent_id": agent_id,
-                        "transcript_path": hook_input.get("agent_transcript_path", ""),
+                        "transcript_path": (
+                            hook_input.get("agent_transcript_path")
+                            or hook_input.get("transcript_path")
+                            or ""
+                        ),
                     },
                 )
         except Exception:

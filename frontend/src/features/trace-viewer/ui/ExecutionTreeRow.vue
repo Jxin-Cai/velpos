@@ -16,7 +16,7 @@ const emit = defineEmits(['toggle', 'select-loop'])
 
 const canExpand = computed(() => {
   if (props.nodeType === 'task') return Boolean(props.node.loops?.length)
-  if (props.nodeType === 'loop') return true
+  if (props.nodeType === 'loop') return false
   if (props.nodeType === 'subagent') return Boolean(props.node.span_id) || props.node.is_expandable !== false
   return false
 })
@@ -38,6 +38,8 @@ const typeLabel = computed(() => {
     subagent: 'Agent',
     event: 'Event',
   }
+  if (props.nodeType === 'task' && props.node.explicit === false) return 'Execution'
+  if (props.nodeType === 'task' && props.node.sequence) return `Task ${props.node.sequence}`
   if (props.nodeType === 'loop' && props.node.sequence) return `Step ${props.node.sequence}`
   return map[props.nodeType] || 'Event'
 })
@@ -58,7 +60,7 @@ const displayName = computed(() => {
 })
 
 const statusLabel = computed(() => {
-  if (props.nodeType === 'task') return props.node.status || ''
+  if (props.nodeType === 'task') return (props.node.status || '').replaceAll('_', ' ')
   if (props.nodeType === 'loop') return props.node.stop_reason || ''
   return ''
 })
@@ -77,6 +79,8 @@ const meta = computed(() => {
   if (props.nodeType === 'task') {
     const loopCount = props.node.loops?.length || 0
     if (loopCount > 0) parts.push(`${loopCount} step${loopCount > 1 ? 's' : ''}`)
+    const subagentCount = (props.node.loops || []).reduce((count, loop) => count + (loop.subagent_count || 0), 0)
+    if (subagentCount > 0) parts.push(`${subagentCount} subagent${subagentCount > 1 ? 's' : ''}`)
   }
   if (props.nodeType === 'loop') {
     const usage = props.node.usage || {}
@@ -133,6 +137,10 @@ function handleClick() {
     emit('toggle', props.node.id || props.node.tool_use_id)
   }
 }
+
+function viewEvents() {
+  emit('select-loop', props.node.id)
+}
 </script>
 
 <template>
@@ -149,7 +157,7 @@ function handleClick() {
       @click="handleClick"
       @keydown.enter.space.prevent="handleClick"
     >
-      <span class="exec-expand" :class="{ rotated: expanded, invisible: !canExpand }" aria-hidden="true">
+      <span v-if="nodeType !== 'loop'" class="exec-expand" :class="{ rotated: expanded, invisible: !canExpand }" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="m6 4 4 4-4 4" />
         </svg>
@@ -174,6 +182,18 @@ function handleClick() {
       <span v-if="loadState === 'loading'" class="exec-spinner" aria-hidden="true"></span>
       <span v-if="statusLabel" class="exec-status" :class="statusClass">{{ statusLabel }}</span>
       <button
+        v-if="nodeType === 'loop'"
+        type="button"
+        class="exec-events-btn"
+        :class="{ 'is-active': selected }"
+        :disabled="loadState === 'loading'"
+        :aria-label="selected ? 'Viewing step events' : 'View step events'"
+        @click.stop="viewEvents"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h10"/><circle cx="5" cy="3.5" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="11" cy="12.5" r=".7" fill="currentColor" stroke="none"/></svg>
+        <span>{{ selected ? 'Viewing events' : 'View events' }}</span>
+      </button>
+      <button
         v-if="nodeType === 'subagent'"
         type="button"
         class="exec-inspect-btn"
@@ -192,7 +212,7 @@ function handleClick() {
       </button>
     </div>
 
-    <div v-if="expanded && slots.default" class="exec-children">
+    <div v-if="slots.default && (nodeType === 'loop' || expanded)" class="exec-children">
       <slot />
     </div>
   </div>
@@ -290,6 +310,25 @@ function handleClick() {
   font-weight: 600;
   cursor: pointer;
 }
+.exec-events-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.exec-events-btn:hover { border-color: color-mix(in srgb, var(--text-accent) 45%, var(--border-subtle)); color: var(--text-primary); }
+.exec-events-btn.is-active { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 9%, var(--bg-primary)); color: var(--text-accent); }
+.exec-events-btn:disabled { opacity: .55; cursor: wait; }
+.exec-events-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
 .exec-inspect-btn:hover { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 13%, var(--bg-primary)); }
 .exec-inspect-btn:disabled { opacity: .55; cursor: not-allowed; }
 .exec-inspect-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
@@ -302,5 +341,7 @@ function handleClick() {
   .exec-meta { margin-left: 0; }
   .exec-inspect-btn span { display: none; }
   .exec-inspect-btn { padding: 6px; }
+  .exec-events-btn span { display: none; }
+  .exec-events-btn { padding: 6px; }
 }
 </style>

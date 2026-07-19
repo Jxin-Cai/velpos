@@ -35,6 +35,33 @@ const subagentToolIds = computed(() => new Set(
     .map(event => event.metadata.tool_use_id),
 ))
 
+const modelOutputBySource = computed(() => new Map(
+  events.value
+    .filter(event => (event.type === 'model_output' || event.type === 'assistant_message') && event.source_uuid)
+    .map(event => [event.source_uuid, event]),
+))
+const modelInputSources = computed(() => new Set(
+  events.value
+    .filter(event => (event.type === 'model_input' || event.type === 'user_message') && event.source_uuid)
+    .map(event => event.source_uuid),
+))
+// Older transcript records may not carry a source UUID. Pair the next model
+// output in that case so the UI still presents one complete model turn.
+const modelOutputByInputIndex = computed(() => {
+  const pairs = new Map()
+  events.value.forEach((event, inputIndex) => {
+    if (event.type !== 'model_input' && event.type !== 'user_message') return
+    if (event.source_uuid) return
+    const outputIndex = events.value.findIndex((candidate, candidateIndex) => (
+      candidateIndex > inputIndex
+      && (candidate.type === 'model_output' || candidate.type === 'assistant_message')
+    ))
+    if (outputIndex >= 0) pairs.set(inputIndex, outputIndex)
+  })
+  return pairs
+})
+const pairedModelOutputIndices = computed(() => new Set(modelOutputByInputIndex.value.values()))
+
 const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) => {
   if (event.type === 'tool_result' && pairedResultIds.value.has(event.tool_use_id)) return []
   if (event.type === 'tool_use' && subagentToolIds.value.has(event.tool_use_id)) return []
@@ -77,10 +104,24 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
   }
 
   if (event.type === 'model_input' || event.type === 'user_message') {
-    return [{ ...base, kind: 'input', label: 'Model input', title: 'Context sent to model', input: event.content }]
+    const fallbackOutputIndex = modelOutputByInputIndex.value.get(sourceIndex)
+    const output = event.source_uuid
+      ? modelOutputBySource.value.get(event.source_uuid)
+      : (fallbackOutputIndex == null ? null : events.value[fallbackOutputIndex])
+    return [{
+      ...base,
+      kind: 'model',
+      label: 'Model turn',
+      title: 'Input and output',
+      input: event.content,
+      output: output?.content,
+      endedTime: output?.timestamp,
+    }]
   }
 
   if (event.type === 'model_output' || event.type === 'assistant_message') {
+    if (event.source_uuid && modelInputSources.value.has(event.source_uuid)) return []
+    if (!event.source_uuid && pairedModelOutputIndices.value.has(sourceIndex)) return []
     return [{ ...base, kind: 'output', label: 'Model output', title: 'Assistant response', output: event.content }]
   }
 

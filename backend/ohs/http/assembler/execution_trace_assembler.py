@@ -29,6 +29,7 @@ class ExecutionTraceAssembler:
     def to_tree_response(agent: ExecutionAgent) -> ExecutionTreeResponse:
         return ExecutionTreeResponse(
             agent_id=agent.id,
+            request=agent.request,
             tasks=[ExecutionTraceAssembler._to_task_dto(t) for t in agent.tasks],
             dependencies=[ExecutionTraceAssembler._to_dependency_dto(d) for d in agent.dependencies],
             subagents=[ExecutionTraceAssembler._to_subagent_dto(s) for s in agent.subagents],

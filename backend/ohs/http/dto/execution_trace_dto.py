@@ -66,6 +66,7 @@ class ProvenanceDto(BaseModel):
 
 class ExecutionTreeResponse(BaseModel):
     agent_id: str
+    request: Any = None
     tasks: list[ExecutionTaskDto] = Field(default_factory=list)
     dependencies: list[TaskDependencyDto] = Field(default_factory=list)
     subagents: list[SubagentPlaceholderDto] = Field(default_factory=list)

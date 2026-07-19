@@ -190,6 +190,65 @@ def test_projects_explicit_tasks_and_dependencies_when_task_tools_are_present() 
     }
 
 
+def test_projects_all_tasks_created_for_one_user_message() -> None:
+    # Arrange
+    records = [
+        {"type": "user", "uuid": "user-current", "message": {"role": "user", "content": "Implement and verify"}},
+        {
+            "type": "assistant",
+            "uuid": "assistant-plan",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "create-1", "name": "TaskCreate", "input": {"taskId": "1", "subject": "Implement"}},
+                {"type": "tool_use", "id": "create-2", "name": "TaskCreate", "input": {"taskId": "2", "subject": "Verify"}},
+            ]},
+        },
+    ]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    assert [task.subject for task in projection.tasks] == ["Implement", "Verify"]
+    assert projection.request == "Implement and verify"
+
+
+def test_preserves_multi_task_plan_with_descriptions_and_owned_steps() -> None:
+    # Arrange
+    records = [
+        {"type": "user", "uuid": "user-plan", "message": {"role": "user", "content": "Implement, test, and document the feature"}},
+        {
+            "type": "assistant",
+            "uuid": "assistant-plan",
+            "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Split implementation, verification, and documentation."},
+                {"type": "tool_use", "id": "create-1", "name": "TaskCreate", "input": {"taskId": "1", "subject": "Implement feature", "description": "Change the production code"}},
+                {"type": "tool_use", "id": "create-2", "name": "TaskCreate", "input": {"taskId": "2", "subject": "Verify feature", "description": "Run focused and regression tests"}},
+                {"type": "tool_use", "id": "create-3", "name": "TaskCreate", "input": {"taskId": "3", "subject": "Document feature", "description": "Explain behavior and handoff"}},
+            ]},
+        },
+        {"type": "assistant", "uuid": "start-1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "start-tool-1", "name": "TaskUpdate", "input": {"taskId": "1", "status": "in_progress"}}]}},
+        {"type": "assistant", "uuid": "work-1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "edit-1", "name": "Edit", "input": {"file_path": "feature.py"}}]}},
+        {"type": "assistant", "uuid": "done-1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "done-tool-1", "name": "TaskUpdate", "input": {"taskId": "1", "status": "completed"}}]}},
+        {"type": "assistant", "uuid": "start-2", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "start-tool-2", "name": "TaskUpdate", "input": {"taskId": "2", "status": "in_progress"}}]}},
+        {"type": "assistant", "uuid": "work-2", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "test-1", "name": "Bash", "input": {"command": "pytest"}}]}},
+        {"type": "assistant", "uuid": "done-2", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "done-tool-2", "name": "TaskUpdate", "input": {"taskId": "2", "status": "completed"}}]}},
+        {"type": "assistant", "uuid": "start-3", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "start-tool-3", "name": "TaskUpdate", "input": {"taskId": "3", "status": "in_progress"}}]}},
+        {"type": "assistant", "uuid": "work-3", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "write-1", "name": "Write", "input": {"file_path": "README.md"}}]}},
+        {"type": "assistant", "uuid": "done-3", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "done-tool-3", "name": "TaskUpdate", "input": {"taskId": "3", "status": "completed"}}]}},
+    ]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    assert [(task.id, task.subject, task.description, task.status) for task in projection.tasks] == [
+        ("1", "Implement feature", "Change the production code", "completed"),
+        ("2", "Verify feature", "Run focused and regression tests", "completed"),
+        ("3", "Document feature", "Explain behavior and handoff", "completed"),
+    ]
+    assert [task.loops[-2].tool_names for task in projection.tasks] == [("Edit",), ("Bash",), ("Write",)]
+
+
 def test_merges_task_status_when_create_result_assigns_task_id() -> None:
     # Arrange
     records = [
@@ -383,6 +442,58 @@ def test_returns_lazy_subagent_placeholder_when_agent_tool_has_trace_metadata() 
     assert placeholder.transcript_path == "/tmp/agent.jsonl"
     assert placeholder.span_id == span.id
     assert placeholder.is_expandable is True
+
+
+def test_projects_task_tool_as_subagent_when_it_has_agent_input() -> None:
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-task-agent",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "subagent-tool",
+                "name": "Task",
+                "input": {"subagent_type": "researcher", "prompt": "Inspect the code"},
+            }],
+        },
+    }]
+
+    loop = ExecutionTraceProjector().project(records).tasks[0].loops[0]
+
+    assert any(event.type == ExecutionEventType.SUBAGENT for event in loop.events)
+
+
+def test_projects_overloaded_task_tool_as_multiple_managed_tasks() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-task-plan",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "task-create-1",
+                    "name": "Task",
+                    "input": {"subject": "Inspect backend", "description": "Find the projection bug", "activeForm": "Inspecting backend"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "task-create-2",
+                    "name": "Task",
+                    "input": {"subject": "Verify frontend", "description": "Check the rendered tree", "activeForm": "Verifying frontend"},
+                },
+            ],
+        },
+    }]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    assert [task.subject for task in projection.tasks] == ["Inspect backend", "Verify frontend"]
+    assert projection.subagents == ()
 
 
 def test_reports_next_cursor_when_loop_detail_exceeds_limit() -> None:

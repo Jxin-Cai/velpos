@@ -41,27 +41,21 @@ function loopState(loopId) {
   return props.getLoopLoadState(loopId, props.agentSpanId)
 }
 
-function eventLabel(type) {
-  const labels = {
-    model_input: 'Model input',
-    model_output: 'Model output',
-    user_message: 'User message',
-    assistant_message: 'Model output',
-    tool_use: 'Tool call',
-    tool_result: 'Tool result',
-    subagent: 'Subagent call',
-  }
-  return labels[type] || type
-}
-
-function formatContent(content) {
-  if (content == null) return ''
-  if (typeof content === 'string') return content
-  try {
-    return JSON.stringify(content, null, 2)
-  } catch {
-    return String(content)
-  }
+function pairedEvents(items = []) {
+  const results = new Map(items.filter(item => item.type === 'tool_result').map(item => [item.tool_use_id, item]))
+  const outputs = new Map(items.filter(item => item.type === 'model_output' && item.source_uuid).map(item => [item.source_uuid, item]))
+  const inputs = new Set(items.filter(item => item.type === 'model_input' && item.source_uuid).map(item => item.source_uuid))
+  return items.flatMap((event, index) => {
+    if (event.type === 'tool_result') return []
+    if (event.type === 'model_output' && event.source_uuid && inputs.has(event.source_uuid)) return []
+    if (event.type === 'tool_use') {
+      return [{ id: event.tool_use_id || index, label: event.tool_name || 'Tool call', input: event.content, output: results.get(event.tool_use_id)?.content }]
+    }
+    if (event.type === 'model_input') {
+      return [{ id: event.source_uuid || index, label: 'Model turn', input: event.content, output: outputs.get(event.source_uuid)?.content }]
+    }
+    return [{ id: `${event.source_uuid || index}-${event.type}`, label: event.type, output: event.content }]
+  })
 }
 </script>
 
@@ -74,7 +68,7 @@ function formatContent(content) {
         </svg>
       </span>
       <span class="inline-agent-id">{{ tree.agent_id }}</span>
-      <span class="inline-task-count">{{ tree.tasks?.length || 0 }} tasks</span>
+      <span class="inline-task-count">{{ tree.tasks?.length || 0 }} {{ tree.tasks?.length === 1 ? 'task' : 'tasks' }}</span>
     </div>
 
     <div class="inline-subagent-body">
@@ -95,6 +89,7 @@ function formatContent(content) {
           :depth="1"
           :expanded="expandedLoops.has(loop.id)"
           :load-state="loopState(loop.id)"
+          @select-loop="toggleLoop"
           @toggle="toggleLoop(loop.id)"
         >
           <div class="inline-step-detail">
@@ -103,21 +98,12 @@ function formatContent(content) {
               {{ loopDetail(loop.id)?.error || 'Unable to load step' }}
             </div>
             <template v-else-if="loopDetail(loop.id)?.items?.length">
-              <div
-                v-for="(event, eventIndex) in loopDetail(loop.id).items"
-                :key="event.source_uuid || `${loop.id}-${eventIndex}`"
-                class="inline-event"
-              >
-                <div class="inline-event-header">
-                  <span class="inline-event-type">{{ eventLabel(event.type) }}</span>
-                  <span v-if="event.tool_name" class="inline-event-tool">{{ event.tool_name }}</span>
-                  <span v-if="event.is_error" class="inline-event-error">error</span>
+              <div v-for="event in pairedEvents(loopDetail(loop.id).items)" :key="event.id" class="inline-event">
+                <div class="inline-event-header">{{ event.label }}</div>
+                <div class="inline-event-payloads" :class="{ split: event.input != null && event.output != null }">
+                  <SpanPayloadViewer v-if="event.input != null" :payload="event.input" label="Input" />
+                  <SpanPayloadViewer v-if="event.output != null" :payload="event.output" label="Output" />
                 </div>
-                <SpanPayloadViewer
-                  v-if="event.content != null"
-                  :payload="formatContent(event.content)"
-                  :label="event.tool_name || eventLabel(event.type)"
-                />
               </div>
             </template>
             <div v-else-if="loopState(loop.id) === 'loaded'" class="inline-state">No recorded events</div>
@@ -177,24 +163,9 @@ function formatContent(content) {
   color: var(--text-tertiary);
 }
 .inline-state--error { color: var(--color-error, #ef4444); }
-.inline-event {
-  padding: 7px 8px;
-  border-left: 2px solid var(--border-subtle);
-  background: var(--bg-primary);
-}
-.inline-event-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-.inline-event-type,
-.inline-event-tool,
-.inline-event-error {
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-.inline-event-type { color: var(--text-secondary); }
-.inline-event-tool { color: var(--text-accent); }
-.inline-event-error { margin-left: auto; color: var(--color-error, #ef4444); }
+.inline-event { padding: 7px 8px; border-left: 2px solid var(--border-subtle); background: var(--bg-primary); }
+.inline-event-header { margin-bottom: 5px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.inline-event-payloads { display: grid; gap: 6px; }
+.inline-event-payloads.split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 760px) { .inline-event-payloads.split { grid-template-columns: 1fr; } }
 </style>
