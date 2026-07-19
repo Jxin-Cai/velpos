@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from domain.session.model.session import Session
+from domain.session.model.session_summary import SessionSummary
 
 
 class SessionRepository(ABC):
@@ -36,6 +37,11 @@ class SessionRepository(ABC):
         The list is ordered by creation time in descending order.
         Returns an empty list if no data exists.
         """
+        ...
+
+    @abstractmethod
+    async def find_all_summaries(self) -> list[SessionSummary]:
+        """Load lightweight session-list rows without deserializing messages."""
         ...
 
     @abstractmethod

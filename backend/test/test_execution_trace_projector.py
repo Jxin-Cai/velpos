@@ -32,6 +32,26 @@ def test_creates_implicit_task_and_loop_when_transcript_has_no_explicit_task() -
     assert projection.tasks[0].loops[0].provenance.reconstructed_from_transcript is True
 
 
+def test_projects_thinking_block_as_planning_event_before_explicit_tasks() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-plan",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": "Break the request into tasks first."}],
+        },
+    }]
+
+    # Act
+    loop = ExecutionTraceProjector().project(records).tasks[0].loops[0]
+
+    # Assert
+    planning = [event for event in loop.events if event.type == ExecutionEventType.THINKING]
+    assert len(planning) == 1
+    assert planning[0].metadata["phase"] == "planning"
+
+
 def test_pairs_parallel_tool_results_by_id_when_results_are_reordered() -> None:
     # Arrange
     records = [
@@ -126,6 +146,160 @@ def test_projects_explicit_tasks_and_dependencies_when_task_tools_are_present() 
         ("task-2", "task-1"),
         ("task-2", "task-0"),
     }
+
+
+def test_merges_task_status_when_create_result_assigns_task_id() -> None:
+    # Arrange
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "assistant-plan",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "create-1",
+                    "name": "TaskCreate",
+                    "input": {"subject": "Implement projector", "description": "Build it"},
+                }],
+            },
+        },
+        {
+            "type": "user",
+            "uuid": "user-create-result",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "create-1",
+                    "content": "Task #1 created successfully: Implement projector",
+                }],
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-start",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "update-start",
+                    "name": "TaskUpdate",
+                    "input": {"taskId": "1", "status": "in_progress"},
+                }],
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-work",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "read-1",
+                    "name": "Read",
+                    "input": {"file_path": "projector.py"},
+                }],
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-complete",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "update-complete",
+                    "name": "TaskUpdate",
+                    "input": {"taskId": "1", "status": "completed"},
+                }],
+            },
+        },
+    ]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    assert [(task.id, task.subject, task.status) for task in projection.tasks] == [
+        ("1", "Implement projector", "completed"),
+    ]
+    assert projection.tasks[0].loops
+    assert all(loop.task_id == "1" for loop in projection.tasks[0].loops)
+    assert any(
+        event.tool_name == "Read"
+        for loop in projection.tasks[0].loops
+        for event in loop.events
+    )
+
+
+def test_ignores_status_update_when_task_was_not_planned() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "update-unknown",
+                "name": "TaskUpdate",
+                "input": {"taskId": "99", "status": "completed"},
+            }],
+        },
+    }]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    assert all(task.id != "99" for task in projection.tasks)
+    assert "unknown_task_update:99" in projection.provenance.warnings
+
+
+def test_calculates_step_duration_when_tool_result_has_timestamp() -> None:
+    # Arrange
+    records = [
+        {
+            "type": "user",
+            "uuid": "user-1",
+            "timestamp": "2026-07-19T10:00:00.000Z",
+            "message": {"role": "user", "content": "Inspect"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-1",
+            "timestamp": "2026-07-19T10:00:01.250Z",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "read-1",
+                    "name": "Read",
+                    "input": {"file_path": "app.py"},
+                }],
+            },
+        },
+        {
+            "type": "user",
+            "uuid": "user-2",
+            "timestamp": "2026-07-19T10:00:03.500Z",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "read-1",
+                    "content": {"lines": 12},
+                }],
+            },
+        },
+    ]
+
+    # Act
+    loop = ExecutionTraceProjector().project(records).tasks[0].loops[0]
+
+    # Assert
+    assert loop.duration_ms == 3500
 
 
 def test_returns_lazy_subagent_placeholder_when_agent_tool_has_trace_metadata() -> None:

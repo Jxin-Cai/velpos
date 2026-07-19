@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -16,6 +17,7 @@ class ExecutionEventType(str, Enum):
     TOOL_USE = "tool_use"
     TOOL_RESULT = "tool_result"
     SUBAGENT = "subagent"
+    THINKING = "thinking"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class ExecutionEvent:
     tool_name: str | None = None
     is_error: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,48 @@ class AgentLoop:
     stop_reason: str | None
     usage: dict[str, Any]
     provenance: ProjectionProvenance
+    started_time: datetime | None = None
+    ended_time: datetime | None = None
+    duration_ms: int = 0
+
+    @property
+    def subagent_count(self) -> int:
+        return sum(1 for e in self.events if e.type == ExecutionEventType.SUBAGENT)
+
+    @property
+    def subagent_tool_use_ids(self) -> tuple[str, ...]:
+        return tuple(
+            e.metadata.get("tool_use_id")
+            for e in self.events
+            if e.type == ExecutionEventType.SUBAGENT and e.metadata.get("tool_use_id")
+        )
+
+    @property
+    def subagents(self) -> tuple[dict[str, Any], ...]:
+        """Agent calls belonging to this loop, kept with their parent task."""
+        return tuple(
+            {
+                **event.metadata,
+                "tool_use_id": event.metadata.get("tool_use_id") or event.tool_use_id,
+                "subagent": event.metadata.get("subagent"),
+                "span_id": event.metadata.get("span_id"),
+                "agent_id": event.metadata.get("agent_id"),
+                "transcript_path": event.metadata.get("transcript_path"),
+                "is_expandable": bool(event.metadata.get("span_id")),
+            }
+            for event in self.events
+            if event.type == ExecutionEventType.SUBAGENT
+        )
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            event.tool_name
+            for event in self.events
+            if event.type == ExecutionEventType.TOOL_USE
+            and event.tool_name
+            and event.tool_name not in {"TaskCreate", "TaskUpdate"}
+        ))
 
     def detail_page(self, cursor: int = 0, limit: int = 100) -> LoopDetailPage:
         if cursor < 0:
@@ -92,6 +137,20 @@ class ExecutionTask:
     status: str
     explicit: bool
     loops: tuple[AgentLoop, ...]
+
+    @property
+    def thinking(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            {
+                "content": event.content,
+                "phase": event.metadata.get("phase", "thinking"),
+                "timestamp": event.timestamp,
+                "loop_id": loop.id,
+            }
+            for loop in self.loops
+            for event in loop.events
+            if event.type == ExecutionEventType.THINKING
+        )
 
 
 @dataclass(frozen=True)

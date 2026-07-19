@@ -19,6 +19,7 @@ export function useExecutionTree() {
   const expandedTasks = reactive(new Set())
   const expandedLoops = reactive(new Set())
   const expandedSubagents = reactive(new Map())
+  const inlineSubagents = reactive(new Map())
 
   const loopDetails = reactive(new Map())
   const loopLoadState = reactive(new Map())
@@ -32,6 +33,10 @@ export function useExecutionTree() {
   const dependencies = computed(() => tree.value?.dependencies || [])
   const subagents = computed(() => tree.value?.subagents || [])
 
+  function loopKey(loopId, agentSpanId = null) {
+    return agentSpanId ? `${agentSpanId}:${loopId}` : loopId
+  }
+
   async function loadTree(sessionId, runId, agentSpanId = null) {
     loading.value = true
     error.value = ''
@@ -44,6 +49,11 @@ export function useExecutionTree() {
       if (result?.tasks?.length) {
         for (const task of result.tasks) {
           expandedTasks.add(task.id)
+          for (const loop of task.loops || []) {
+            // Surface agent calls immediately in the task chain so the
+            // internal-process control is discoverable without extra clicks.
+            if (loop.subagents?.length) expandedLoops.add(loop.id)
+          }
         }
       }
     } catch (err) {
@@ -54,20 +64,21 @@ export function useExecutionTree() {
     }
   }
 
-  async function loadLoopDetail(loopId) {
-    if (loopLoadState.get(loopId) === NodeStatus.LOADING) return
+  async function loadLoopDetail(loopId, agentSpanId = null) {
+    const key = loopKey(loopId, agentSpanId)
+    if (loopLoadState.get(key) === NodeStatus.LOADING) return
     const sessionId = currentSessionId.value
     const runId = selectedRunId.value
     if (!sessionId || !runId) return
 
-    loopLoadState.set(loopId, NodeStatus.LOADING)
+    loopLoadState.set(key, NodeStatus.LOADING)
     try {
-      const result = await fetchLoopDetail(sessionId, runId, loopId)
-      loopDetails.set(loopId, result)
-      loopLoadState.set(loopId, NodeStatus.LOADED)
+      const result = await fetchLoopDetail(sessionId, runId, loopId, agentSpanId)
+      loopDetails.set(key, result)
+      loopLoadState.set(key, NodeStatus.LOADED)
     } catch (err) {
-      loopLoadState.set(loopId, NodeStatus.ERROR)
-      loopDetails.set(loopId, { error: err?.message || 'Load failed' })
+      loopLoadState.set(key, NodeStatus.ERROR)
+      loopDetails.set(key, { error: err?.message || 'Load failed' })
     }
   }
 
@@ -138,6 +149,32 @@ export function useExecutionTree() {
     }
   }
 
+  async function loadInlineSubagentTree(spanId) {
+    const sessionId = currentSessionId.value
+    const runId = selectedRunId.value
+    if (!sessionId || !runId) return
+
+    inlineSubagents.set(spanId, { loading: true, tree: null, error: '' })
+    try {
+      const result = await fetchExecutionTree(sessionId, runId, spanId)
+      inlineSubagents.set(spanId, { loading: false, tree: result, error: '' })
+    } catch (err) {
+      inlineSubagents.set(spanId, { loading: false, tree: null, error: err?.message || 'Load failed' })
+    }
+  }
+
+  function toggleInlineSubagent(spanId) {
+    if (inlineSubagents.has(spanId)) {
+      inlineSubagents.delete(spanId)
+    } else {
+      loadInlineSubagentTree(spanId)
+    }
+  }
+
+  function getInlineSubagentState(spanId) {
+    return inlineSubagents.get(spanId) || null
+  }
+
   function selectLoop(loopId) {
     selectedLoopId.value = loopId
     if (!expandedLoops.has(loopId)) {
@@ -153,12 +190,12 @@ export function useExecutionTree() {
     return expandedLoops.has(loopId)
   }
 
-  function getLoopDetail(loopId) {
-    return loopDetails.get(loopId) || null
+  function getLoopDetail(loopId, agentSpanId = null) {
+    return loopDetails.get(loopKey(loopId, agentSpanId)) || null
   }
 
-  function getLoopLoadState(loopId) {
-    return loopLoadState.get(loopId) || NodeStatus.IDLE
+  function getLoopLoadState(loopId, agentSpanId = null) {
+    return loopLoadState.get(loopKey(loopId, agentSpanId)) || NodeStatus.IDLE
   }
 
   function getSubagentState(spanId) {
@@ -186,9 +223,11 @@ export function useExecutionTree() {
     expandedTasks,
     expandedLoops,
     expandedSubagents,
+    inlineSubagents,
     loadTree,
     loadLoopDetail,
     loadSubagentTree,
+    loadInlineSubagentTree,
     expandTask,
     collapseTask,
     toggleTask,
@@ -198,12 +237,14 @@ export function useExecutionTree() {
     expandSubagent,
     collapseSubagent,
     toggleSubagent,
+    toggleInlineSubagent,
     selectLoop,
     isTaskExpanded,
     isLoopExpanded,
     getLoopDetail,
     getLoopLoadState,
     getSubagentState,
+    getInlineSubagentState,
     refreshSummary,
     NodeStatus,
   }

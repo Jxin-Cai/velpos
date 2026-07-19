@@ -11,13 +11,11 @@ from application.git_helpers import run_git
 
 from application.project.command.create_project_command import CreateProjectCommand
 from application.project.command.reorder_projects_command import ReorderProjectsCommand
-from application.team_task.command.create_team_project_command import CreateTeamProjectCommand
 from domain.session.acl.connection_manager import ConnectionManager
 from application.session.session_application_service import SessionApplicationService
 from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from domain.session.repository.session_repository import SessionRepository
-from domain.team_task.repository.team_task_repository import TeamTaskRepository
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
@@ -31,13 +29,11 @@ class ProjectApplicationService:
         session_repository: SessionRepository,
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         connection_manager: ConnectionManager,
-        team_task_repository: TeamTaskRepository | None = None,
     ) -> None:
         self._project_repository = project_repository
         self._session_repository = session_repository
         self._session_service_factory = session_service_factory
         self._connection_manager = connection_manager
-        self._team_task_repository = team_task_repository
 
     # ------------------------------------------------------------------
     # CRUD
@@ -45,7 +41,7 @@ class ProjectApplicationService:
 
     async def create_project(self, command: CreateProjectCommand) -> Project:
         projects_root = os.getenv(
-            "PROJECTS_ROOT_DIR", os.path.expanduser("~/claude-projects")
+            "PROJECTS_ROOT_DIR", os.path.expanduser("~/.velpos/agents")
         )
         dir_path = os.path.join(projects_root, command.name.strip())
 
@@ -110,71 +106,12 @@ class ProjectApplicationService:
     async def list_projects(self) -> list[Project]:
         return await self._project_repository.find_all()
 
-    async def create_team_project(self, command: CreateTeamProjectCommand) -> Project:
-        config = command.team_config
-        mode = await self._validate_team_config(config)
-
-        dir_path = command.dir_path.strip()
-        if not dir_path or not os.path.isabs(dir_path):
-            raise BusinessException("dir_path must be an absolute path", "INVALID_DIR_PATH")
-
-        project = Project.create(
-            name=command.name.strip(),
-            dir_path=dir_path,
-            project_type="team",
-            team_config=config,
-        )
-        await self._project_repository.save(project)
-        logger.info("Team project created: id=%s, name=%s, mode=%s", project.id, project.name, mode)
-        return project
-
-    async def get_team_overview(self, project_id: str) -> dict:
-        project = await self._project_repository.find_by_id(project_id)
-        if project is None:
-            raise BusinessException("Project not found", "PROJECT_NOT_FOUND")
-        if project.project_type != "team":
-            raise BusinessException("Not a team project", "NOT_TEAM_PROJECT")
-
-        config = project.team_config
-        mode = config.get("mode", "delegation")
-        members_cfg = config.get("pipeline" if mode == "delegation" else "members", [])
-
-        members = []
-        for m in members_cfg:
-            sub = await self._project_repository.find_by_id(m.get("project_id", ""))
-            members.append({
-                "project_id": m.get("project_id", ""),
-                "project_name": sub.name if sub else "(deleted)",
-                "project_dir": sub.dir_path if sub else "",
-                "role": m.get("role", ""),
-                "role_label": m.get("role_label", ""),
-            })
-
-        return {
-            "project_id": project.id,
-            "project_name": project.name,
-            "mode": mode,
-            "members": members,
-        }
-
     async def get_project(self, project_id: str) -> Project:
         project = await self._project_repository.find_by_id(project_id)
         if project is None:
             raise BusinessException("Project not found", "PROJECT_NOT_FOUND")
         return project
 
-    async def update_team_config(self, project_id: str, team_config: dict) -> Project:
-        project = await self._project_repository.find_by_id(project_id)
-        if project is None:
-            raise BusinessException("Project not found", "PROJECT_NOT_FOUND")
-        if project.project_type != "team":
-            raise BusinessException("Not a team project", "NOT_TEAM_PROJECT")
-        await self._validate_team_config(team_config)
-        project.update_team_config(team_config)
-        await self._project_repository.save(project)
-        return project
-
-    async def _validate_team_config(self, config: dict) -> str:
         mode = config.get("mode")
         if mode not in ("delegation", "collaboration"):
             raise BusinessException("Invalid team mode, must be 'delegation' or 'collaboration'", "INVALID_TEAM_MODE")
@@ -278,14 +215,6 @@ class ProjectApplicationService:
                 logger.debug("Failed to close cascade session DB session", exc_info=True)
 
         await self._project_repository.remove(project_id)
-
-        if self._team_task_repository:
-            try:
-                deleted_tasks = await self._team_task_repository.remove_by_project(project_id)
-                if deleted_tasks:
-                    logger.info("Deleted %d team tasks for project %s", deleted_tasks, project_id)
-            except Exception:
-                logger.warning("Failed to clean team tasks for project=%s", project_id, exc_info=True)
 
         logger.info("Project deleted: id=%s (cascade %d sessions)", project_id, len(sessions))
 
@@ -404,4 +333,3 @@ class ProjectApplicationService:
             )
 
         return stdout.decode().strip()
-

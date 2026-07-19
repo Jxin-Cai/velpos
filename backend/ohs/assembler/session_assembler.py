@@ -65,8 +65,9 @@ class SessionAssembler:
             "sdk_session_id": SessionAssembler._public_sdk_session_id(session.sdk_session_id),
             "updated_time": session.updated_time.isoformat() if session.updated_time else None,
             "git_branch": git_branch,
-            "team_task_id": session.team_task_id or "",
             "trace_id": session.trace_id or "",
+            "card_execution_id": session.card_execution_id,
+            "agent_slot_id": session.agent_slot_id,
             "recovery": SessionAssembler._recovery_to_dict(session),
         }
 

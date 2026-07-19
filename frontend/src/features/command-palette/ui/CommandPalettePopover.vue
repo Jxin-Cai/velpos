@@ -41,7 +41,9 @@ function filterByTab(items, typeField = 'type') {
 
 const filteredCommands = computed(() => {
   let list = filterByTab(props.commands)
-  const q = props.searchQuery.toLowerCase()
+  const raw = props.searchQuery.toLowerCase()
+  if (!raw) return list
+  const q = raw.startsWith('/') ? raw.slice(1) : raw
   if (!q) return list
   return list.filter(
     c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)
@@ -50,7 +52,9 @@ const filteredCommands = computed(() => {
 
 const filteredPolicyRows = computed(() => {
   let list = filterByTab(props.policyRows, 'command_type')
-  const q = props.searchQuery.toLowerCase()
+  const raw = props.searchQuery.toLowerCase()
+  if (!raw) return list
+  const q = raw.startsWith('/') ? raw.slice(1) : raw
   if (!q) return list
   return list.filter(row => (
     row.command_name.toLowerCase().includes(q)

@@ -230,6 +230,9 @@ cp build/dev/.env.example build/dev/.env
 | `CLAUDE_CLI_PATH` | *（自动探测）* | 仅当 `claude` 不在 PATH 中时需手动设置 |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
+| `SESSION_MAX_CONCURRENT_QUERIES` | `8` | 全局并行 Agent 查询数（建议按 CPU/额度调整，最大 64） |
+| `CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS` | `60` | 无输出时的检测间隔 |
+| `CLAUDE_STREAM_MAX_SILENT_TIMEOUTS` | `10` | 连续无输出次数上限；达到后断开并释放执行 slot，等待用户输入时不触发 |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | **宿主机文件系统**上的项目根目录 |
 | `CORS_ALLOW_ORIGINS` | `*` | 允许的浏览器来源 |
 

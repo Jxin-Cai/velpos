@@ -38,9 +38,11 @@ const emit = defineEmits([
   'open-scheduler',
   'delete-project',
   'reorder-projects',
+  'select-project',
+  'mode-change',
 ])
 
-const { projects, sidebarMode, setSidebarMode, addProject } = useProject()
+const { projects, sidebarMode, setSidebarMode, addProject, setCurrentProjectId } = useProject()
 
 const showCreateDialog = ref(false)
 const showCreateTeamDialog = ref(false)
@@ -367,6 +369,10 @@ function handleCreateCancel() {
 function handleTeamCreated(project) {
   showCreateTeamDialog.value = false
   addProject(project)
+  if (project?.id) {
+    setCurrentProjectId(project.id)
+    emit('select-project', project.id)
+  }
 }
 
 function handleTeamCreateCancel() {
@@ -379,6 +385,20 @@ function handleNewClick() {
   } else {
     showCreateDialog.value = true
   }
+}
+
+function handleModeChange(mode) {
+  setSidebarMode(mode)
+  emit('mode-change', mode)
+  if (mode === 'teams') {
+    const firstTeam = projects.value.find(project => project.project_type === 'team')
+    emit('select-project', firstTeam?.id || null)
+  }
+}
+
+function handleProjectHeaderClick(group) {
+  if (group.project_type === 'team') emit('select-project', group.id)
+  toggleGroup(group.id)
 }
 
 function scrollToSession(sessionId) {
@@ -452,12 +472,12 @@ defineExpose({ scrollToSession })
       <button
         class="mode-tab"
         :class="{ active: sidebarMode === 'single' }"
-        @click="setSidebarMode('single')"
+        @click="handleModeChange('single')"
       >Agents</button>
       <button
         class="mode-tab"
         :class="{ active: sidebarMode === 'teams' }"
-        @click="setSidebarMode('teams')"
+        @click="handleModeChange('teams')"
       >Teams</button>
     </div>
 
@@ -494,7 +514,7 @@ defineExpose({ scrollToSession })
           @drop="onDrop($event, group.id)"
           @dragend="onDragEnd"
         >
-          <div class="project-header" :title="group.displayName || group.name" @click="toggleGroup(group.id)">
+          <div class="project-header" :title="group.displayName || group.name" @click="handleProjectHeaderClick(group)">
               <svg
                 class="collapse-arrow"
                 :class="{ collapsed: isGroupCollapsed(group.id) }"

@@ -162,13 +162,10 @@ export function useSessionList() {
     const session = sessions.value.find(s => s.session_id === sessionId)
     if (!session) return
 
-    const project = projects.value.find(p => p.id === session.project_id)
-    const isTeamCoordinator = project?.project_type === 'team' && !session.team_task_id
-
     if (session.source === 'claude-code') {
       await deleteClaudeSession(sessionId, session.project_dir || null)
     } else {
-      await deleteSession(sessionId, { cascade: isTeamCoordinator })
+      await deleteSession(sessionId)
     }
     removeSession(sessionId)
     removeState(sessionId)

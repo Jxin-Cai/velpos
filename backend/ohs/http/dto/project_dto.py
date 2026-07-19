@@ -13,16 +13,6 @@ class CreateProjectRequest(BaseModel):
     github_url: str = Field(default="", max_length=500, description="Optional GitHub repository URL to clone")
 
 
-class CreateTeamProjectRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200, description="Team project name")
-    dir_path: str = Field(min_length=1, description="Working directory for the team project")
-    team_config: dict = Field(description="Team configuration (mode, pipeline/members, etc.)")
-
-
-class UpdateTeamConfigRequest(BaseModel):
-    team_config: dict = Field(description="Updated team configuration")
-
-
 class InitPluginRequest(BaseModel):
     plugin_type: str = Field(min_length=1, max_length=32, description="Plugin type, e.g. 'lark'")
     session_id: str = Field(min_length=1, description="Current session ID to run init in")

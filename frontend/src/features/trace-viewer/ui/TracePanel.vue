@@ -136,7 +136,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
             >Raw spans</button>
           </nav>
 
-          <main class="trace-body">
+          <main class="trace-body" :class="{ 'trace-body--execution': viewMode === ViewMode.EXECUTION }">
             <template v-if="viewMode === ViewMode.EXECUTION">
               <ExecutionTreePanel :run-id="selectedRunId" />
             </template>
@@ -198,7 +198,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
   backdrop-filter: blur(8px);
 }
 .trace-panel {
-  width: min(860px, calc(100vw - (var(--dialog-gutter) * 2)));
+  width: min(1280px, calc(100vw - (var(--dialog-gutter) * 2)));
   height: calc(100dvh - (var(--dialog-gutter) * 2));
   display: flex;
   flex-direction: column;
@@ -341,6 +341,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
   padding: 18px 16px 24px;
   scrollbar-gutter: stable;
 }
+.trace-body--execution {
+  display: flex;
+  overflow: hidden;
+}
 .trace-empty {
   min-height: 320px;
   display: flex;
@@ -407,5 +411,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
   .trace-body { padding: 14px 10px 20px; }
   .trace-footer { gap: 12px; padding: 8px 18px; overflow-x: auto; }
   .footer-divider, .footer-spacer { display: none; }
+}
+@media (min-width: 1440px) {
+  .trace-panel { width: min(1440px, calc(100vw - (var(--dialog-gutter) * 2))); }
 }
 </style>

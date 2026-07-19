@@ -29,12 +29,16 @@ const wsConnection = inject('wsConnection')
 
 // Track whether interactive messages have been answered
 const interactiveAnswered = ref(false)
+const interactiveError = ref('')
 
 function handleInteractiveResponse(data) {
   if (interactiveAnswered.value) return
   if (wsConnection?.value && wsConnection.value.send({ action: 'user_response', data })) {
     interactiveAnswered.value = true
+    interactiveError.value = ''
+    return
   }
+  interactiveError.value = 'Connection lost. Reopen this session and try again.'
 }
 
 // User message collapse state
@@ -303,6 +307,9 @@ function handleDelegatedClick(e) {
         @respond="handleInteractiveResponse"
       />
     </template>
+    <p v-if="interactiveError" class="interactive-error" role="alert">
+      {{ interactiveError }}
+    </p>
   </div>
 </template>
 
@@ -450,5 +457,12 @@ function handleDelegatedClick(e) {
 
 .user-expand-btn:hover {
   text-decoration: underline;
+}
+
+.interactive-error {
+  margin: 8px 0 0;
+  color: var(--danger, #ef5b5b);
+  font-size: 12px;
+  line-height: 1.4;
 }
 </style>

@@ -6,10 +6,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from domain.session.model.session import Session
+from domain.session.model.session_summary import SessionSummary
 from domain.session.model.session_audit_event import SessionAuditEvent
 from ohs.assembler.session_assembler import SessionAssembler
 
-_DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-opus-4-6")
+_DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "default")
 
 
 class CreateSessionRequest(BaseModel):
@@ -81,6 +82,8 @@ class SessionResponse(BaseModel):
     source: str = ""
     git_branch: str = ""
     im_binding: dict | None = None
+    card_execution_id: str | None = None
+    agent_slot_id: str | None = None
 
     @classmethod
     def from_domain(
@@ -105,6 +108,36 @@ class SessionResponse(BaseModel):
             source=summary.get("source", ""),
             git_branch=summary.get("git_branch", ""),
             im_binding=binding_info,
+            card_execution_id=summary.get("card_execution_id"),
+            agent_slot_id=summary.get("agent_slot_id"),
+        )
+
+    @classmethod
+    def from_summary(
+        cls,
+        session: SessionSummary,
+        binding_info: dict | None = None,
+        git_branch: str = "",
+    ) -> SessionResponse:
+        return cls(
+            session_id=session.session_id,
+            project_id=session.project_id,
+            model=session.model,
+            status=session.status.value,
+            message_count=session.message_count,
+            usage={
+                "input_tokens": session.usage.input_tokens,
+                "output_tokens": session.usage.output_tokens,
+            },
+            last_input_tokens=session.last_input_tokens,
+            project_dir=session.project_dir,
+            name=session.name,
+            sdk_session_id="" if session.sdk_session_id.startswith("fork:") else session.sdk_session_id,
+            updated_time=session.updated_time.isoformat() if session.updated_time else None,
+            git_branch=git_branch,
+            im_binding=binding_info,
+            card_execution_id=session.card_execution_id,
+            agent_slot_id=session.agent_slot_id,
         )
 
 
@@ -126,6 +159,24 @@ class SessionListResponse(BaseModel):
                 for s in sessions
             ],
         )
+
+    @classmethod
+    def from_summary_list(
+        cls,
+        sessions: list[SessionSummary],
+        binding_map: dict | None = None,
+        git_branch_map: dict | None = None,
+    ) -> SessionListResponse:
+        binding_map = binding_map or {}
+        git_branch_map = git_branch_map or {}
+        return cls(sessions=[
+            SessionResponse.from_summary(
+                session,
+                binding_map.get(session.session_id),
+                git_branch_map.get(session.session_id, ""),
+            )
+            for session in sessions
+        ])
 
 
 class SessionDetailResponse(BaseModel):

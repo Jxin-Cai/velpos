@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 from domain.shared.utils import safe_json_loads
 from domain.session.model.session import Session
+from domain.session.model.session_summary import SessionSummary
 from domain.session.model.session_status import SessionStatus
 from domain.session.model.usage import Usage
 from domain.session.repository.session_repository import SessionRepository
@@ -48,6 +49,43 @@ class SessionRepositoryImpl(SessionRepository):
         result = await self._session.execute(stmt)
         models = result.scalars().all()
         return [self._to_domain(m) for m in models]
+
+    async def find_all_summaries(self) -> list[SessionSummary]:
+        stmt = select(
+            SessionModel.session_id,
+            SessionModel.project_id,
+            SessionModel.model,
+            SessionModel.status,
+            func.json_length(SessionModel.messages).label("message_count"),
+            SessionModel.input_tokens,
+            SessionModel.output_tokens,
+            SessionModel.last_input_tokens,
+            SessionModel.project_dir,
+            SessionModel.name,
+            SessionModel.sdk_session_id,
+            SessionModel.updated_time,
+            SessionModel.card_execution_id,
+            SessionModel.agent_slot_id,
+        ).order_by(SessionModel.updated_time.desc())
+        rows = (await self._session.execute(stmt)).all()
+        return [
+            SessionSummary(
+                session_id=row.session_id,
+                project_id=row.project_id,
+                model=row.model,
+                status=SessionStatus(row.status),
+                message_count=int(row.message_count or 0),
+                usage=Usage(input_tokens=row.input_tokens, output_tokens=row.output_tokens),
+                last_input_tokens=row.last_input_tokens,
+                project_dir=row.project_dir,
+                name=row.name,
+                sdk_session_id=row.sdk_session_id,
+                updated_time=row.updated_time,
+                card_execution_id=row.card_execution_id,
+                agent_slot_id=row.agent_slot_id,
+            )
+            for row in rows
+        ]
 
     async def find_by_project_id(self, project_id: str) -> list[Session]:
         stmt = select(SessionModel).where(

@@ -5,7 +5,7 @@ import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
 import { createWsConnection, createGlobalEventConnection } from '@shared/api/wsClient'
 import { listSchedules } from '@features/scheduler/api/schedulerApi'
-import { useTeamRuntime } from '@features/agent-teams/model/useTeamRuntime'
+import { TeamBoardPage, useTeamBoard } from '@features/team-board'
 import { ChatPanelPage } from '@pages/chat-panel'
 import { SessionSidebar, useSessionList } from '@features/session-list'
 import { NotificationBell, useNotifications } from '@features/notification-center'
@@ -27,6 +27,7 @@ const {
   session,
   sessions,
   currentSessionId,
+  setCurrentSessionId,
   updateSessionInList,
   // Targeted APIs (write to specific session by ID)
   updateSessionFor,
@@ -52,7 +53,7 @@ const {
   setRestoredPrompt,
 } = useSession()
 
-const { projects, currentProject } = useProject()
+const { projects, currentProject, sidebarMode, setSidebarMode, setCurrentProjectId } = useProject()
 
 const {
   loading,
@@ -89,10 +90,11 @@ const schedulerProjectId = ref('')
 const scheduleCounts = ref({})
 let globalEventConnection = null
 const sidebarRef = ref(null)
-const { handleTeamEvent, handleWorkerSessionEvent, loadTimeline, loadLinkedSessions } = useTeamRuntime()
+const { handleBoardEvent } = useTeamBoard()
 const vbRunning = ref(false)
 const vbMessage = ref('')
 let vbRefresh = null
+const teamBoardVisible = ref(false)
 
 async function handleApplyVb(payload) {
   if (!currentSessionId.value || !currentProject.value || vbRunning.value) return
@@ -135,12 +137,43 @@ function handleTerminalHeightChange(height) {
 }
 
 function handleSessionSelect(id) {
+  teamBoardVisible.value = false
   switchSession(id)
   isMobileSidebarOpen.value = false
 }
 
+function handleProjectSelect(projectId) {
+  setCurrentProjectId(projectId)
+  setCurrentSessionId(null)
+  teamBoardVisible.value = Boolean(
+    projectId && projects.value.find(project => project.id === projectId)?.project_type === 'team'
+  )
+  isMobileSidebarOpen.value = false
+}
+
+function handleTeamNavigate(sessionId) {
+  if (!sessionId) return
+  setSidebarMode('single')
+  handleSessionSelect(sessionId)
+}
+
+function handleReturnToTeam(projectId) {
+  if (!projectId) return
+  setSidebarMode('teams')
+  handleProjectSelect(projectId)
+}
+
+function handleSidebarModeChange(mode) {
+  if (mode === 'single') {
+    teamBoardVisible.value = false
+    restoreLastSession()
+  }
+}
+
 function handleNotificationNavigate(sessionId) {
-  switchSession(sessionId)
+  if (!sessionId) return
+  setSidebarMode('single')
+  handleSessionSelect(sessionId)
 }
 
 function handleLocateSession() {
@@ -190,12 +223,9 @@ async function handleGlobalEvent(data) {
       })
     }
   }
-  // Forward team task events to the runtime composable
-  if (data?.event?.startsWith('team_task_')) {
-    handleTeamEvent(data)
-  }
-  if (data?.event === 'session_waiting_for_input' || data?.event === 'session_input_resolved') {
-    handleWorkerSessionEvent(data)
+  // Forward board card events to the team board composable
+  if (data?.event?.startsWith('board_card_')) {
+    handleBoardEvent(data)
   }
   if (data?.event === 'session_waiting_for_input' && !_connections.has(data.session_id)) {
     const sess = sessions.value.find(s => s.session_id === data.session_id)
@@ -303,8 +333,30 @@ function setupUnifiedHandler(connection, sessionId) {
 
       case 'status_change':
         setStatusFor(sessionId, data.status)
+        updateSessionFor(sessionId, {
+          waiting_for_slot: false,
+          waiting_reason: null,
+          slot_queue_position: null,
+        })
         updateSessionInList(sessionId, { status: data.status })
         if (data.status === 'running') {
+          // A Team execution can start server-side after the user opens its
+          // freshly-created session. In that path there is no client-originated
+          // `prompt_started` event, so hydrate the persisted user prompt from
+          // the status event. Replacing by message ID also keeps normal sends
+          // idempotent when both events arrive.
+          if (data.prompt && data.message_id) {
+            removeMessageByClientIdFor(sessionId, data.message_id)
+            addMessageTo(sessionId, {
+              type: 'user',
+              content: {
+                message_id: data.message_id,
+                run_id: data.run_id || '',
+                text: data.prompt,
+                ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+              },
+            })
+          }
           markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
         } else {
           markDone(sessionId)
@@ -382,7 +434,21 @@ function setupUnifiedHandler(connection, sessionId) {
         break
 
       case 'resource_waiting':
-        updateSessionFor(sessionId, { waiting_for_slot: true })
+        updateSessionFor(sessionId, {
+          waiting_for_slot: true,
+          waiting_reason: data.status || 'waiting_slot',
+          slot_queue_position: data.queue_position || null,
+          slot_capacity: data.capacity || null,
+        })
+        break
+
+      case 'resource_acquired':
+        updateSessionFor(sessionId, {
+          waiting_for_slot: false,
+          waiting_reason: null,
+          slot_queue_position: null,
+          slot_capacity: data.capacity || null,
+        })
         break
 
       case 'stream_waiting':
@@ -513,7 +579,11 @@ function setupUnifiedHandler(connection, sessionId) {
         }
         updateSessionFor(sessionId, sessionUpdate)
         if (data.session.status === 'running' || data.session.status === 'idle') {
-          updateSessionFor(sessionId, { waiting_for_slot: false })
+          updateSessionFor(sessionId, {
+            waiting_for_slot: false,
+            waiting_reason: null,
+            slot_queue_position: null,
+          })
         }
         setStatusFor(sessionId, data.session.status || 'idle')
         syncRecoveryState(sessionId, data.session)
@@ -590,15 +660,15 @@ onMounted(async () => {
     globalEventConnection = createGlobalEventConnection()
     globalEventConnection.onEvent(handleGlobalEvent)
     globalEventConnection.onReconnect(() => {
-      const sid = currentSessionId.value
-      const proj = currentProject.value
-      if (sid && proj?.project_type === 'team') {
-        loadTimeline(proj.id, sid).catch(() => {})
-        loadLinkedSessions(proj.id, sid).catch(() => {})
-      }
+      // Board state is auto-refreshed via WebSocket events
     })
     window.addEventListener('vp-schedules-changed', loadScheduleCounts)
-    restoreLastSession()
+    if (sidebarMode.value === 'teams') {
+      const firstTeam = projects.value.find(project => project.project_type === 'team')
+      handleProjectSelect(firstTeam?.id || null)
+    } else {
+      restoreLastSession()
+    }
     ready.value = true
   } catch (e) {
     initError.value = e.message || 'Failed to load sessions'
@@ -783,6 +853,8 @@ useGlobalHotkeys({
           @delete-project="onDeleteProject"
           @open-scheduler="openProjectScheduler"
           @reorder-projects="handleReorderProjects"
+          @select-project="handleProjectSelect"
+          @mode-change="handleSidebarModeChange"
         />
         <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }">
           <div class="sidebar-hover-zone"></div>
@@ -812,7 +884,29 @@ useGlobalHotkeys({
               <div class="error-hint">Make sure the backend server is running on port 8083</div>
             </div>
           </div>
-          <ChatPanelPage v-else-if="currentSessionId && !importing" @locate-session="handleLocateSession" />
+          <TeamBoardPage
+            v-else-if="teamBoardVisible && currentProject?.project_type === 'team' && currentProject?.team_config?.team_id"
+            :key="currentProject.team_config.team_id"
+            :team-id="currentProject.team_config.team_id"
+            :project-id="currentProject.id"
+            @navigate-session="handleTeamNavigate"
+          />
+          <div v-else-if="sidebarMode === 'teams'" class="empty-state">
+            <div class="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </div>
+            <div class="empty-text">Select or create a team to open its board</div>
+          </div>
+          <ChatPanelPage
+            v-else-if="currentSessionId && !importing"
+            @locate-session="handleLocateSession"
+            @return-team="handleReturnToTeam"
+          />
           <div v-else-if="importing" class="loading">
             <div class="loading-shimmer-container">
               <div class="shimmer-block w-full h-24"></div>

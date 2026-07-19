@@ -1,0 +1,21 @@
+from abc import ABC, abstractmethod
+
+from domain.team.model.handoff import Handoff
+
+
+class HandoffRepository(ABC):
+    @abstractmethod
+    def save(self, handoff: Handoff) -> None:
+        pass
+
+    @abstractmethod
+    def find_by_id(self, handoff_id: str) -> Handoff | None:
+        pass
+
+    @abstractmethod
+    def find_by_card_id(self, card_id: str) -> list[Handoff]:
+        pass
+
+    @abstractmethod
+    def remove(self, handoff: Handoff) -> None:
+        pass

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -13,6 +14,7 @@ class ExecutionEventDto(BaseModel):
     tool_name: str | None = None
     is_error: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime | None = None
 
 
 class SubagentPlaceholderDto(BaseModel):
@@ -27,10 +29,18 @@ class SubagentPlaceholderDto(BaseModel):
 class LoopDto(BaseModel):
     id: str
     task_id: str
+    sequence: int
     event_count: int
     model: str | None = None
     stop_reason: str | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
+    subagent_count: int = 0
+    subagent_tool_use_ids: list[str] = Field(default_factory=list)
+    tool_names: list[str] = Field(default_factory=list)
+    subagents: list[dict[str, Any]] = Field(default_factory=list)
+    started_time: datetime | None = None
+    ended_time: datetime | None = None
+    duration_ms: int = 0
 
 
 class TaskDependencyDto(BaseModel):
@@ -45,6 +55,7 @@ class ExecutionTaskDto(BaseModel):
     status: str
     explicit: bool
     loops: list[LoopDto] = Field(default_factory=list)
+    thinking: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ProvenanceDto(BaseModel):

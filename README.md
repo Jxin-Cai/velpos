@@ -230,6 +230,9 @@ All dev settings are in this single file. `CLAUDE_CLI_PATH` is **auto-detected**
 | `CLAUDE_CLI_PATH` | *(auto-detected)* | Override only if `claude` is not in PATH |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
+| `SESSION_MAX_CONCURRENT_QUERIES` | `8` | Maximum concurrent Agent queries across sessions (max 64) |
+| `CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS` | `60` | Silence detection interval |
+| `CLAUDE_STREAM_MAX_SILENT_TIMEOUTS` | `10` | Consecutive silent intervals before releasing a stuck execution slot |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project root on the **host filesystem** |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed browser origins |
 

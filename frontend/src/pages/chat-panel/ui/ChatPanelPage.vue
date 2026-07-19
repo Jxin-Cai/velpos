@@ -20,10 +20,12 @@ import { useCompactContext } from '@features/compact-context'
 import { useSessionStats } from '@features/send-message/model/useSessionStats'
 import { EvolutionDialog } from '@features/evolution'
 import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
-import TeamRuntimePanel from '@features/agent-teams/ui/TeamRuntimePanel.vue'
-import WorkerSessionBreadcrumb from '@features/agent-teams/ui/WorkerSessionBreadcrumb.vue'
 import { TracePanel } from '@features/trace-viewer'
+import { getSettings, updateSettings } from '@features/settings-manager'
 import { usePermissionMode } from '../model/usePermissionMode'
+import { getExecutionHistory } from '@features/team-board'
+
+const emit = defineEmits(['return-team'])
 
 const {
   session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
@@ -35,6 +37,42 @@ const { currentProject, updateProjectInList } = useProject()
 const wsConnection = inject('wsConnection')
 
 const isRunning = computed(() => status.value === 'running')
+const cardExecutionId = computed(() => session.value?.card_execution_id || '')
+const cardProjectId = computed(() => session.value?.project_id || currentProject.value?.id || '')
+const cardHistoryVisible = ref(false)
+const cardHistoryLoading = ref(false)
+const cardHistoryError = ref('')
+const cardHistory = ref([])
+
+async function toggleCardHistory() {
+  cardHistoryVisible.value = !cardHistoryVisible.value
+  if (!cardHistoryVisible.value || cardHistory.value.length || !cardExecutionId.value) return
+  cardHistoryLoading.value = true
+  cardHistoryError.value = ''
+  try {
+    const result = await getExecutionHistory(cardExecutionId.value)
+    cardHistory.value = result || []
+  } catch (error) {
+    cardHistoryError.value = error.message || '无法加载愿望卡流转记录'
+  } finally {
+    cardHistoryLoading.value = false
+  }
+}
+
+function returnToTeam() {
+  emit('return-team', cardProjectId.value)
+}
+
+function formatCardHistoryTime(value) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString()
+}
+
+watch(cardExecutionId, () => {
+  cardHistoryVisible.value = false
+  cardHistory.value = []
+  cardHistoryError.value = ''
+})
 const recoveryPending = computed(() => recovery.value?.pending_request || null)
 const recoveryQueued = computed(() => recovery.value?.queued_command || null)
 const isCancelRequested = computed(() => Boolean(recovery.value?.cancel_requested))
@@ -49,11 +87,6 @@ const recoveryHintText = computed(() => {
 const debugMode = ref(localStorage.getItem('pf_debug_mode') === 'true')
 const runtimePanelVisible = ref(localStorage.getItem('pf_runtime_panel') === 'true')
 
-const isTeamCoordinator = computed(() => {
-  return currentProject.value?.project_type === 'team' && !session.value?.team_task_id
-})
-const isTeamWorker = computed(() => Boolean(session.value?.team_task_id))
-const teamPanelVisible = ref(false)
 const tracePanelVisible = ref(false)
 const selectedTraceRunId = ref(null)
 
@@ -217,6 +250,10 @@ onMounted(async () => {
   } catch {
     // fallback to empty — user can still type model names
   }
+  try {
+    const settings = await getSettings()
+    currentEffort.value = settings?.effortLevel || ''
+  } catch { /* fallback to default */ }
   // Fetch available IM channels and binding status for current session
   fetchImChannels()
   if (currentSessionId.value) {
@@ -331,6 +368,31 @@ function handleModelSelect(modelValue) {
   }
 }
 
+// Effort level switching — persisted to settings.json
+const showEffortMenu = ref(false)
+const currentEffort = ref('')
+const effortOptions = [
+  { value: '', label: 'Default' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+]
+
+function getEffortLabel(val) {
+  const found = effortOptions.find(e => e.value === val)
+  return found ? found.label : 'Default'
+}
+
+async function handleEffortSelect(val) {
+  showEffortMenu.value = false
+  currentEffort.value = val
+  try {
+    const settings = await getSettings()
+    settings.effortLevel = val || undefined
+    await updateSettings(settings)
+  } catch { /* best-effort */ }
+}
+
 // Permission mode switching
 const {
   showPermMenu, currentPermMode, permModes,
@@ -348,6 +410,10 @@ useGlobalHotkeys({
     }
     if (showModelMenu.value) {
       showModelMenu.value = false
+      return false
+    }
+    if (showEffortMenu.value) {
+      showEffortMenu.value = false
       return false
     }
     if (showPermMenu.value) {
@@ -1036,12 +1102,6 @@ function formatMaxTokens(n) {
 <template>
   <div class="chat-panel-wrapper">
   <div class="chat-panel" @click="handleClickOutside">
-    <WorkerSessionBreadcrumb
-      v-if="isTeamWorker"
-      :session-id="currentSessionId"
-      :team-task-id="session?.team_task_id || ''"
-      @navigate-back="handleTeamNavigate"
-    />
     <div v-if="isRunning || pendingSend" class="top-running-indicator">
       <ThinkingIndicator :visible="true" />
     </div>
@@ -1072,7 +1132,8 @@ function formatMaxTokens(n) {
         </Transition>
         <div v-if="waitingForSlot" class="queue-indicator">
           <span class="queue-dot"></span>
-          Waiting for an available execution slot
+          <template v-if="session?.waiting_reason === 'waiting_session_runner'">Waiting for the current session query to finish</template>
+          <template v-else>Waiting for an available execution slot<span v-if="session?.slot_queue_position"> · queue #{{ session.slot_queue_position }}</span><span v-if="session?.slot_capacity"> · capacity {{ session.slot_capacity }}</span></template>
         </div>
       </template>
     </MessageList>
@@ -1231,23 +1292,6 @@ function formatMaxTokens(n) {
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
           </svg>
         </button>
-        <button
-          v-if="isTeamCoordinator"
-          class="toolbar-btn"
-          :class="{ 'toolbar-btn--active': teamPanelVisible }"
-          :aria-pressed="teamPanelVisible"
-          aria-label="Toggle team runtime"
-          @click="teamPanelVisible = !teamPanelVisible"
-          data-tooltip="Team"
-          title="Team runtime — show task pipeline and worker sessions"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-            <circle cx="9" cy="7" r="4"/>
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-          </svg>
-        </button>
         </div>
         <!-- Group 2: Configuration -->
         <div class="toolbar-group">
@@ -1372,6 +1416,60 @@ function formatMaxTokens(n) {
           :clearing="clearing"
           @clear="handleClear"
         />
+        <div v-if="cardExecutionId" class="dropdown-wrapper" @click.stop>
+          <button
+            class="toolbar-btn wish-card-toolbar-btn"
+            :class="{ 'toolbar-btn--active': cardHistoryVisible }"
+            type="button"
+            aria-label="View wish card history"
+            data-tooltip="Wish card"
+            title="View wish card flow"
+            @click="toggleCardHistory"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M7 8h10M7 12h6M7 16h8" />
+            </svg>
+            <span class="wish-card-toolbar-label">愿望卡</span>
+          </button>
+          <Transition name="dropdown-fade">
+            <div v-if="cardHistoryVisible" class="card-history-panel" role="dialog" aria-label="Wish card flow history">
+              <div class="card-history-header">
+                <div>
+                  <strong>愿望卡流转记录</strong>
+                  <span>每次执行对应一个 Agent 会话</span>
+                </div>
+                <button type="button" class="card-history-back" @click="returnToTeam">回到 Team</button>
+              </div>
+              <div v-if="cardHistoryLoading" class="card-history-state">加载流转记录…</div>
+              <div v-else-if="cardHistoryError" class="card-history-state card-history-state--error">{{ cardHistoryError }}</div>
+              <ol v-else class="card-history-list">
+                <li v-for="(item, index) in cardHistory" :key="item.execution_id" class="card-history-item">
+                  <span class="card-history-step">{{ index + 1 }}</span>
+                  <div class="card-history-item-main">
+                    <div class="card-history-item-title">
+                      <strong>{{ item.agent_name }}</strong>
+                      <span class="card-history-status" :class="`card-history-status--${item.status}`">{{ item.status }}</span>
+                    </div>
+                    <div class="card-history-meta">
+                      <button
+                        v-if="item.session_id"
+                        type="button"
+                        class="card-history-session"
+                        @click="setCurrentSessionId(item.session_id)"
+                      >
+                        Session {{ item.session_id }}
+                      </button>
+                      <span v-else>Session 未创建</span>
+                      <span>· {{ formatCardHistoryTime(item.started_at || item.created_at) }}</span>
+                    </div>
+                    <div v-if="item.failure_reason" class="card-history-failure">{{ item.failure_reason }}</div>
+                  </div>
+                </li>
+              </ol>
+            </div>
+          </Transition>
+        </div>
         <!-- History button -->
         <div class="dropdown-wrapper" @click.stop>
           <button
@@ -1551,7 +1649,7 @@ function formatMaxTokens(n) {
             <button
               class="dash-chip dash-model"
               :disabled="!currentSessionId"
-              @click="showModelMenu = !showModelMenu; showPermMenu = false; showHistory = false"
+              @click="showModelMenu = !showModelMenu; showEffortMenu = false; showPermMenu = false; showHistory = false"
               title="Switch model"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1575,6 +1673,31 @@ function formatMaxTokens(n) {
                 <span v-if="m.description" class="model-desc">{{ m.description }}</span>
               </button>
               <div v-if="!availableModels.length" class="dropdown-empty">No models available</div>
+            </div>
+            </Transition>
+          </div>
+          <div class="dropdown-wrapper" @click.stop>
+            <button
+              class="dash-chip dash-effort"
+              @click="showEffortMenu = !showEffortMenu; showModelMenu = false; showPermMenu = false; showHistory = false"
+              title="Effort level (thinking depth)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+              {{ getEffortLabel(currentEffort) }}
+            </button>
+            <Transition name="dropdown-fade">
+            <div v-if="showEffortMenu" class="dropdown-menu">
+              <button
+                v-for="e in effortOptions"
+                :key="e.value"
+                class="dropdown-item"
+                :class="{ active: e.value === currentEffort }"
+                @click="handleEffortSelect(e.value)"
+              >
+                {{ e.label }}
+              </button>
             </div>
             </Transition>
           </div>
@@ -1616,7 +1739,7 @@ function formatMaxTokens(n) {
               class="dash-chip dash-perm"
               :class="[getPermColorClass(currentPermMode)]"
               :disabled="!currentSessionId"
-              @click="showPermMenu = !showPermMenu; showModelMenu = false; showHistory = false"
+              @click="showPermMenu = !showPermMenu; showModelMenu = false; showEffortMenu = false; showHistory = false"
               title="Permission mode"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1890,14 +2013,6 @@ function formatMaxTokens(n) {
       @navigate-session="(id) => { setCurrentSessionId(id); imDialogVisible = false }"
     />
   </div>
-  <TeamRuntimePanel
-    v-if="isTeamCoordinator"
-    :project-id="currentProject?.id || ''"
-    :session-id="currentSessionId || ''"
-    :visible="teamPanelVisible"
-    @navigate-to-session="handleTeamNavigate"
-    @close="teamPanelVisible = false"
-  />
 
   <TracePanel
     :visible="tracePanelVisible"
@@ -3734,5 +3849,180 @@ button.dash-chip[disabled] {
   text-align: center;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.wish-card-toolbar-btn {
+  color: #f2c94c;
+  border-color: color-mix(in srgb, #f2c94c 38%, var(--border));
+}
+
+.wish-card-toolbar-label {
+  font-weight: 600;
+}
+
+.card-history-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 50;
+  width: min(390px, calc(100vw - 28px));
+  max-height: min(520px, 65vh);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(18px);
+}
+
+.card-history-header,
+.card-history-item-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-history-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.card-history-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.card-history-header strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.card-history-header span,
+.card-history-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.card-history-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.card-history-session {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.card-history-session:hover {
+  text-decoration: underline;
+}
+
+.card-history-back {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--accent-dim);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.card-history-state {
+  padding: 24px 8px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 12px;
+}
+
+.card-history-state--error,
+.card-history-failure {
+  color: var(--status-danger);
+}
+
+.card-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 12px 0 0;
+  list-style: none;
+}
+
+.card-history-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 10px;
+  min-height: 58px;
+}
+
+.card-history-item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 24px;
+  bottom: 0;
+  left: 12px;
+  width: 1px;
+  background: var(--border);
+}
+
+.card-history-step {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border: 1px solid var(--border-active);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.card-history-item-main {
+  min-width: 0;
+  padding: 2px 0 12px;
+}
+
+.card-history-item-title strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-history-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.card-history-status--running { color: #f2c94c; }
+.card-history-status--completed { color: #42b883; }
+.card-history-status--failed { color: #e06c75; }
+
+.card-history-failure {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .wish-card-toolbar-label { display: none; }
+  .card-history-panel { position: fixed; right: 14px; bottom: 86px; left: 14px; width: auto; }
 }
 </style>

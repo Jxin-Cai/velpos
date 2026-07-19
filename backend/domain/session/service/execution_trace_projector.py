@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any, Iterable, Mapping
 
 from domain.session.model.execution_trace import (
@@ -31,6 +33,7 @@ class ExecutionTraceProjector:
     """Pure projection from parsed transcript records and existing trace spans."""
 
     IMPLICIT_TASK_ID = "implicit-user-task"
+    _CREATED_TASK_ID_PATTERN = re.compile(r"\bTask\s+#?([A-Za-z0-9_-]+)\s+created\b", re.IGNORECASE)
 
     def project(
         self,
@@ -44,8 +47,10 @@ class ExecutionTraceProjector:
         subagents: list[SubagentPlaceholder] = []
         loops: list[AgentLoop] = []
         pending: dict[str, int] = {}
+        pending_task_creates: dict[str, str] = {}
         history: list[dict[str, Any]] = []
         warnings: list[str] = []
+        previous_timestamp: datetime | None = None
 
         for record in records:
             message = record.get("message")
@@ -54,41 +59,93 @@ class ExecutionTraceProjector:
             role = message.get("role") or record.get("type")
             blocks = self._content_blocks(message.get("content"), warnings)
             source_uuid = self._text(record.get("uuid"))
+            record_timestamp = self._timestamp(record.get("timestamp"), warnings)
             if role == "assistant":
-                task_id = self._active_task(tasks, warnings)
+                task_id = self._task_for_blocks(blocks, tasks, warnings)
+                has_explicit_tasks = any(task.explicit for task in tasks.values())
                 events = [
-                    ExecutionEvent(ExecutionEventType.MODEL_INPUT, source_uuid, tuple(history)),
-                    ExecutionEvent(ExecutionEventType.MODEL_OUTPUT, source_uuid, tuple(blocks)),
+                    ExecutionEvent(
+                        ExecutionEventType.MODEL_INPUT,
+                        source_uuid,
+                        tuple(history),
+                        timestamp=previous_timestamp,
+                    ),
+                    ExecutionEvent(
+                        ExecutionEventType.MODEL_OUTPUT,
+                        source_uuid,
+                        tuple(blocks),
+                        timestamp=record_timestamp,
+                    ),
                 ]
                 loop_index = len(loops)
                 for block in blocks:
                     if not isinstance(block, Mapping) or block.get("type") != "tool_use":
+                        if isinstance(block, Mapping) and block.get("type") == "thinking":
+                            events.append(ExecutionEvent(
+                                ExecutionEventType.THINKING,
+                                source_uuid,
+                                block.get("thinking") or block.get("text") or block,
+                                metadata={"phase": "planning" if not has_explicit_tasks else "thinking"},
+                                timestamp=record_timestamp,
+                            ))
                         continue
                     tool_id = self._text(block.get("id"))
                     tool_name = self._text(block.get("name"))
                     if not tool_id:
                         warnings.append("tool_use_missing_id")
                         continue
-                    events.append(ExecutionEvent(ExecutionEventType.TOOL_USE, source_uuid, block.get("input"), tool_id, tool_name))
+                    events.append(ExecutionEvent(
+                        ExecutionEventType.TOOL_USE,
+                        source_uuid,
+                        block.get("input"),
+                        tool_id,
+                        tool_name,
+                        timestamp=record_timestamp,
+                    ))
                     pending[tool_id] = loop_index
                     if tool_name in {"TaskCreate", "TaskUpdate"}:
-                        self._apply_task_tool(tool_name, block.get("input"), tasks, dependencies, warnings)
+                        affected_task_id = self._apply_task_tool(
+                            tool_name,
+                            block.get("input"),
+                            tasks,
+                            dependencies,
+                            warnings,
+                            fallback_id=f"pending:{tool_id}",
+                        )
+                        if tool_name == "TaskCreate" and affected_task_id:
+                            pending_task_creates[tool_id] = affected_task_id
                     if tool_name == "Agent":
                         placeholder = self._subagent(tool_id, block.get("input"), span_by_tool.get(tool_id))
                         subagents.append(placeholder)
-                        events.append(ExecutionEvent(ExecutionEventType.SUBAGENT, source_uuid, metadata={
-                            "subagent": placeholder.subagent,
-                            "tool_use_id": tool_id,
-                            "agent_id": placeholder.agent_id,
-                            "transcript_path": placeholder.transcript_path,
-                            "span_id": placeholder.span_id,
-                            "lazy": True,
-                        }))
+                        events.append(ExecutionEvent(
+                            ExecutionEventType.SUBAGENT,
+                            source_uuid,
+                            content=block.get("input"),
+                            metadata={
+                                "subagent": placeholder.subagent,
+                                "tool_use_id": tool_id,
+                                "agent_id": placeholder.agent_id,
+                                "transcript_path": placeholder.transcript_path,
+                                "span_id": placeholder.span_id,
+                                "lazy": True,
+                            },
+                            timestamp=record_timestamp,
+                        ))
+                # Keep the planning signal at the start of the assistant turn,
+                # before the rendered model output and tool activity.
+                thinking_events = [event for event in events if event.type == ExecutionEventType.THINKING]
+                if thinking_events:
+                    non_thinking_events = [event for event in events if event.type != ExecutionEventType.THINKING]
+                    events = [non_thinking_events[0], *thinking_events, *non_thinking_events[1:]]
+                started_time = previous_timestamp or record_timestamp
                 loop = AgentLoop(
                     id=f"loop-{source_uuid or loop_index}", task_id=task_id,
                     model_input=tuple(history), assistant_content=tuple(blocks), events=tuple(events),
                     model=self._text(message.get("model")), stop_reason=self._text(message.get("stop_reason")),
                     usage=dict(message.get("usage") or {}), provenance=self._provenance(warnings),
+                    started_time=started_time,
+                    ended_time=record_timestamp,
+                    duration_ms=self._duration_ms(started_time, record_timestamp),
                 )
                 loops.append(loop)
                 tasks[task_id].loops.append(loop)
@@ -101,16 +158,54 @@ class ExecutionTraceProjector:
                         warnings.append(f"unmatched_tool_result:{tool_id or 'missing'}")
                         continue
                     index = pending.pop(tool_id)
-                    result = ExecutionEvent(ExecutionEventType.TOOL_RESULT, source_uuid, block.get("content"), tool_id, is_error=bool(block.get("is_error")))
-                    loops[index] = replace(loops[index], events=(*loops[index].events, result), provenance=self._provenance(warnings))
+                    result = ExecutionEvent(
+                        ExecutionEventType.TOOL_RESULT,
+                        source_uuid,
+                        block.get("content"),
+                        tool_id,
+                        is_error=bool(block.get("is_error")),
+                        timestamp=record_timestamp,
+                    )
+                    ended_time = record_timestamp or loops[index].ended_time
+                    loops[index] = replace(
+                        loops[index],
+                        events=(*loops[index].events, result),
+                        provenance=self._provenance(warnings),
+                        ended_time=ended_time,
+                        duration_ms=self._duration_ms(loops[index].started_time, ended_time),
+                    )
                     self._replace_task_loop(tasks[loops[index].task_id], loops[index])
+                    provisional_task_id = pending_task_creates.pop(tool_id, None)
+                    if provisional_task_id:
+                        created_task_id = self._created_task_id(block.get("content"))
+                        if created_task_id:
+                            self._resolve_task_id(tasks, dependencies, provisional_task_id, created_task_id)
+                        else:
+                            warnings.append(f"task_create_result_missing_id:{tool_id}")
             history.append({"role": role, "content": blocks, "uuid": source_uuid, "parent_uuid": record.get("parentUuid")})
+            previous_timestamp = record_timestamp or previous_timestamp
 
         warnings.extend(f"missing_tool_result:{tool_id}" for tool_id in pending)
         provenance = self._provenance(warnings)
+        visible_tasks = [task for task in tasks.values() if task.explicit]
+        implicit_task = tasks[self.IMPLICIT_TASK_ID]
+        planning_loops = [
+            loop for loop in implicit_task.loops
+            if any(event.type == ExecutionEventType.THINKING for event in loop.events)
+        ]
+        if visible_tasks and planning_loops:
+            first_task = visible_tasks[0]
+            existing_loop_ids = {loop.id for loop in first_task.loops}
+            first_task.loops[:0] = [
+                replace(loop, task_id=first_task.id)
+                for loop in planning_loops
+                if loop.id not in existing_loop_ids
+            ]
+        if not visible_tasks:
+            visible_tasks = [task for task in tasks.values() if task.loops]
         projected_tasks = tuple(
             ExecutionTask(t.id, t.subject, t.description, t.status, t.explicit, tuple(t.loops))
-            for t in tasks.values() if t.explicit or t.loops
+            for t in visible_tasks
         )
         return ExecutionAgent(agent_id, projected_tasks, tuple(dependencies), tuple(subagents), provenance)
 
@@ -131,23 +226,102 @@ class ExecutionTraceProjector:
             warnings.append("ambiguous_task_assignment")
         return self.IMPLICIT_TASK_ID
 
-    def _apply_task_tool(self, name: str, value: Any, tasks: dict[str, _TaskState], dependencies: list[TaskDependency], warnings: list[str]) -> None:
+    def _task_for_blocks(
+        self,
+        blocks: Iterable[Any],
+        tasks: dict[str, _TaskState],
+        warnings: list[str],
+    ) -> str:
+        updated_task_ids: list[str] = []
+        for block in blocks:
+            if not isinstance(block, Mapping) or block.get("type") != "tool_use" or block.get("name") != "TaskUpdate":
+                continue
+            value = block.get("input")
+            if not isinstance(value, Mapping):
+                continue
+            task_id = self._text(value.get("taskId") or value.get("task_id") or value.get("id"))
+            if task_id and task_id in tasks:
+                updated_task_ids.append(task_id)
+        unique_task_ids = tuple(dict.fromkeys(updated_task_ids))
+        if len(unique_task_ids) == 1:
+            return unique_task_ids[0]
+        if len(unique_task_ids) > 1:
+            warnings.append("ambiguous_task_update_assignment")
+        return self._active_task(tasks, warnings)
+
+    def _apply_task_tool(
+        self,
+        name: str,
+        value: Any,
+        tasks: dict[str, _TaskState],
+        dependencies: list[TaskDependency],
+        warnings: list[str],
+        fallback_id: str,
+    ) -> str | None:
         if not isinstance(value, Mapping):
             warnings.append(f"invalid_{name}_input")
-            return
+            return None
         task_id = self._text(value.get("taskId") or value.get("task_id") or value.get("id"))
         if name == "TaskCreate":
-            task_id = task_id or f"task-{len(tasks)}"
-            tasks[task_id] = _TaskState(task_id, self._text(value.get("subject")) or task_id, True, self._text(value.get("description")), self._text(value.get("status")) or "pending")
+            task_id = task_id or fallback_id
+            task = tasks.get(task_id)
+            if task is None:
+                task = _TaskState(task_id, self._text(value.get("subject")) or task_id, True)
+                tasks[task_id] = task
+            task.subject = self._text(value.get("subject")) or task.subject
+            task.description = self._text(value.get("description")) or task.description
+            task.status = self._text(value.get("status")) or task.status
             for dependency in value.get("blockedBy") or value.get("blocked_by") or ():
                 dependencies.append(TaskDependency(task_id, str(dependency)))
         elif task_id:
-            task = tasks.setdefault(task_id, _TaskState(task_id, task_id, True))
+            task = tasks.get(task_id)
+            if task is None:
+                warnings.append(f"unknown_task_update:{task_id}")
+                return None
             task.subject = self._text(value.get("subject")) or task.subject
             task.description = self._text(value.get("description")) or task.description
             task.status = self._text(value.get("status")) or task.status
             for dependency in value.get("addBlockedBy") or value.get("add_blocked_by") or ():
                 dependencies.append(TaskDependency(task_id, str(dependency)))
+        return task_id
+
+    def _created_task_id(self, content: Any) -> str | None:
+        if isinstance(content, str):
+            match = self._CREATED_TASK_ID_PATTERN.search(content)
+            return match.group(1) if match else None
+        if isinstance(content, Mapping):
+            direct_id = self._text(content.get("taskId") or content.get("task_id") or content.get("id"))
+            return direct_id or self._created_task_id(content.get("text") or content.get("content"))
+        if isinstance(content, (list, tuple)):
+            for item in content:
+                task_id = self._created_task_id(item)
+                if task_id:
+                    return task_id
+        return None
+
+    @staticmethod
+    def _resolve_task_id(
+        tasks: dict[str, _TaskState],
+        dependencies: list[TaskDependency],
+        provisional_id: str,
+        resolved_id: str,
+    ) -> None:
+        if provisional_id == resolved_id or provisional_id not in tasks:
+            return
+        task = tasks.pop(provisional_id)
+        existing = tasks.get(resolved_id)
+        if existing is None:
+            task.id = resolved_id
+            tasks[resolved_id] = task
+        else:
+            existing.subject = task.subject or existing.subject
+            existing.description = task.description or existing.description
+            existing.explicit = True
+            existing.loops.extend(loop for loop in task.loops if loop.id not in {item.id for item in existing.loops})
+        for index, dependency in enumerate(dependencies):
+            task_id = resolved_id if dependency.task_id == provisional_id else dependency.task_id
+            depends_on = resolved_id if dependency.depends_on_task_id == provisional_id else dependency.depends_on_task_id
+            dependencies[index] = TaskDependency(task_id, depends_on)
 
     def _subagent(self, tool_id: str, value: Any, span: TraceSpan | None) -> SubagentPlaceholder:
         data = value if isinstance(value, Mapping) else {}
@@ -176,3 +350,19 @@ class ExecutionTraceProjector:
     @staticmethod
     def _text(value: Any) -> str | None:
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _timestamp(value: Any, warnings: list[str]) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            warnings.append("invalid_record_timestamp")
+            return None
+
+    @staticmethod
+    def _duration_ms(started_time: datetime | None, ended_time: datetime | None) -> int:
+        if started_time is None or ended_time is None or ended_time < started_time:
+            return 0
+        return max(int((ended_time - started_time).total_seconds() * 1000), 0)

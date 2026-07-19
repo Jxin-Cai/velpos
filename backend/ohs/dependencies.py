@@ -34,7 +34,6 @@ from application.session.session_run_timeline_service import SessionRunTimelineS
 from application.session.session_timeline_event_service import SessionTimelineEventService
 from application.settings.settings_application_service import SettingsApplicationService
 from application.terminal.terminal_application_service import TerminalApplicationService
-from application.team_task.team_coordinator_service import TeamCoordinatorService
 from application.usage.usage_governance_application_service import UsageGovernanceApplicationService
 from infr.client.claude_agent_gateway import ClaudeAgentGateway
 from infr.client.claude_command_gateway import ClaudeCommandGateway
@@ -72,7 +71,6 @@ from infr.repository.session_run_step_repository_impl import SessionRunStepRepos
 from infr.repository.session_timeline_event_repository_impl import SessionTimelineEventRepositoryImpl
 from infr.repository.session_snapshot_repository_impl import SessionSnapshotRepositoryImpl
 from infr.repository.team_repository_impl import TeamRepositoryImpl
-from infr.repository.team_task_repository_impl import TeamTaskRepositoryImpl
 from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
 from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
@@ -457,13 +455,11 @@ async def get_project_application_service(
 ) -> ProjectApplicationService:
     project_repo = ProjectRepositoryImpl(db_session)
     session_repo = SessionRepositoryImpl(db_session)
-    team_task_repo = TeamTaskRepositoryImpl(db_session)
     return ProjectApplicationService(
         project_repository=project_repo,
         session_repository=session_repo,
         session_service_factory=_create_session_service,
         connection_manager=_connection_manager,
-        team_task_repository=team_task_repo,
     )
 
 
@@ -574,20 +570,26 @@ async def get_execution_trace_query_service(
     )
 
 
-async def get_team_coordinator_service(
+async def get_team_board_service(
     db_session: AsyncSession = Depends(get_async_session),
-) -> TeamCoordinatorService:
-    revision_service = _create_revision_service(db_session)
-    agent_service = AgentApplicationService(
+) -> "TeamBoardApplicationService":
+    from application.team_board.team_board_service import TeamBoardApplicationService
+    from infr.repository.team_repository_impl import TeamRepositoryImpl
+    from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
+    from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
+    from infr.repository.handoff_repository_impl import HandoffRepositoryImpl
+    from infr.workspace.filesystem_workspace_gateway import FilesystemWorkspaceGateway
+    from infr.client.session_context_collector_impl import SessionContextCollectorImpl
+
+    session_service = await get_session_application_service(db_session)
+    return TeamBoardApplicationService(
+        team_repo=TeamRepositoryImpl(db_session),
+        card_repo=WishCardRepositoryImpl(db_session),
+        execution_repo=CardExecutionRepositoryImpl(db_session),
+        handoff_repo=HandoffRepositoryImpl(db_session),
+        workspace_gateway=FilesystemWorkspaceGateway(),
+        session_service=session_service,
+        context_collector=SessionContextCollectorImpl(SessionRepositoryImpl(db_session)),
+        session_service_factory=_create_session_service,
         plugin_manager=_claude_plugin_manager,
-        claude_md_revision_service=revision_service,
-    )
-    return TeamCoordinatorService(
-        project_repository=ProjectRepositoryImpl(db_session),
-        session_repository=SessionRepositoryImpl(db_session),
-        team_task_repository=TeamTaskRepositoryImpl(db_session),
-        claude_agent_gateway=_claude_agent_gateway,
-        connection_manager=_connection_manager,
-        notify_im_fn=_session_coordinator.on_assistant_response,
-        agent_application_service=agent_service,
     )

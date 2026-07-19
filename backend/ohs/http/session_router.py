@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -11,12 +12,10 @@ from application.session.command.import_claude_session_command import ImportClau
 from application.session.session_application_service import SessionApplicationService
 from application.session.session_branch_application_service import SessionBranchApplicationService
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
-from application.team_task.team_coordinator_service import TeamCoordinatorService
 from ohs.dependencies import (
     get_im_channel_application_service,
     get_session_application_service,
     get_session_branch_application_service,
-    get_team_coordinator_service,
 )
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.session_dto import (
@@ -53,10 +52,6 @@ BranchServiceDep = Annotated[
 ImServiceDep = Annotated[
     ImChannelApplicationService,
     Depends(get_im_channel_application_service),
-]
-TeamServiceDep = Annotated[
-    TeamCoordinatorService,
-    Depends(get_team_coordinator_service),
 ]
 
 
@@ -103,11 +98,19 @@ async def list_sessions(
     service: ServiceDep,
     im_service: ImServiceDep,
 ) -> ApiResponse[SessionListResponse]:
-    sessions = await service.list_sessions()
+    sessions = await service.list_session_summaries()
     bindings = await im_service.list_all_bindings()
     binding_map = {b["session_id"]: b for b in bindings}
-    git_branch_map = {s.session_id: await service.get_current_git_branch(s.project_dir) for s in sessions}
-    return ApiResponse.success(SessionListResponse.from_domain_list(sessions, binding_map, git_branch_map))
+    project_dirs = tuple(dict.fromkeys(s.project_dir for s in sessions if s.project_dir))
+    branches = await asyncio.gather(
+        *(service.get_current_git_branch(project_dir) for project_dir in project_dirs),
+    )
+    branch_by_dir = dict(zip(project_dirs, branches, strict=True))
+    git_branch_map = {
+        session.session_id: branch_by_dir.get(session.project_dir, "")
+        for session in sessions
+    }
+    return ApiResponse.success(SessionListResponse.from_summary_list(sessions, binding_map, git_branch_map))
 
 
 # Static paths MUST come before /{session_id} dynamic routes
@@ -231,16 +234,7 @@ async def list_session_audit_events(
 async def delete_session(
     session_id: str,
     service: ServiceDep,
-    team_service: TeamServiceDep,
-    cascade: bool = Query(default=False),
 ) -> ApiResponse[None]:
-    if cascade:
-        worker_ids = await team_service.delete_team_session(session_id)
-        for wid in worker_ids:
-            try:
-                await service.delete_session(wid)
-            except Exception:
-                logger.warning("Failed to cascade-delete worker session %s", wid, exc_info=True)
     await service.delete_session(session_id)
     return ApiResponse.success()
 
@@ -272,4 +266,3 @@ async def compact_session(
 ) -> ApiResponse[None]:
     await service.compact_session(session_id)
     return ApiResponse.success()
-

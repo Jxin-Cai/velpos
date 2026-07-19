@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -21,7 +22,6 @@ from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 from domain.session.model.session import Session
 from domain.session.service.message_conversion_service import MessageConversionService
-from domain.project.repository.project_repository import ProjectRepository
 from domain.session.repository.session_repository import SessionRepository
 from domain.shared.business_exception import BusinessException
 
@@ -38,7 +38,6 @@ class _QueryContext:
     run_step: Any
     actual_prompt: str
     message_id: str
-    team_config: dict[str, Any]
     cancelled_during_stream: bool = False
 
 
@@ -48,6 +47,7 @@ class SessionQueryEngine:
     _queued_messages: dict[str, RunQueryCommand] = {}
     _active_contexts: dict[str, _QueryContext] = {}
     _waiting_for_slot: set[str] = set()
+    _slot_wait_started_at: dict[str, float] = {}
     _queue_guard = asyncio.Lock()
     _query_semaphore: asyncio.Semaphore | None = None
     _query_semaphore_guard = asyncio.Lock()
@@ -61,8 +61,7 @@ class SessionQueryEngine:
         if cls._query_semaphore is None:
             async with cls._query_semaphore_guard:
                 if cls._query_semaphore is None:
-                    max_concurrent = int(os.getenv("SESSION_MAX_CONCURRENT_QUERIES", "2"))
-                    cls._query_semaphore = asyncio.Semaphore(max(1, max_concurrent))
+                    cls._query_semaphore = asyncio.Semaphore(cls._configured_query_capacity())
         return cls._query_semaphore
 
     def __init__(
@@ -79,7 +78,6 @@ class SessionQueryEngine:
         refresh_context_usage_fn: Callable[..., Awaitable[bool]],
         on_assistant_response: Callable[[str, str], Awaitable[None]] | None = None,
         on_user_message: Callable[[str, str], Awaitable[None]] | None = None,
-        project_repository: ProjectRepository | None = None,
         session_service_factory: Callable | None = None,
     ) -> None:
         self._session_repository = session_repository
@@ -94,7 +92,6 @@ class SessionQueryEngine:
         self._refresh_context_usage = refresh_context_usage_fn
         self._on_assistant_response = on_assistant_response
         self._on_user_message = on_user_message
-        self._project_repository = project_repository
         self._session_service_factory = session_service_factory
 
     async def cleanup_session_state(self, session_id: str) -> None:
@@ -103,6 +100,7 @@ class SessionQueryEngine:
             self._queued_messages.pop(session_id, None)
             self._active_contexts.pop(session_id, None)
             self._waiting_for_slot.discard(session_id)
+            self._slot_wait_started_at.pop(session_id, None)
         await self._session_lock_pool.release(session_id)
 
     async def is_waiting_for_slot(self, session_id: str) -> bool:
@@ -128,9 +126,16 @@ class SessionQueryEngine:
                 if query_semaphore.locked():
                     async with self._queue_guard:
                         self._waiting_for_slot.add(command.session_id)
+                        self._slot_wait_started_at[command.session_id] = time.monotonic()
+                        queue_position = len(self._waiting_for_slot)
                     await self._connection_manager.broadcast(
                         command.session_id,
-                        {"event": "resource_waiting", "status": "waiting_slot"},
+                        {
+                            "event": "resource_waiting",
+                            "status": "waiting_slot",
+                            "queue_position": queue_position,
+                            "capacity": self._configured_query_capacity(),
+                        },
                     )
                     await self._recorder.record_audit_event(
                         command.session_id,
@@ -139,80 +144,45 @@ class SessionQueryEngine:
                     )
                 async with query_semaphore:
                     async with self._queue_guard:
+                        wait_started_at = self._slot_wait_started_at.pop(command.session_id, None)
                         self._waiting_for_slot.discard(command.session_id)
+                    if wait_started_at is not None:
+                        await self._connection_manager.broadcast(
+                            command.session_id,
+                            {
+                                "event": "resource_acquired",
+                                "status": "slot_acquired",
+                                "waited_ms": int((time.monotonic() - wait_started_at) * 1000),
+                                "capacity": self._configured_query_capacity(),
+                            },
+                        )
                     await self.run_claude_query(command)
         except asyncio.CancelledError:
             async with self._queue_guard:
                 self._waiting_for_slot.discard(command.session_id)
+                self._slot_wait_started_at.pop(command.session_id, None)
             self._claude_agent_gateway.mark_idle(command.session_id)
             raise
         except Exception:
             async with self._queue_guard:
                 self._waiting_for_slot.discard(command.session_id)
+                self._slot_wait_started_at.pop(command.session_id, None)
             self._claude_agent_gateway.mark_idle(command.session_id)
             raise
         finally:
             await self._session_lock_pool.unref(command.session_id)
 
-    async def _resolve_team_connect_config(self, session: Session) -> dict[str, Any]:
-        if not self._project_repository:
-            return {}
-        if session.team_task_id:
-            return {}
-
-        project = await self._project_repository.find_by_id(session.project_id)
-        if not project or project.project_type != "team":
-            return {}
-
-        from application.team_task.prompt_builder import build_coordinator_system_prompt
-        from application.team_task.team_coordinator_service import TeamCoordinatorService
-        from infr.client.team_mcp_server import create_team_coordinator_mcp
-        from infr.repository.team_task_repository_impl import TeamTaskRepositoryImpl
-
-        agent_service = None
+    @staticmethod
+    def _configured_query_capacity() -> int:
+        raw_capacity = os.getenv("SESSION_MAX_CONCURRENT_QUERIES", "8")
         try:
-            from application.agent.agent_application_service import AgentApplicationService
-            from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
-            from infr.client.claude_plugin_manager import ClaudePluginManager
-            from infr.repository.claude_md_revision_repository_impl import ClaudeMdRevisionRepositoryImpl
-            from infr.repository.project_repository_impl import ProjectRepositoryImpl as ProjRepoImpl
-
-            db_session = self._session_repository._session
-            revision_service = ClaudeMdRevisionApplicationService(
-                revision_repository=ClaudeMdRevisionRepositoryImpl(db_session),
-                project_repository=ProjRepoImpl(db_session),
+            return min(64, max(1, int(raw_capacity)))
+        except ValueError:
+            logger.warning(
+                "Invalid SESSION_MAX_CONCURRENT_QUERIES=%r; using 8",
+                raw_capacity,
             )
-            agent_service = AgentApplicationService(
-                plugin_manager=ClaudePluginManager(),
-                claude_md_revision_service=revision_service,
-            )
-        except Exception:
-            logger.warning("Failed to create AgentApplicationService for team coordinator", exc_info=True)
-
-        coordinator_service = TeamCoordinatorService(
-            project_repository=self._project_repository,
-            session_repository=self._session_repository,
-            team_task_repository=TeamTaskRepositoryImpl(self._session_repository._session),
-            claude_agent_gateway=self._claude_agent_gateway,
-            connection_manager=self._connection_manager,
-            agent_application_service=agent_service,
-            notify_im_fn=self._on_assistant_response,
-        )
-
-        trace_id = uuid.uuid4().hex[:8]
-
-        mcp_server = create_team_coordinator_mcp(
-            coordinator_service=coordinator_service,
-            project_id=project.id,
-            coordinator_session_id=session.session_id,
-            trace_id=trace_id,
-        )
-
-        return {
-            "system_prompt": build_coordinator_system_prompt(project),
-            "mcp_servers": {"team_coordinator": mcp_server},
-            "trace_id": trace_id,
-        }
+            return 8
 
     async def run_claude_query(self, command: RunQueryCommand) -> None:
         ctx = await self._prepare_query(command)
@@ -359,7 +329,6 @@ class SessionQueryEngine:
             run_step=run_step,
             actual_prompt=actual_prompt,
             message_id=message_id,
-            team_config={},
         )
 
     # ------------------------------------------------------------------
@@ -387,6 +356,9 @@ class SessionQueryEngine:
                     "event": "status_change",
                     "status": "running",
                     "prompt": actual_prompt,
+                    "message_id": ctx.message_id,
+                    "run_id": run_id,
+                    "attachments": command.attachments,
                 },
             )
             if self._on_user_message:
@@ -410,22 +382,6 @@ class SessionQueryEngine:
             _save_and_broadcast(),
             _prepare_sdk_connection(),
         )
-
-        team_config = await self._resolve_team_connect_config(session)
-        ctx.team_config = team_config
-
-        trace_id = team_config.get("trace_id", "")
-        if trace_id:
-            from application.team_task.trace_file_manager import TraceFileManager
-            await TraceFileManager.create_trace(
-                project_dir=session.project_dir,
-                trace_id=trace_id,
-                requirement=actual_prompt,
-                coordinator_session_id=session.session_id,
-                project_id=session.project_id,
-            )
-            session.update_trace_id(trace_id)
-            await self._save_session(session, commit=True)
 
         msg_stream = None
         if is_connected:
@@ -451,8 +407,6 @@ class SessionQueryEngine:
                 prompt=actual_prompt,
                 cwd=session.project_dir,
                 sdk_session_id=resume_sdk_session_id,
-                system_prompt=team_config.get("system_prompt"),
-                mcp_servers=team_config.get("mcp_servers"),
                 enable_file_checkpointing=True,
             )
 
@@ -495,8 +449,6 @@ class SessionQueryEngine:
                     prompt=actual_prompt,
                     cwd=session.project_dir,
                     sdk_session_id=resume_sdk_session_id,
-                    system_prompt=team_config.get("system_prompt"),
-                    mcp_servers=team_config.get("mcp_servers"),
                 )
                 got_result = await self._stream_consumer.consume(session, msg_stream, run_id)
             else:
@@ -556,26 +508,12 @@ class SessionQueryEngine:
                 break
 
         if not got_result:
-            logger.warning(
-                "[session=%s] 消息流结束但未收到 ResultMessage, 合成完成事件",
-                command.session_id,
-            )
-            synthetic_result = Message.create(
-                message_type=MessageType.RESULT,
-                content={
-                    "text": "",
-                    "duration_ms": 0,
-                    "duration_api_ms": 0,
-                    "num_turns": 0,
-                    "is_error": False,
-                    "total_cost_usd": 0,
-                    "stop_reason": "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended",
-                    "usage": {
-                        "input_tokens": session.usage.input_tokens,
-                        "output_tokens": session.usage.output_tokens,
-                    },
-                },
-            )
+            synthetic_result = self._build_stream_end_result(session, auto_continue_count)
+            log_message = "消息流结束但未收到 ResultMessage"
+            if synthetic_result.content["is_error"]:
+                logger.warning("[session=%s] %s，且未收到 Agent 输出", command.session_id, log_message)
+            else:
+                logger.info("[session=%s] %s，使用已收到的 Agent 输出完成", command.session_id, log_message)
             session.add_message(synthetic_result)
             await self._connection_manager.broadcast(
                 session.session_id,
@@ -583,6 +521,86 @@ class SessionQueryEngine:
             )
 
         await self._refresh_context_usage(session)
+
+    @staticmethod
+    def _build_stream_end_result(session: Session, auto_continue_count: int) -> Message:
+        has_assistant_output = bool(MessageConversionService.extract_assistant_text(session.messages))
+        return Message.create(
+            message_type=MessageType.RESULT,
+            content={
+                "text": "" if has_assistant_output else "Agent stream ended without a successful result.",
+                "duration_ms": 0,
+                "duration_api_ms": 0,
+                "num_turns": 0,
+                "is_error": not has_assistant_output,
+                "total_cost_usd": 0,
+                "stop_reason": (
+                    "stream_ended_after_output"
+                    if has_assistant_output
+                    else "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended"
+                ),
+                "usage": {
+                    "input_tokens": session.usage.input_tokens,
+                    "output_tokens": session.usage.output_tokens,
+                },
+            },
+        )
+
+    async def _sync_team_card_execution(
+        self,
+        session: Session,
+        *,
+        succeeded: bool,
+        reason: str = "",
+    ) -> None:
+        if not session.card_execution_id:
+            return
+
+        from infr.config.database import async_session_factory
+        from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
+        from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
+
+        async with async_session_factory() as db_session:
+            execution_repo = CardExecutionRepositoryImpl(db_session)
+            execution = await execution_repo.find_by_id(session.card_execution_id)
+            if execution is None:
+                logger.error(
+                    "[session=%s] team execution not found: %s",
+                    session.session_id,
+                    session.card_execution_id,
+                )
+                return
+            card_repo = WishCardRepositoryImpl(db_session)
+            card = await card_repo.find_by_id(execution.card_id)
+            if card is None:
+                logger.error(
+                    "[session=%s] wish card not found for execution: %s",
+                    session.session_id,
+                    execution.id,
+                )
+                return
+            if succeeded:
+                card.complete_execution(execution.id)
+            else:
+                card.fail_execution(execution.id, reason.strip() or "Agent execution failed")
+            await card_repo.save(card)
+            await db_session.commit()
+
+        latest = card.latest_execution
+        await self._connection_manager.broadcast_global({
+            "event": "board_card_updated",
+            "card": {
+                "id": card.id,
+                "title": card.title,
+                "description": card.description,
+                "status": card.status.value,
+                "current_slot_id": card.current_slot_id,
+                "version": card.version,
+                "session_id": latest.session_id if latest else None,
+                "execution_id": latest.id if latest else None,
+                "failure_reason": latest.failure_reason if latest else None,
+            },
+        })
 
     # ------------------------------------------------------------------
     # Phase 3: Handle successful result
@@ -600,14 +618,12 @@ class SessionQueryEngine:
             logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
             return
 
-        session.complete_query()
+        result_error = self._result_failure_reason(session)
+        if result_error:
+            raise BusinessException(result_error)
 
-        if session.trace_id:
-            from application.team_task.trace_file_manager import TraceFileManager
-            await TraceFileManager.complete_trace(
-                project_dir=session.project_dir,
-                trace_id=session.trace_id,
-            )
+        session.complete_query()
+        await self._sync_team_card_execution(session, succeeded=True)
 
         if self._on_assistant_response:
             text = MessageConversionService.extract_assistant_text(session.messages)
@@ -641,6 +657,19 @@ class SessionQueryEngine:
             },
         )
 
+    @staticmethod
+    def _result_failure_reason(session: Session) -> str:
+        for message in reversed(session.messages):
+            if message.message_type is not MessageType.RESULT:
+                continue
+            if message.content.get("is_error") is not True:
+                return ""
+            text = message.content.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+            return "Agent returned an unsuccessful result"
+        return "Agent stream ended without a result"
+
     # ------------------------------------------------------------------
     # Phase 4: Handle error
     # ------------------------------------------------------------------
@@ -663,13 +692,7 @@ class SessionQueryEngine:
             exc_info=True,
         )
         session.fail_query()
-
-        if session.trace_id:
-            from application.team_task.trace_file_manager import TraceFileManager
-            await TraceFileManager.fail_trace(
-                project_dir=session.project_dir,
-                trace_id=session.trace_id,
-            )
+        await self._sync_team_card_execution(session, succeeded=False, reason=str(e))
 
         await self._recorder.fail_run_step(run_step, {"error": str(e)[:500]})
         await self._recorder.record_audit_event(
@@ -800,6 +823,7 @@ class SessionQueryEngine:
         async with self._queue_guard:
             self._cancelled_sessions.add(session_id)
             self._waiting_for_slot.discard(session_id)
+            self._slot_wait_started_at.pop(session_id, None)
         await self._recorder.record_audit_event(session_id, "cancel_requested", actor="user")
         await self._recorder.record_timeline_event(
             session_id,

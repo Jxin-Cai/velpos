@@ -1,0 +1,1 @@
+"""Team collaboration domain."""

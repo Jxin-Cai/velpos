@@ -1,9 +1,8 @@
 <script setup>
 import { computed, ref, watch, onMounted } from 'vue'
-import { useProject } from '@entities/project/model/useProject'
 import { pickProjectDirectory } from '@entities/project'
-import CustomSelect from '@shared/ui/CustomSelect.vue'
 import { createTeamProject, listTeamTemplates } from '../api/teamApi'
+import { useAgentManager } from '@features/agent-manager/model/useAgentManager'
 import { useEscapeToClose } from '@shared/lib/useDialogManager'
 
 const props = defineProps({
@@ -14,147 +13,63 @@ const emit = defineEmits(['created', 'cancel'])
 
 useEscapeToClose(() => props.visible, () => emit('cancel'))
 
-const { singleAgentProjects } = useProject()
+const { categories: agentCategories, fetchAgents } = useAgentManager()
 const isMac = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform || window.navigator.userAgent)
 
 const teamName = ref('')
 const dirPath = ref('')
-const teamMode = ref('delegation')
 const creating = ref(false)
 const picking = ref(false)
 const error = ref('')
-const selectedAgentId = ref('all')
-const projectKeyword = ref('')
-const activeAssignment = ref({ type: 'pipeline', index: 0 })
-
-const pipeline = ref([
-  { project_id: '', role: '', role_label: '', handoff_input: '', handoff_output: '' },
-])
-
-const members = ref([
-  { project_id: '', role: '', role_label: '', trigger: '', provides: '' },
-])
-const defaultWorkflow = ref('')
-const maxDepth = ref(5)
-
-const maxConcurrent = ref(2)
-const workerMaxTurns = ref(50)
-const workerMaxBudget = ref(1.0)
-const fileCheckpointing = ref(true)
+const activeSlotIndex = ref(0)
 const workflowTemplates = ref([])
 
-const agentOptions = computed(() => {
-  const counts = new Map()
-  for (const project of singleAgentProjects.value) {
-    const agentId = projectAgentId(project)
-    if (!agentId) continue
-    counts.set(agentId, (counts.get(agentId) || 0) + 1)
-  }
-  const options = [...counts.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([agentId, count]) => ({ value: agentId, label: `${agentId} (${count})` }))
-  return [{ value: 'all', label: `All agents (${singleAgentProjects.value.length})` }, ...options]
-})
+const slots = ref([
+  { agent_profile_id: '', display_name: '' },
+])
 
-const filteredProjects = computed(() => {
-  const keyword = projectKeyword.value.trim().toLowerCase()
-  return singleAgentProjects.value.filter(project => {
-    const agentId = projectAgentId(project)
-    if (!agentId) return false
-    if (selectedAgentId.value !== 'all' && agentId !== selectedAgentId.value) return false
-    if (!keyword) return true
-    return [project.name, project.dir_path, agentId, projectAgentLanguage(project)]
-      .filter(Boolean)
-      .some(value => String(value).toLowerCase().includes(keyword))
-  })
-})
+const availableAgents = computed(() => agentCategories.value.flatMap(category =>
+  (category.agents || []).map(agent => ({ ...agent, category_name: category.name }))
+))
+const agentById = computed(() => new Map(availableAgents.value.map(agent => [agent.id, agent])))
 
-const projectById = computed(() => {
-  const map = new Map()
-  for (const project of singleAgentProjects.value) map.set(project.id, project)
-  return map
-})
-
-const activeItems = computed(() => teamMode.value === 'delegation' ? pipeline.value : members.value)
-const activeProjectId = computed(() => activeItems.value[activeAssignment.value.index]?.project_id || '')
+function assignedAgent(slot) {
+  return agentById.value.get(slot.agent_profile_id) || null
+}
 
 const canConfirm = computed(() => {
-  if (creating.value || !teamName.value.trim() || !dirPath.value.trim()) return false
-  const items = teamMode.value === 'delegation' ? pipeline.value : members.value
-  return items.length > 0 && items.every(item => item.project_id && item.role)
+  if (creating.value || !teamName.value.trim()) return false
+  return slots.value.length > 0 && slots.value.every(slot => slot.agent_profile_id)
 })
 
-function projectAgentId(project) {
-  return project?.agents?.current?.id || ''
+function assignAgent(agent) {
+  const slot = slots.value[activeSlotIndex.value]
+  if (!slot) return
+  slot.agent_profile_id = agent.id
+  if (!slot.display_name) slot.display_name = agent.name || agent.id
 }
 
-function projectAgentLanguage(project) {
-  return project?.agents?.current?.language || ''
+function addSlot() {
+  slots.value.push({ agent_profile_id: '', display_name: '' })
+  activeSlotIndex.value = slots.value.length - 1
 }
 
-function projectDisplayName(project) {
-  return `${project?.name || ''} (agent)`
-}
-
-function selectedProject(projectId) {
-  return projectById.value.get(projectId) || null
-}
-
-function assignmentLabel(type, idx) {
-  return type === 'pipeline' ? `Step ${idx + 1}` : `Member ${idx + 1}`
-}
-
-function isActiveAssignment(type, idx) {
-  return activeAssignment.value.type === type && activeAssignment.value.index === idx
-}
-
-function setActiveAssignment(type, idx) {
-  activeAssignment.value = { type, index: idx }
-}
-
-function assignProject(project) {
-  const items = activeAssignment.value.type === 'pipeline' ? pipeline.value : members.value
-  const item = items[activeAssignment.value.index]
-  if (!item) return
-  item.project_id = project.id
-}
-
-function isProjectSelected(projectId) {
-  return activeProjectId.value === projectId
-}
-
-function assignmentLabelsForProject(projectId) {
-  const items = teamMode.value === 'delegation' ? pipeline.value : members.value
-  const type = teamMode.value === 'delegation' ? 'pipeline' : 'members'
-  return items
-    .map((item, idx) => item.project_id === projectId ? assignmentLabel(type, idx) : '')
-    .filter(Boolean)
-}
-
-function resetFilters() {
-  selectedAgentId.value = 'all'
-  projectKeyword.value = ''
+function removeSlot(idx) {
+  if (slots.value.length <= 1) return
+  slots.value.splice(idx, 1)
+  activeSlotIndex.value = Math.min(idx, slots.value.length - 1)
 }
 
 function applyTemplate(tpl) {
-  teamMode.value = tpl.mode
-  if (tpl.mode === 'delegation') {
-    pipeline.value = tpl.pipeline.map(s => ({ ...s, project_id: '' }))
-    activeAssignment.value = { type: 'pipeline', index: 0 }
-  } else {
-    members.value = (tpl.members || []).map(m => ({ ...m, project_id: '' }))
-    activeAssignment.value = { type: 'members', index: 0 }
+  const items = tpl.pipeline || tpl.members || tpl.slots || []
+  slots.value = items.map(item => ({
+    agent_profile_id: item.agent_profile_id || item.role || '',
+    display_name: item.role_label || item.display_name || item.role || '',
+  }))
+  if (slots.value.length === 0) {
+    slots.value = [{ agent_profile_id: '', display_name: '' }]
   }
-
-  const defaultConfig = tpl.default_config || {}
-  maxConcurrent.value = defaultConfig.max_concurrent ?? maxConcurrent.value
-  workerMaxTurns.value = defaultConfig.worker_max_turns ?? workerMaxTurns.value
-  workerMaxBudget.value = defaultConfig.worker_max_budget_usd ?? workerMaxBudget.value
-  fileCheckpointing.value = defaultConfig.file_checkpointing ?? fileCheckpointing.value
-
-  if (tpl.default_workflow?.length) {
-    defaultWorkflow.value = tpl.default_workflow.join(' → ')
-  }
+  activeSlotIndex.value = 0
 }
 
 async function loadTemplates() {
@@ -166,32 +81,6 @@ async function loadTemplates() {
   }
 }
 
-function addPipelineStep() {
-  pipeline.value.push({ project_id: '', role: '', role_label: '', handoff_input: '', handoff_output: '' })
-  activeAssignment.value = { type: 'pipeline', index: pipeline.value.length - 1 }
-}
-
-function removePipelineStep(idx) {
-  if (pipeline.value.length <= 1) return
-  pipeline.value.splice(idx, 1)
-  activeAssignment.value = { type: 'pipeline', index: Math.min(idx, pipeline.value.length - 1) }
-}
-
-function addMember() {
-  members.value.push({ project_id: '', role: '', role_label: '', trigger: '', provides: '' })
-  activeAssignment.value = { type: 'members', index: members.value.length - 1 }
-}
-
-function removeMember(idx) {
-  if (members.value.length <= 1) return
-  members.value.splice(idx, 1)
-  activeAssignment.value = { type: 'members', index: Math.min(idx, members.value.length - 1) }
-}
-
-watch(teamMode, (mode) => {
-  activeAssignment.value = { type: mode === 'delegation' ? 'pipeline' : 'members', index: 0 }
-})
-
 watch(() => props.visible, (val) => {
   if (val && workflowTemplates.value.length === 0) {
     loadTemplates()
@@ -200,20 +89,10 @@ watch(() => props.visible, (val) => {
   if (!val) {
     teamName.value = ''
     dirPath.value = ''
-    teamMode.value = 'delegation'
     creating.value = false
     error.value = ''
-    selectedAgentId.value = 'all'
-    projectKeyword.value = ''
-    activeAssignment.value = { type: 'pipeline', index: 0 }
-    pipeline.value = [{ project_id: '', role: '', role_label: '', handoff_input: '', handoff_output: '' }]
-    members.value = [{ project_id: '', role: '', role_label: '', trigger: '', provides: '' }]
-    defaultWorkflow.value = ''
-    maxDepth.value = 5
-    maxConcurrent.value = 2
-    workerMaxTurns.value = 50
-    workerMaxBudget.value = 1.0
-    fileCheckpointing.value = true
+    activeSlotIndex.value = 0
+    slots.value = [{ agent_profile_id: '', display_name: '' }]
   }
 })
 
@@ -232,15 +111,13 @@ async function handleCreate() {
   creating.value = true
   error.value = ''
 
-  const config = { max_concurrent: maxConcurrent.value, worker_max_turns: workerMaxTurns.value, worker_max_budget_usd: workerMaxBudget.value, file_checkpointing: fileCheckpointing.value }
-  if (teamMode.value === 'delegation') {
-    config.mode = 'delegation'
-    config.pipeline = pipeline.value.filter(s => s.project_id)
-  } else {
-    config.mode = 'collaboration'
-    config.members = members.value.filter(m => m.project_id)
-    config.default_workflow = defaultWorkflow.value.split(/[→,\s]+/).map(s => s.trim()).filter(Boolean)
-    config.max_depth = maxDepth.value
+  const config = {
+    slots: slots.value
+      .filter(s => s.agent_profile_id)
+      .map(s => ({
+        agent_profile_id: s.agent_profile_id,
+        display_name: s.display_name || s.agent_profile_id,
+      })),
   }
 
   try {
@@ -257,6 +134,7 @@ function handleCancel() { emit('cancel') }
 
 onMounted(() => {
   loadTemplates()
+  fetchAgents()
 })
 </script>
 
@@ -266,10 +144,10 @@ onMounted(() => {
       <div class="dialog">
         <header class="dialog-header">
           <div>
-            <h2 id="create-team-dialog-title" class="dialog-title">Create Agent Teams Project</h2>
-            <p class="dialog-subtitle">Pick agent-enabled projects, then assign them to each team role.</p>
+            <h2 id="create-team-dialog-title" class="dialog-title">Create Agent Team</h2>
+            <p class="dialog-subtitle">Add agent slots, then assign agents from catalog.</p>
           </div>
-          <button class="close-btn" type="button" aria-label="Close team project dialog" @click="handleCancel">
+          <button class="close-btn" type="button" aria-label="Close" @click="handleCancel">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
           </button>
         </header>
@@ -282,9 +160,9 @@ onMounted(() => {
             </div>
 
             <div class="form-group form-group--wide">
-              <label class="form-label">Working Directory <span class="required">*</span></label>
+              <label class="form-label">Working Directory</label>
               <div class="path-row">
-                <input v-model="dirPath" type="text" class="form-input" placeholder="/path/to/project" />
+                <input v-model="dirPath" type="text" class="form-input" placeholder="~/.velpos/teams/my-team" />
                 <button v-if="isMac" class="btn-ghost" @click="handlePickDirectory" :disabled="picking">
                   {{ picking ? '...' : 'Choose' }}
                 </button>
@@ -292,30 +170,16 @@ onMounted(() => {
             </div>
           </section>
 
-          <section class="setup-row">
-            <div class="form-group">
-              <label class="form-label">Collaboration Mode</label>
-              <div class="mode-switch">
-                <button class="mode-btn" :class="{ active: teamMode === 'delegation' }" @click="teamMode = 'delegation'">
-                  Delegation
-                </button>
-                <button class="mode-btn" :class="{ active: teamMode === 'collaboration' }" @click="teamMode = 'collaboration'">
-                  Collaboration
-                </button>
-              </div>
-            </div>
-
-            <div class="form-group templates-group">
-              <label class="form-label">Quick Start Templates</label>
-              <div class="template-row">
-                <button
-                  v-for="tpl in workflowTemplates"
-                  :key="tpl.id"
-                  class="template-btn"
-                  @click="applyTemplate(tpl)"
-                  :title="tpl.description"
-                >{{ tpl.name }}</button>
-              </div>
+          <section v-if="workflowTemplates.length" class="templates-section">
+            <label class="form-label">Quick Start Templates</label>
+            <div class="template-row">
+              <button
+                v-for="tpl in workflowTemplates"
+                :key="tpl.id"
+                class="template-btn"
+                @click="applyTemplate(tpl)"
+                :title="tpl.description"
+              >{{ tpl.name }}</button>
             </div>
           </section>
 
@@ -323,43 +187,30 @@ onMounted(() => {
             <div class="project-picker panel-card">
               <div class="panel-header">
                 <div>
-                  <h3 class="panel-title">Agent projects</h3>
-                  <p class="panel-hint">{{ filteredProjects.length }} of {{ singleAgentProjects.length }} available</p>
+                  <h3 class="panel-title">Agent Catalog</h3>
+                  <p class="panel-hint">{{ availableAgents.length }} available</p>
                 </div>
               </div>
 
-              <div class="filter-row">
-                <CustomSelect v-model="selectedAgentId" :options="agentOptions" />
-                <input v-model="projectKeyword" class="form-input search-input" type="search" placeholder="Search project, path, agent..." />
-              </div>
-
-              <div v-if="singleAgentProjects.length === 0" class="empty-card">
-                <span class="empty-title">No agent projects available</span>
-                <span class="empty-desc">Load an agent in an Agents project before creating a team.</span>
-              </div>
-              <div v-else-if="filteredProjects.length === 0" class="empty-card">
-                <span class="empty-title">No projects match this filter</span>
-                <button class="link-btn" @click="resetFilters">Clear filter</button>
+              <div v-if="availableAgents.length === 0" class="empty-card">
+                <span class="empty-title">No agents available</span>
+                <span class="empty-desc">Check the agent catalog configuration.</span>
               </div>
               <div v-else class="project-list">
                 <button
-                  v-for="project in filteredProjects"
-                  :key="project.id"
+                  v-for="agent in availableAgents"
+                  :key="agent.id"
                   class="project-card"
-                  :class="{ selected: isProjectSelected(project.id), assigned: assignmentLabelsForProject(project.id).length > 0 }"
-                  @click="assignProject(project)"
+                  :class="{ selected: slots[activeSlotIndex]?.agent_profile_id === agent.id }"
+                  @click="assignAgent(agent)"
                 >
                   <span class="project-card-main">
-                    <span class="project-card-title">{{ projectDisplayName(project) }}</span>
-                    <span class="project-card-path">{{ project.dir_path }}</span>
+                    <span class="project-card-title">{{ agent.name }}</span>
+                    <span class="project-card-path">{{ agent.description }}</span>
                   </span>
                   <span class="project-card-meta">
-                    <span class="agent-badge">{{ projectAgentId(project) }}</span>
-                    <span v-if="projectAgentLanguage(project)" class="lang-badge">{{ projectAgentLanguage(project) }}</span>
-                    <span v-if="assignmentLabelsForProject(project.id).length" class="assigned-badge">
-                      {{ assignmentLabelsForProject(project.id).join(', ') }}
-                    </span>
-                    <span v-if="isProjectSelected(project.id)" class="selected-dot" aria-hidden="true"></span>
+                    <span class="agent-badge">{{ agent.id }}</span>
+                    <span class="lang-badge">{{ agent.category_name }}</span>
                   </span>
                 </button>
               </div>
@@ -368,97 +219,29 @@ onMounted(() => {
             <div class="assignment-panel panel-card">
               <div class="panel-header">
                 <div>
-                  <h3 class="panel-title">{{ teamMode === 'delegation' ? 'Pipeline' : 'Team Members' }}</h3>
-                  <p class="panel-hint">Select a row, then click a project card to bind it.</p>
+                  <h3 class="panel-title">Agent Slots</h3>
+                  <p class="panel-hint">Select a slot, then click an agent to assign.</p>
                 </div>
               </div>
 
-              <template v-if="teamMode === 'delegation'">
-                <div v-for="(step, idx) in pipeline" :key="idx" class="assignment-card" :class="{ active: isActiveAssignment('pipeline', idx) }">
-                  <div class="assignment-header">
-                    <button class="assignment-project" @click="setActiveAssignment('pipeline', idx)">
-                      <span class="step-badge">Step {{ idx + 1 }}</span>
-                      <span v-if="selectedProject(step.project_id)" class="selected-project-name">
-                        {{ projectDisplayName(selectedProject(step.project_id)) }}
-                      </span>
-                      <span v-else class="selected-project-placeholder">Select a project</span>
-                    </button>
-                    <button v-if="pipeline.length > 1" class="btn-icon" @click="removePipelineStep(idx)" title="Remove" aria-label="Remove step">×</button>
-                  </div>
-                  <div class="step-row">
-                    <input v-model="step.role" class="form-input role-input" placeholder="Role (e.g. architect)" />
-                    <input v-model="step.role_label" class="form-input role-input" placeholder="Label (e.g. Architect)" />
-                  </div>
-                  <div class="step-row">
-                    <input v-model="step.handoff_input" class="form-input" placeholder="Input from previous step" />
-                  </div>
-                  <div class="step-row">
-                    <input v-model="step.handoff_output" class="form-input" placeholder="Output for next step" />
-                  </div>
+              <div v-for="(slot, idx) in slots" :key="idx" class="assignment-card" :class="{ active: activeSlotIndex === idx }">
+                <div class="assignment-header">
+                  <button class="assignment-project" @click="activeSlotIndex = idx">
+                    <span class="step-badge">Slot {{ idx + 1 }}</span>
+                    <span v-if="assignedAgent(slot)" class="selected-project-name">
+                      {{ assignedAgent(slot).name }}
+                    </span>
+                    <span v-else class="selected-project-placeholder">Select an agent</span>
+                  </button>
+                  <button v-if="slots.length > 1" class="btn-icon" @click="removeSlot(idx)" title="Remove" aria-label="Remove slot">&times;</button>
                 </div>
-                <button class="btn-ghost add-btn" @click="addPipelineStep">+ Add Step</button>
-              </template>
-
-              <template v-else>
-                <div v-for="(member, idx) in members" :key="idx" class="assignment-card" :class="{ active: isActiveAssignment('members', idx) }">
-                  <div class="assignment-header">
-                    <button class="assignment-project" @click="setActiveAssignment('members', idx)">
-                      <span class="step-badge">Member {{ idx + 1 }}</span>
-                      <span v-if="selectedProject(member.project_id)" class="selected-project-name">
-                        {{ projectDisplayName(selectedProject(member.project_id)) }}
-                      </span>
-                      <span v-else class="selected-project-placeholder">Select a project</span>
-                    </button>
-                    <button v-if="members.length > 1" class="btn-icon" @click="removeMember(idx)" title="Remove" aria-label="Remove member">×</button>
-                  </div>
-                  <div class="step-row">
-                    <input v-model="member.role" class="form-input role-input" placeholder="Role" />
-                    <input v-model="member.role_label" class="form-input role-input" placeholder="Label" />
-                  </div>
-                  <div class="step-row">
-                    <input v-model="member.trigger" class="form-input" placeholder="When to invoke" />
-                  </div>
-                  <div class="step-row">
-                    <input v-model="member.provides" class="form-input" placeholder="What it provides" />
-                  </div>
+                <div class="step-row">
+                  <input v-model="slot.display_name" class="form-input" placeholder="Display name (optional)" />
                 </div>
-                <button class="btn-ghost add-btn" @click="addMember">+ Add Member</button>
-
-                <div class="form-group inline-config">
-                  <label class="form-label">Default Workflow</label>
-                  <input v-model="defaultWorkflow" class="form-input" placeholder="architect → coder → tester" />
-                </div>
-                <div class="form-group inline-config inline-config--small">
-                  <label class="form-label">Max Nesting Depth</label>
-                  <input v-model.number="maxDepth" type="number" class="form-input" min="1" max="10" />
-                </div>
-              </template>
+              </div>
+              <button class="btn-ghost add-btn" @click="addSlot">+ Add Slot</button>
             </div>
           </section>
-
-          <details class="advanced-section">
-            <summary class="form-label">Advanced</summary>
-            <div class="advanced-grid">
-              <div class="form-group">
-                <label class="form-label">Max Concurrent</label>
-                <input v-model.number="maxConcurrent" type="number" class="form-input" min="1" max="10" />
-              </div>
-              <div class="form-group">
-                <label class="form-label">Worker Max Turns</label>
-                <input v-model.number="workerMaxTurns" type="number" class="form-input" min="1" max="200" />
-              </div>
-              <div class="form-group">
-                <label class="form-label">Worker Budget ($)</label>
-                <input v-model.number="workerMaxBudget" type="number" class="form-input" min="0.1" max="50" step="0.1" />
-              </div>
-              <div class="form-group">
-                <label class="form-label checkbox-label">
-                  <input type="checkbox" v-model="fileCheckpointing" />
-                  File Checkpointing
-                </label>
-              </div>
-            </div>
-          </details>
 
           <div v-if="error" class="form-error">{{ error }}</div>
         </div>
@@ -481,7 +264,7 @@ onMounted(() => {
 }
 
 .dialog {
-  width: 920px;
+  width: 860px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   background: var(--dialog-surface);
@@ -521,58 +304,31 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(320px, 1.4fr);
   gap: 12px;
-}
-
-.setup-row {
-  display: grid;
-  grid-template-columns: minmax(220px, auto) 1fr;
-  gap: 16px;
-  align-items: end;
   margin-bottom: 14px;
 }
 
-.mode-switch,
-.template-row,
-.filter-row,
-.path-row,
-.step-row,
-.assignment-header,
-.project-card-meta,
-.advanced-grid,
-.dialog-actions {
+.templates-section {
+  margin-bottom: 14px;
+}
+
+.template-row {
   display: flex;
-}
-
-.mode-switch,
-.template-row,
-.filter-row,
-.path-row,
-.step-row,
-.project-card-meta,
-.advanced-grid {
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.mode-btn,
-.template-btn,
-.btn-ghost,
-.btn-primary,
-.btn-icon,
-.link-btn {
-  cursor: pointer;
-}
-
-.mode-btn {
-  padding: 7px 12px;
+.template-btn {
+  padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
+  cursor: pointer;
   transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
-.mode-btn.active {
+.template-btn:hover {
   background: var(--accent-dim);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
   color: var(--accent);
@@ -580,7 +336,7 @@ onMounted(() => {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(380px, 1.1fr);
+  grid-template-columns: minmax(300px, 0.9fr) minmax(340px, 1.1fr);
   gap: 14px;
   align-items: start;
 }
@@ -589,12 +345,8 @@ onMounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-tertiary);
-  min-width: 0;
-}
-
-.project-picker,
-.assignment-panel {
   padding: 12px;
+  min-width: 0;
 }
 
 .panel-header {
@@ -615,16 +367,6 @@ onMounted(() => {
   margin: 3px 0 0;
   color: var(--text-muted);
   font-size: 11px;
-}
-
-.filter-row {
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.search-input {
-  flex: 1;
-  min-width: 0;
 }
 
 .project-list {
@@ -663,10 +405,6 @@ onMounted(() => {
   box-shadow: var(--ring);
 }
 
-.project-card.assigned:not(.selected) {
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
 .project-card-main {
   flex: 1;
   min-width: 0;
@@ -694,15 +432,16 @@ onMounted(() => {
 }
 
 .project-card-meta {
+  display: flex;
   align-items: center;
+  gap: 8px;
   justify-content: flex-end;
   flex-wrap: wrap;
   max-width: 180px;
 }
 
 .agent-badge,
-.lang-badge,
-.assigned-badge {
+.lang-badge {
   display: inline-flex;
   align-items: center;
   min-height: 18px;
@@ -723,19 +462,6 @@ onMounted(() => {
   color: var(--text-secondary);
 }
 
-.assigned-badge {
-  background: color-mix(in srgb, var(--green) 14%, transparent);
-  color: var(--green);
-}
-
-.selected-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-
 .assignment-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -751,6 +477,7 @@ onMounted(() => {
 }
 
 .assignment-header {
+  display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
@@ -783,9 +510,9 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.role-input {
-  width: 50%;
-  min-width: 0;
+.step-row {
+  display: flex;
+  gap: 8px;
 }
 
 .btn-icon {
@@ -796,6 +523,7 @@ onMounted(() => {
   line-height: 1;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
 .btn-icon:hover { color: var(--red); background: var(--bg-hover); }
@@ -804,14 +532,6 @@ onMounted(() => {
   font-size: 12px;
   padding: 6px 10px;
   margin-top: 2px;
-}
-
-.inline-config {
-  margin-top: 12px;
-}
-
-.inline-config--small .form-input {
-  width: 110px;
 }
 
 .empty-card {
@@ -838,79 +558,13 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.link-btn {
-  border: none;
-  background: transparent;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.advanced-section {
-  margin-top: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-}
-
-.advanced-section summary {
-  cursor: pointer;
-  margin-bottom: 0;
-}
-
-.advanced-section[open] summary {
-  margin-bottom: 8px;
-}
-
-.advanced-grid {
-  flex-wrap: wrap;
-}
-
-.advanced-grid .form-group {
-  min-width: 120px;
-  margin-bottom: 0;
-}
-
-.advanced-grid .form-input {
-  width: 120px;
-}
-
-.template-row {
-  flex-wrap: wrap;
-}
-
-.template-btn {
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-}
-
-.template-btn:hover {
-  background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-  color: var(--accent);
-}
-
-.checkbox-label {
+.path-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  min-height: 34px;
-}
-
-.checkbox-label input[type="checkbox"] {
-  margin: 0;
-  accent-color: var(--accent);
+  gap: 8px;
 }
 
 .form-group { margin-bottom: 12px; }
 .form-group--wide { min-width: 0; }
-.templates-group { min-width: 0; }
 .form-label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
 .required { color: var(--red); }
 .form-error { font-size: 11px; color: var(--red); margin-top: 10px; }
@@ -938,6 +592,7 @@ onMounted(() => {
 .form-input::placeholder { color: var(--text-muted); }
 
 .dialog-actions {
+  display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding: 14px 22px;
@@ -953,6 +608,7 @@ onMounted(() => {
   background: transparent;
   color: var(--text-secondary);
   font-size: 14px;
+  cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
@@ -993,18 +649,8 @@ onMounted(() => {
   }
 
   .basic-grid,
-  .setup-row,
   .workspace-grid {
     grid-template-columns: 1fr;
-  }
-
-  .filter-row,
-  .step-row {
-    flex-direction: column;
-  }
-
-  .role-input {
-    width: 100%;
   }
 
   .project-card {

@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Callable
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from claude_agent_sdk._errors import ProcessError
 from claude_agent_sdk.types import (
+    ResultMessage,
     SystemMessage as _SystemMessage,
     TaskStartedMessage,
     TaskProgressMessage,
@@ -23,6 +24,7 @@ from domain.session.acl.claude_agent_gateway import (
     ClaudeAgentGateway as ClaudeAgentGatewayPort,
 )
 from domain.shared.async_utils import safe_create_task
+from infr.client.claude_settings_env import load_claude_settings_env
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._connected_models: dict[str, str] = {}
         # session_id -> permission_mode set by user
         self._session_permission_modes: dict[str, str] = {}
+        # Permission changes can arrive while the connection is running the
+        # startup `/status` query.  Claude's control channel cannot reliably
+        # process a mode change concurrently with a query, so keep one
+        # deferred operation per session.
+        self._pending_permission_tasks: dict[str, asyncio.Task] = {}
         # session_id -> asyncio.Future for pending user responses (choices/permissions)
         self._pending_user_responses: dict[str, asyncio.Future] = {}
         # session_id -> pending request context (questions list for AskUserQuestion)
@@ -213,6 +220,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             hooks=hooks,
             enable_file_checkpointing=enable_file_checkpointing,
             extra_args=extra_args,
+            env=load_claude_settings_env(),
         )
         options = ClaudeAgentOptions(
             **common_kwargs,
@@ -505,11 +513,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             if cwd:
                 self._session_cwds[session_id] = cwd
 
-        try:
-            await client.set_permission_mode(perm_mode)
-        except Exception:
-            logger.debug("set_permission_mode after connect failed (non-critical): session=%s", session_id)
-
         return client, resume_failed
 
     async def disconnect(self, session_id: str) -> None:
@@ -553,6 +556,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
     async def cleanup_session(self, session_id: str) -> None:
         """Remove all tracked state for a session (call after full deletion)."""
+        pending_permission = self._pending_permission_tasks.pop(session_id, None)
+        if pending_permission is not None and not pending_permission.done():
+            pending_permission.cancel()
         self._trace_run_id_refs.pop(session_id, None)
         self._sdk_session_ids.pop(session_id, None)
         self._session_cwds.pop(session_id, None)
@@ -711,7 +717,70 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         client = self._clients.get(session_id)
         if client is None:
             return
-        await client.set_permission_mode(mode)
+
+        # A newly opened connection is pre-warmed with `/status`.  Sending a
+        # control request during that query makes the SDK wait until its
+        # control-request deadline and report a timeout.  Defer the request
+        # until the query has finished; the selected mode is already persisted
+        # and will also be used when reconnecting.
+        if self.get_state(session_id) in {"streaming", "waiting_permission"}:
+            previous = self._pending_permission_tasks.pop(session_id, None)
+            if previous is not None and not previous.done():
+                previous.cancel()
+            task = safe_create_task(
+                self._apply_permission_mode_when_idle(session_id, client, mode),
+                name=f"apply_permission_mode_{session_id}",
+            )
+            self._pending_permission_tasks[session_id] = task
+            return
+
+        try:
+            await client.set_permission_mode(mode)
+        except Exception as exc:
+            # The mode remains persisted and will be applied on the next
+            # connection.  A transient SDK control timeout must not turn a
+            # normal startup action into a WebSocket error.
+            if "control request timeout" in str(exc).lower():
+                logger.warning(
+                    "deferred permission mode update after SDK timeout: session=%s",
+                    session_id,
+                )
+                task = safe_create_task(
+                    self._apply_permission_mode_when_idle(session_id, client, mode),
+                    name=f"retry_permission_mode_{session_id}",
+                )
+                self._pending_permission_tasks[session_id] = task
+                return
+            raise
+
+    async def _apply_permission_mode_when_idle(
+        self,
+        session_id: str,
+        client: ClaudeSDKClient,
+        mode: str,
+    ) -> None:
+        """Apply a mode after a concurrent SDK query has become idle."""
+        try:
+            while self._clients.get(session_id) is client and self.get_state(session_id) in {
+                "streaming",
+                "waiting_permission",
+            }:
+                await asyncio.sleep(0.1)
+            if self._clients.get(session_id) is not client:
+                return
+            await client.set_permission_mode(mode)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "deferred permission mode update failed: session=%s",
+                session_id,
+                exc_info=True,
+            )
+        finally:
+            current = self._pending_permission_tasks.get(session_id)
+            if current is asyncio.current_task():
+                self._pending_permission_tasks.pop(session_id, None)
 
     def is_connected(self, session_id: str) -> bool:
         """Check if a session has an active SDK client."""
@@ -885,6 +954,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 cli_path=self._cli_path,
                 permission_mode=self._permission_mode,
                 max_buffer_size=self._max_buffer_size,
+                env=load_claude_settings_env(),
             ))
             try:
                 await client.connect()
@@ -1022,6 +1092,31 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
         Returns ``None`` for unrecognised message types.
         """
+        # Some SDK/transport adapters expose the parsed event as a mapping
+        # instead of the typed SDK object. Normalize that shape here so a
+        # terminal result cannot be silently dropped and turn into the
+        # synthetic "stream ended" failure.
+        if isinstance(msg, dict):
+            message_type = msg.get("message_type") or msg.get("type")
+            if message_type in {"result", "ResultMessage"}:
+                usage = msg.get("usage") or {}
+                return {
+                    "message_type": "result",
+                    "content": {
+                        "text": msg.get("result", msg.get("text", "")) or "",
+                        "duration_ms": msg.get("duration_ms", 0),
+                        "duration_api_ms": msg.get("duration_api_ms", 0),
+                        "num_turns": msg.get("num_turns", 0),
+                        "is_error": msg.get("is_error", False),
+                        "total_cost_usd": msg.get("total_cost_usd", 0),
+                        "stop_reason": msg.get("stop_reason"),
+                        "usage": usage,
+                    },
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                }
+            return None
+
         if isinstance(msg, _SystemMessage):
             subtype = getattr(msg, "subtype", "")
             if subtype in ClaudeAgentGateway._IGNORED_SYSTEM_SUBTYPES:
@@ -1124,7 +1219,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 "content": {"results": results},
             }
 
-        if msg_type == "ResultMessage":
+        # Use the SDK type instead of relying solely on the class name.  The
+        # SDK may return a compatible ResultMessage subclass/wrapper; those
+        # messages still terminate a response stream and must be surfaced to
+        # SessionStreamConsumer as a successful terminal result.
+        if isinstance(msg, ResultMessage) or msg_type == "ResultMessage":
             usage = getattr(msg, "usage", None) or {}
             if not isinstance(usage, dict):
                 # Safety: handle case where usage is an object with attributes

@@ -19,6 +19,7 @@ from domain.session.acl.connection_manager import ConnectionManager
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 from domain.session.model.session import Session
+from domain.session.model.session_summary import SessionSummary
 from domain.session.model.usage import Usage
 from domain.session.service.message_conversion_service import MessageConversionService
 from application.session.session_presenter import SessionPresenter
@@ -98,7 +99,6 @@ class SessionApplicationService:
             refresh_context_usage_fn=self._refresh_context_usage,
             on_assistant_response=on_assistant_response,
             on_user_message=on_user_message,
-            project_repository=project_repository,
             session_service_factory=session_service_factory,
         )
 
@@ -337,7 +337,13 @@ class SessionApplicationService:
 
         os.makedirs(project_dir, exist_ok=True)
 
-        session = Session.create(model=command.model, project_id=command.project_id, project_dir=project_dir)
+        session = Session.create(
+            model=command.model,
+            project_id=command.project_id,
+            project_dir=project_dir,
+            card_execution_id=command.card_execution_id,
+            agent_slot_id=command.agent_slot_id,
+        )
 
         if command.name:
             session.rename(command.name.strip())
@@ -389,6 +395,9 @@ class SessionApplicationService:
 
     async def list_sessions(self) -> list[Session]:
         return await self._session_repository.find_all()
+
+    async def list_session_summaries(self) -> list[SessionSummary]:
+        return await self._session_repository.find_all_summaries()
 
     async def get_current_git_branch(self, project_dir: str) -> str:
         return await _get_current_git_branch(project_dir)
@@ -663,7 +672,7 @@ class SessionApplicationService:
             project_id = await self._ensure_project_for_dir(project_dir)
 
         session = Session.create(
-            model=os.getenv("DEFAULT_MODEL", "claude-opus-4-6"),
+            model=os.getenv("DEFAULT_MODEL", "default"),
             project_id=project_id,
             project_dir=project_dir,
         )

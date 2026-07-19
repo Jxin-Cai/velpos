@@ -209,7 +209,7 @@ function handleCancel() {
                 type="text"
                 class="form-input"
                 :class="{ 'form-input-error': pathError || pickerError }"
-                placeholder="/Users/you/workspace/my-project"
+                placeholder="~/.velpos/agents/my-project"
                 @keydown.enter="handleConfirm"
               />
               <button

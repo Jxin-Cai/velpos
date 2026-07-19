@@ -13,13 +13,13 @@ from application.message.attachment_application_service import AttachmentApplica
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_application_service import SessionApplicationService
 from application.terminal.terminal_application_service import TerminalApplicationService
-from application.team_task.team_coordinator_service import TeamCoordinatorService
 from domain.shared.async_utils import safe_create_task
 from domain.shared.business_exception import BusinessException
 from infr.client.connection_manager import ConnectionManager
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from ohs.assembler.session_assembler import SessionAssembler
-from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_attachment_application_service, get_terminal_application_service, get_create_session_service_factory, get_team_coordinator_service
+from application.team_board.team_board_service import TeamBoardApplicationService
+from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_attachment_application_service, get_terminal_application_service, get_create_session_service_factory, get_team_board_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,8 @@ TerminalServiceDep = Annotated[
     Depends(get_terminal_application_service),
 ]
 TeamServiceDep = Annotated[
-    TeamCoordinatorService,
-    Depends(get_team_coordinator_service),
+    TeamBoardApplicationService,
+    Depends(get_team_board_service),
 ]
 
 
@@ -67,7 +67,7 @@ class _WsContext:
     gateway: ClaudeAgentGatewayImpl
     session_service_factory: Callable[[], Awaitable[SessionApplicationService]]
     attachment_service: AttachmentApplicationService
-    team_service: TeamCoordinatorService
+    team_service: TeamBoardApplicationService
     build_session_summary: Callable[..., Awaitable[dict]]
     submit_query_background: Callable[[RunQueryCommand], Awaitable[None]]
 
@@ -188,7 +188,6 @@ async def _handle_cancel(ctx: _WsContext, data: dict) -> None:
                 await bg_svc.close()
 
         safe_create_task(_cancel_background())
-        safe_create_task(ctx.team_service.cancel_team_session(ctx.session_id))
         await ctx.websocket.send_json({
             "event": "info",
             "message": "Cancelling...",

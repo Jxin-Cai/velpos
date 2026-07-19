@@ -27,7 +27,6 @@ class Session:
     _pending_request_context: dict[str, Any] | None = None
     _queued_command: dict[str, Any] | None = None
     _cancel_requested: bool = False
-    _team_task_id: str = ""
     _card_execution_id: str | None = None
     _agent_slot_id: str | None = None
     _trace_id: str = ""
@@ -102,10 +101,6 @@ class Session:
         return self._cancel_requested
 
     @property
-    def team_task_id(self) -> str:
-        return self._team_task_id
-
-    @property
     def card_execution_id(self) -> str | None:
         return self._card_execution_id
 
@@ -139,7 +134,6 @@ class Session:
         model: str = "",
         project_id: str = "",
         project_dir: str = "",
-        team_task_id: str = "",
         card_execution_id: str | None = None,
         agent_slot_id: str | None = None,
         trace_id: str = "",
@@ -154,7 +148,7 @@ class Session:
         """
         session_id = uuid.uuid4().hex[:8]
         if not model:
-            model = "claude-opus-4-6"
+            model = "default"
         return cls(
             _session_id=session_id,
             _model=model,
@@ -170,7 +164,6 @@ class Session:
             _pending_request_context=None,
             _queued_command=None,
             _cancel_requested=False,
-            _team_task_id=team_task_id,
             _card_execution_id=card_execution_id,
             _agent_slot_id=agent_slot_id,
             _trace_id=trace_id,
@@ -194,7 +187,6 @@ class Session:
         pending_request_context: dict[str, Any] | None = None,
         queued_command: dict[str, Any] | None = None,
         cancel_requested: bool = False,
-        team_task_id: str = "",
         card_execution_id: str | None = None,
         agent_slot_id: str | None = None,
         trace_id: str = "",
@@ -221,7 +213,6 @@ class Session:
             _pending_request_context=dict(pending_request_context) if pending_request_context else None,
             _queued_command=cls._normalize_queued_command(queued_command),
             _cancel_requested=cancel_requested,
-            _team_task_id=team_task_id,
             _card_execution_id=card_execution_id,
             _agent_slot_id=agent_slot_id,
             _trace_id=trace_id,

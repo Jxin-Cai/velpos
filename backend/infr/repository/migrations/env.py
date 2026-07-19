@@ -8,8 +8,16 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+
+
+@compiles(MEDIUMTEXT, "sqlite")
+def _compile_mediumtext_for_sqlite(_type: MEDIUMTEXT, _compiler, **_kwargs) -> str:
+    return "TEXT"
+
 
 # 确保 backend/ 在 sys.path 中（migrations 位于 infr/repository/migrations/）
 _backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -26,6 +34,7 @@ from infr.config.base import DATABASE_URL, Base
 import infr.repository.evolution_proposal_model  # noqa: F401
 import infr.repository.attachment_model  # noqa: F401
 import infr.repository.session_model  # noqa: F401
+import infr.repository.team_model  # noqa: F401
 import infr.repository.scheduled_task_model  # noqa: F401
 import infr.repository.session_audit_event_model  # noqa: F401
 import infr.repository.session_branch_model  # noqa: F401

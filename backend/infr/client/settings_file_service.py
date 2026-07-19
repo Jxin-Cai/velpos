@@ -5,7 +5,8 @@ import json
 import logging
 import os
 import tempfile
-from pathlib import Path
+
+from infr.client.claude_settings_env import resolve_claude_settings_path
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ class SettingsFileService:
     """Read and write ~/.claude/settings.json."""
 
     def __init__(self) -> None:
-        self._settings_path = Path.home() / ".claude" / "settings.json"
+        self._settings_path = resolve_claude_settings_path()
         self._lock = asyncio.Lock()
 
     # Default settings values — merged on read, user can override

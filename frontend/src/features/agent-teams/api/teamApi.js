@@ -13,31 +13,3 @@ export function createTeamProject(name, dirPath, teamConfig) {
     team_config: teamConfig,
   })
 }
-
-export function getTeamTimeline(projectId, sessionId) {
-  return get(`/teams/${projectId}/timeline/${sessionId}`)
-}
-
-export function getLinkedSessions(projectId, sessionId) {
-  return get(`/teams/${projectId}/linked-sessions/${sessionId}`)
-}
-
-export function getTeamTaskDetail(projectId, taskId) {
-  return get(`/teams/${projectId}/tasks/${taskId}`)
-}
-
-export function getSessionArtifacts(sessionId) {
-  return get(`/sessions/${sessionId}/artifacts`)
-}
-
-export function getWorkerContext(sessionId) {
-  return get(`/teams/worker-context/${sessionId}`)
-}
-
-export function cancelTeamTask(projectId, taskId) {
-  return post(`/teams/${projectId}/tasks/${taskId}/cancel`)
-}
-
-export function retryTeamTask(projectId, taskId) {
-  return post(`/teams/${projectId}/tasks/${taskId}/retry`)
-}

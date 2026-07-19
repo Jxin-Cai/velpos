@@ -51,18 +51,30 @@ class ExecutionTraceAssembler:
             description=task.description,
             status=task.status,
             explicit=task.explicit,
-            loops=[ExecutionTraceAssembler._to_loop_dto(loop) for loop in task.loops],
+            loops=[
+                ExecutionTraceAssembler._to_loop_dto(loop, sequence)
+                for sequence, loop in enumerate(task.loops, start=1)
+            ],
+            thinking=list(task.thinking),
         )
 
     @staticmethod
-    def _to_loop_dto(loop: AgentLoop) -> LoopDto:
+    def _to_loop_dto(loop: AgentLoop, sequence: int) -> LoopDto:
         return LoopDto(
             id=loop.id,
             task_id=loop.task_id,
+            sequence=sequence,
             event_count=len(loop.events),
             model=loop.model,
             stop_reason=loop.stop_reason,
             usage=loop.usage,
+            subagent_count=loop.subagent_count,
+            subagent_tool_use_ids=list(loop.subagent_tool_use_ids),
+            tool_names=list(loop.tool_names),
+            subagents=list(loop.subagents),
+            started_time=loop.started_time,
+            ended_time=loop.ended_time,
+            duration_ms=loop.duration_ms,
         )
 
     @staticmethod
@@ -101,4 +113,5 @@ class ExecutionTraceAssembler:
             tool_name=event.tool_name,
             is_error=event.is_error,
             metadata=event.metadata,
+            timestamp=event.timestamp,
         )

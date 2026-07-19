@@ -27,6 +27,20 @@ watch(currentTheme, (theme) => {
   } catch {}
 })
 
+// A page restored from the back-forward cache can bring back an older DOM
+// attribute without re-evaluating this module. Re-apply the reactive source of
+// truth whenever the document becomes active again.
+window.addEventListener('pageshow', () => {
+  applyTheme(currentTheme.value)
+})
+
+// Keep open tabs consistent when another tab changes the saved preference.
+window.addEventListener('storage', (event) => {
+  if (event.key === THEME_KEY && event.newValue && THEMES.includes(event.newValue)) {
+    currentTheme.value = event.newValue
+  }
+})
+
 export function useTheme() {
   function setTheme(theme) {
     if (THEMES.includes(theme)) {

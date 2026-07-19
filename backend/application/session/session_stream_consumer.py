@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -16,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 class SessionStreamConsumer:
-
-    _STREAM_MSG_TIMEOUT = 300  # 5 minutes
 
     def __init__(
         self,
@@ -36,6 +35,14 @@ class SessionStreamConsumer:
         self._accept_or_reject_sdk_session_id = accept_sdk_session_id_fn
         self._cancelled_sessions = cancelled_sessions
         self._trace_collector = trace_collector
+        self._stream_msg_timeout = max(
+            1.0,
+            float(os.getenv("CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS", "60")),
+        )
+        self._max_silent_timeouts = max(
+            0,
+            int(os.getenv("CLAUDE_STREAM_MAX_SILENT_TIMEOUTS", "10")),
+        )
 
     @staticmethod
     def _tool_uses_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
@@ -182,6 +189,7 @@ class SessionStreamConsumer:
         message_count = 0
         tool_count = 0
         waiting_count = 0
+        consecutive_silent_timeouts = 0
         aiter = msg_stream.__aiter__()
         next_msg_task: asyncio.Task | None = None
         try:
@@ -190,9 +198,10 @@ class SessionStreamConsumer:
                     next_msg_task = asyncio.create_task(aiter.__anext__())
                 try:
                     msg_dict = await asyncio.wait_for(
-                        asyncio.shield(next_msg_task), timeout=self._STREAM_MSG_TIMEOUT,
+                        asyncio.shield(next_msg_task), timeout=self._stream_msg_timeout,
                     )
                     next_msg_task = None
+                    consecutive_silent_timeouts = 0
                 except StopAsyncIteration:
                     next_msg_task = None
                     break
@@ -209,6 +218,7 @@ class SessionStreamConsumer:
                         session.session_id,
                     )
                     waiting_count += 1
+                    consecutive_silent_timeouts += 1
                     await self._recorder.record_audit_event(
                         session.session_id,
                         "stream_waiting",
@@ -225,6 +235,19 @@ class SessionStreamConsumer:
                         session.session_id,
                         {"event": "stream_waiting", "status": "waiting_output", "waiting_count": waiting_count},
                     )
+                    if (
+                        self._max_silent_timeouts > 0
+                        and consecutive_silent_timeouts >= self._max_silent_timeouts
+                        and not self._claude_agent_gateway.is_waiting_for_user_input(session.session_id)
+                    ):
+                        next_msg_task.cancel()
+                        await asyncio.gather(next_msg_task, return_exceptions=True)
+                        next_msg_task = None
+                        await self._claude_agent_gateway.disconnect(session.session_id)
+                        raise TimeoutError(
+                            "Claude Agent produced no output for "
+                            f"{int(self._stream_msg_timeout * consecutive_silent_timeouts)} seconds"
+                        )
                     continue
                 msg_type_str = msg_dict["message_type"]
 

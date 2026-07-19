@@ -24,6 +24,17 @@ export function togglePinnedId(ids, id) {
   return next
 }
 
+function isUnloadedClaudeCodeSession(session) {
+  return session.source === 'claude-code'
+}
+
+function getSessionActivityTime(session) {
+  const timestamp = session.updated_time || session.created_at || session.created_time || session.last_modified
+  if (!timestamp) return 0
+  const time = new Date(timestamp).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
 export function compareSessions(a, b, pinnedSessionIds = new Set()) {
   const aPinned = pinnedSessionIds.has(a.session_id) ? 1 : 0
   const bPinned = pinnedSessionIds.has(b.session_id) ? 1 : 0
@@ -33,8 +44,12 @@ export function compareSessions(a, b, pinnedSessionIds = new Set()) {
   const bRunning = b.status === 'running' ? 1 : 0
   if (aRunning !== bRunning) return bRunning - aRunning
 
-  const timeA = a.updated_time ? new Date(a.updated_time).getTime() : 0
-  const timeB = b.updated_time ? new Date(b.updated_time).getTime() : 0
+  const aUnloadedClaudeCode = isUnloadedClaudeCodeSession(a) ? 1 : 0
+  const bUnloadedClaudeCode = isUnloadedClaudeCodeSession(b) ? 1 : 0
+  if (aUnloadedClaudeCode !== bUnloadedClaudeCode) return aUnloadedClaudeCode - bUnloadedClaudeCode
+
+  const timeA = getSessionActivityTime(a)
+  const timeB = getSessionActivityTime(b)
   return timeB - timeA
 }
 

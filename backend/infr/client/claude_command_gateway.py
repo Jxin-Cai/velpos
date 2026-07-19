@@ -7,6 +7,7 @@ from typing import Any
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
 from domain.session.acl.command_gateway import CommandGateway as CommandGatewayPort
+from infr.client.claude_settings_env import load_claude_settings_env
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class ClaudeCommandGateway(CommandGatewayPort):
             cli_path=self._cli_path,
             setting_sources=["user", "project"],
             cwd=cwd if cwd else None,
+            env=load_claude_settings_env(),
         )
 
         commands: list[dict[str, Any]] = []

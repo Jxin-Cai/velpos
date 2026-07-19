@@ -43,11 +43,11 @@ class ExecutionTraceQueryService:
         agent_span_id: str | None = None,
     ) -> ExecutionAgent:
         """Project the full execution tree for a run (or a subagent span)."""
-        session = self._session_repository.find_by_id(session_id)
+        session = await self._session_repository.find_by_id(session_id)
         if session is None:
             raise BusinessException("session not found")
 
-        project = self._project_repository.find_by_id(session.project_id)
+        project = await self._project_repository.find_by_id(session.project_id)
         if project is None:
             raise BusinessException("project not found")
 
