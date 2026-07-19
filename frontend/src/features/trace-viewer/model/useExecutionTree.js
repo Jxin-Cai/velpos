@@ -52,7 +52,7 @@ export function useExecutionTree() {
           for (const loop of task.loops || []) {
             // Surface agent calls immediately in the task chain so the
             // internal-process control is discoverable without extra clicks.
-            if (loop.subagents?.length) expandedLoops.add(loop.id)
+            if (loop.subagents?.length || loop.subagent_tool_use_ids?.length) expandedLoops.add(loop.id)
           }
         }
       }

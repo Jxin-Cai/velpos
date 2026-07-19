@@ -17,7 +17,7 @@ const emit = defineEmits(['toggle', 'select-loop'])
 const canExpand = computed(() => {
   if (props.nodeType === 'task') return Boolean(props.node.loops?.length)
   if (props.nodeType === 'loop') return true
-  if (props.nodeType === 'subagent') return props.node.is_expandable !== false
+  if (props.nodeType === 'subagent') return Boolean(props.node.span_id) || props.node.is_expandable !== false
   return false
 })
 

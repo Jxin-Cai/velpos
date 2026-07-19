@@ -53,6 +53,13 @@ function formatThinking(content) {
   }
 }
 
+function subagentsForLoop(loop) {
+  if (loop?.subagents?.length) return loop.subagents
+  const toolUseIds = new Set(loop?.subagent_tool_use_ids || [])
+  if (!toolUseIds.size) return []
+  return (tree.value?.subagents || []).filter(subagent => toolUseIds.has(subagent.tool_use_id))
+}
+
 watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
   if (runId && sessionId) {
     loadTree(sessionId, runId)
@@ -123,7 +130,7 @@ watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
               @toggle="toggleLoop"
             >
               <ExecutionTreeRow
-                v-for="subagent in loop.subagents"
+                v-for="subagent in subagentsForLoop(loop)"
                 :key="subagent.tool_use_id"
                 :node="subagent"
                 node-type="subagent"

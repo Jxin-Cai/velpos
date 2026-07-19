@@ -52,6 +52,48 @@ def test_projects_thinking_block_as_planning_event_before_explicit_tasks() -> No
     assert planning[0].metadata["phase"] == "planning"
 
 
+def test_attaches_pre_execution_planning_to_first_explicit_task() -> None:
+    # Arrange
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "assistant-plan",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Inspect first, then implement."},
+                    {
+                        "type": "tool_use",
+                        "id": "create-1",
+                        "name": "TaskCreate",
+                        "input": {"taskId": "task-1", "subject": "Implement trace"},
+                    },
+                ],
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-work",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "update-1",
+                    "name": "TaskUpdate",
+                    "input": {"taskId": "task-1", "status": "in_progress"},
+                }],
+            },
+        },
+    ]
+
+    # Act
+    task = ExecutionTraceProjector().project(records).tasks[0]
+
+    # Assert
+    assert task.id == "task-1"
+    assert task.thinking[0]["content"] == "Inspect first, then implement."
+
+
 def test_pairs_parallel_tool_results_by_id_when_results_are_reordered() -> None:
     # Arrange
     records = [
