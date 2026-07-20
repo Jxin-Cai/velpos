@@ -41,7 +41,7 @@ class SessionStreamConsumer:
         )
         self._max_silent_timeouts = max(
             0,
-            int(os.getenv("CLAUDE_STREAM_MAX_SILENT_TIMEOUTS", "10")),
+            int(os.getenv("CLAUDE_STREAM_MAX_SILENT_TIMEOUTS", "0")),
         )
 
     @staticmethod

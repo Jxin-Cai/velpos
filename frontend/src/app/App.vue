@@ -316,7 +316,6 @@ function setupUnifiedHandler(connection, sessionId) {
         }
         addMessageTo(sessionId, data.data)
         if (data.data && data.data.type === 'result') {
-          markDone(sessionId)
           if (data.data.content?.is_error) {
             addNotification({
               sessionId,
@@ -326,7 +325,6 @@ function setupUnifiedHandler(connection, sessionId) {
               message: data.data.content?.text || '',
             })
           }
-          maybeCloseIdle(sessionId)
         }
         break
 
@@ -594,6 +592,15 @@ function setupUnifiedHandler(connection, sessionId) {
         setStatusFor(sessionId, data.session.status || 'idle')
         syncRecoveryState(sessionId, data.session)
         updateSessionInList(sessionId, data.session)
+        if (data.session.status === 'running') {
+          markWorking(sessionId, {
+            sessionName: sess?.name || data.session.name || '',
+            projectName: proj?.name || '',
+          })
+        } else {
+          markDone(sessionId)
+          maybeCloseIdle(sessionId)
+        }
         break
       }
     }

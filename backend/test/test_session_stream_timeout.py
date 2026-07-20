@@ -45,3 +45,21 @@ async def test_releases_stalled_stream_when_silence_limit_is_reached(monkeypatch
         await consumer.consume(session, silent_stream(), "run-1")
 
     gateway.disconnect.assert_awaited_once_with("session-1")
+
+
+def test_disables_silence_limit_when_not_configured(monkeypatch):
+    # Arrange
+    monkeypatch.delenv("CLAUDE_STREAM_MAX_SILENT_TIMEOUTS", raising=False)
+
+    # Act
+    consumer = SessionStreamConsumer(
+        recorder=Mock(),
+        claude_agent_gateway=Mock(),
+        connection_manager=Mock(),
+        save_session_fn=AsyncMock(),
+        accept_sdk_session_id_fn=AsyncMock(),
+        cancelled_sessions=set(),
+    )
+
+    # Assert
+    assert consumer._max_silent_timeouts == 0
