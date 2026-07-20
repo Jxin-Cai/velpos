@@ -53,10 +53,9 @@ class ExecutionTraceAssembler:
             status=task.status,
             explicit=task.explicit,
             loops=[
-                ExecutionTraceAssembler._to_loop_dto(loop, sequence)
+                ExecutionTraceAssembler._to_loop_dto(loop, loop.sequence or sequence)
                 for sequence, loop in enumerate(task.loops, start=1)
             ],
-            thinking=list(task.thinking),
         )
 
     @staticmethod
@@ -76,6 +75,7 @@ class ExecutionTraceAssembler:
             started_time=loop.started_time,
             ended_time=loop.ended_time,
             duration_ms=loop.duration_ms,
+            error_message=loop.error_message,
         )
 
     @staticmethod
@@ -113,6 +113,7 @@ class ExecutionTraceAssembler:
             tool_use_id=event.tool_use_id,
             tool_name=event.tool_name,
             is_error=event.is_error,
+            error_message=event.error_message,
             metadata=event.metadata,
             timestamp=event.timestamp,
         )

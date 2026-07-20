@@ -41,6 +41,7 @@ uv.lock
 .pids/
 .logs/
 .log/
+dogfood-output/
 
 # Lark credentials
 .lark_credentials.json

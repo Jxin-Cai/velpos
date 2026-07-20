@@ -117,6 +117,56 @@ async def test_reconstructs_subagent_from_owned_spans_when_transcript_path_is_mi
     assert result.tasks[0].loops[0].tool_names == ("Read",)
 
 
+@pytest.mark.asyncio
+async def test_resolves_tool_span_to_child_subagent_when_loading_execution_tree() -> None:
+    # Arrange
+    session = SimpleNamespace(project_id="project-1")
+    project = SimpleNamespace(dir_path="/workspace")
+    tool = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_TOOL_CALL,
+        name="Agent",
+        tool_use_id="agent-tool",
+    )
+    subagent = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_SUBAGENT,
+        name="researcher",
+        parent_span_id=tool.id,
+        agent_id="agent-1",
+        input_preview="Inspect the repository",
+    )
+    turn = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_LLM_TURN,
+        name="subagent assistant",
+        parent_span_id=subagent.id,
+        agent_id="agent-1",
+        output_preview="Inspection complete",
+    )
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(find_by_id=AsyncMock(return_value=session)),
+        project_repository=Mock(find_by_id=AsyncMock(return_value=project)),
+        trace_span_repository=Mock(
+            find_by_id=AsyncMock(return_value=tool),
+            find_by_run=AsyncMock(return_value=[tool, subagent, turn]),
+        ),
+        transcript_reader=Mock(),
+    )
+
+    # Act
+    result = await service.get_execution_tree("session-1", "run-1", tool.id)
+
+    # Assert
+    assert result.id == "agent-1"
+    assert result.tasks[0].loops[0].assistant_content == (
+        {"type": "text", "text": "Inspection complete"},
+    )
+
+
 def test_returns_exact_source_message_when_run_has_message_id() -> None:
     # Arrange
     run = TraceSpan.create(

@@ -16,7 +16,7 @@ function handleClick(notification) {
 <template>
   <div class="notification-panel">
     <div class="panel-header">
-      <span class="panel-title">Notifications</span>
+      <span class="panel-title">Alerts</span>
       <button
         v-if="unreadCount > 0"
         class="mark-all-btn"
@@ -30,7 +30,7 @@ function handleClick(notification) {
         v-if="notifications.length === 0"
         class="empty-state"
       >
-        No notifications
+        No alerts
       </div>
       <div
         v-for="n in notifications"
@@ -42,8 +42,9 @@ function handleClick(notification) {
         <div class="notification-dot" :class="n.type" v-if="!n.read"></div>
         <div class="notification-content">
           <div class="notification-title" :class="n.type">
-            {{ n.type === 'auth_required' ? 'Waiting for authorization' : 'Query completed' }}
+            {{ n.type === 'auth_required' ? 'Waiting for authorization' : 'Execution failed' }}
           </div>
+          <div v-if="n.message" class="notification-message">{{ n.message }}</div>
           <div class="notification-meta">
             <span class="session-id">{{ (n.sessionId || '').slice(0, 8) }}</span>
             <span class="session-name">{{ n.sessionName }}</span>
@@ -153,6 +154,10 @@ function handleClick(notification) {
   background: var(--orange, #f59e0b);
 }
 
+.notification-dot.error {
+  background: var(--red, #ef4444);
+}
+
 .notification-content {
   flex: 1;
   min-width: 0;
@@ -167,6 +172,20 @@ function handleClick(notification) {
 
 .notification-title.auth_required {
   color: var(--orange, #f59e0b);
+}
+
+.notification-title.error {
+  color: var(--red, #ef4444);
+}
+
+.notification-message {
+  margin-bottom: 4px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-id {

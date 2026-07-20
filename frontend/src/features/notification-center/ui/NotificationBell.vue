@@ -31,8 +31,8 @@ useClickOutside(wrapperRef, () => { showPanel.value = false }, { event: 'click' 
     <button
       class="glass-btn glass-btn--icon notification-bell"
       @click="togglePanel"
-      aria-label="Notifications"
-      title="Notifications"
+      aria-label="Alerts"
+      title="Alerts"
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>

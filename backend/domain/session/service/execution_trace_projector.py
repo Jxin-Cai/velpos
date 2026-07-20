@@ -42,25 +42,22 @@ class ExecutionTraceProjector:
         spans: Iterable[TraceSpan] = (),
         agent_id: str = "main",
     ) -> ExecutionAgent:
-        span_by_tool: dict[str, TraceSpan] = {}
-        for span in spans:
-            if not span.tool_use_id:
-                continue
-            current = span_by_tool.get(span.tool_use_id)
-            if current is None or span.span_type == TraceSpan.SPAN_TYPE_SUBAGENT:
-                span_by_tool[span.tool_use_id] = span
+        normalized_records = self._coalesce_assistant_turns(records)
+        projection_spans = list(spans)
+        span_by_tool = self._subagent_spans_by_tool(projection_spans)
         tasks = {self.IMPLICIT_TASK_ID: _TaskState(self.IMPLICIT_TASK_ID, "Direct execution", False, status="in_progress")}
         dependencies: list[TaskDependency] = []
         subagents: list[SubagentPlaceholder] = []
         loops: list[AgentLoop] = []
         pending: dict[str, int] = {}
         pending_task_creates: dict[str, str] = {}
-        history: list[dict[str, Any]] = []
+        records_by_uuid: dict[str, dict[str, Any]] = {}
+        latest_user_input: dict[str, Any] | None = None
         warnings: list[str] = []
         previous_timestamp: datetime | None = None
         request: Any = None
 
-        for record in records:
+        for record in normalized_records:
             message = record.get("message")
             if not isinstance(message, Mapping):
                 continue
@@ -69,14 +66,17 @@ class ExecutionTraceProjector:
             source_uuid = self._text(record.get("uuid"))
             record_timestamp = self._timestamp(record.get("timestamp"), warnings)
             if role == "assistant":
+                turn_input = self._turn_input(record, records_by_uuid, latest_user_input)
+                input_content = (turn_input,) if turn_input else ()
+                input_timestamp = turn_input.get("timestamp") if turn_input else None
                 task_id = self._task_for_blocks(blocks, tasks, warnings)
                 has_explicit_tasks = any(task.explicit for task in tasks.values())
                 events = [
                     ExecutionEvent(
                         ExecutionEventType.MODEL_INPUT,
                         source_uuid,
-                        tuple(history),
-                        timestamp=previous_timestamp,
+                        input_content,
+                        timestamp=input_timestamp or previous_timestamp,
                     ),
                     ExecutionEvent(
                         ExecutionEventType.MODEL_OUTPUT,
@@ -150,19 +150,27 @@ class ExecutionTraceProjector:
                 if thinking_events:
                     non_thinking_events = [event for event in events if event.type != ExecutionEventType.THINKING]
                     events = [non_thinking_events[0], *thinking_events, *non_thinking_events[1:]]
-                started_time = previous_timestamp or record_timestamp
+                started_time = input_timestamp or previous_timestamp or record_timestamp
                 loop = AgentLoop(
                     id=f"loop-{source_uuid or loop_index}", task_id=task_id,
-                    model_input=tuple(history), assistant_content=tuple(blocks), events=tuple(events),
+                    model_input=input_content, assistant_content=tuple(blocks), events=tuple(events),
                     model=self._text(message.get("model")), stop_reason=self._text(message.get("stop_reason")),
                     usage=dict(message.get("usage") or {}), provenance=self._provenance(warnings),
                     started_time=started_time,
                     ended_time=record_timestamp,
                     duration_ms=self._duration_ms(started_time, record_timestamp),
+                    sequence=loop_index + 1,
                 )
                 loops.append(loop)
                 tasks[task_id].loops.append(loop)
             elif role == "user":
+                latest_user_input = {
+                    "role": role,
+                    "content": blocks,
+                    "uuid": source_uuid,
+                    "parent_uuid": record.get("parentUuid") or record.get("parent_uuid"),
+                    "timestamp": record_timestamp,
+                }
                 if request is None and any(
                     not isinstance(block, Mapping) or block.get("type") != "tool_result"
                     for block in blocks
@@ -182,6 +190,7 @@ class ExecutionTraceProjector:
                         block.get("content"),
                         tool_id,
                         is_error=bool(block.get("is_error")),
+                        error_message=self._error_message(block.get("content")) if block.get("is_error") else None,
                         timestamp=record_timestamp,
                     )
                     ended_time = record_timestamp or loops[index].ended_time
@@ -191,6 +200,7 @@ class ExecutionTraceProjector:
                         provenance=self._provenance(warnings),
                         ended_time=ended_time,
                         duration_ms=self._duration_ms(loops[index].started_time, ended_time),
+                        error_message=loops[index].error_message or result.error_message,
                     )
                     self._replace_task_loop(tasks[loops[index].task_id], loops[index])
                     provisional_task_id = pending_task_creates.pop(tool_id, None)
@@ -200,25 +210,25 @@ class ExecutionTraceProjector:
                             self._resolve_task_id(tasks, dependencies, provisional_task_id, created_task_id)
                         else:
                             warnings.append(f"task_create_result_missing_id:{tool_id}")
-            history.append({"role": role, "content": blocks, "uuid": source_uuid, "parent_uuid": record.get("parentUuid")})
+            if source_uuid:
+                indexed_record = {
+                    "role": role,
+                    "content": blocks,
+                    "uuid": source_uuid,
+                    "parent_uuid": record.get("parentUuid") or record.get("parent_uuid"),
+                    "timestamp": record_timestamp,
+                }
+                for record_uuid in record.get("_source_uuids") or (source_uuid,):
+                    if isinstance(record_uuid, str) and record_uuid:
+                        records_by_uuid[record_uuid] = indexed_record
             previous_timestamp = record_timestamp or previous_timestamp
 
         warnings.extend(f"missing_tool_result:{tool_id}" for tool_id in pending)
         provenance = self._provenance(warnings)
         visible_tasks = [task for task in tasks.values() if task.explicit]
         implicit_task = tasks[self.IMPLICIT_TASK_ID]
-        planning_loops = [
-            loop for loop in implicit_task.loops
-            if any(event.type == ExecutionEventType.THINKING for event in loop.events)
-        ]
-        if visible_tasks and planning_loops:
-            first_task = visible_tasks[0]
-            existing_loop_ids = {loop.id for loop in first_task.loops}
-            first_task.loops[:0] = [
-                replace(loop, task_id=first_task.id)
-                for loop in planning_loops
-                if loop.id not in existing_loop_ids
-            ]
+        if visible_tasks and implicit_task.loops:
+            self._assign_unowned_loops(implicit_task.loops, visible_tasks, loops)
         if not visible_tasks:
             visible_tasks = [task for task in tasks.values() if task.loops]
         projected_tasks = tuple(
@@ -226,6 +236,126 @@ class ExecutionTraceProjector:
             for t in visible_tasks
         )
         return ExecutionAgent(agent_id, projected_tasks, tuple(dependencies), tuple(subagents), provenance, request)
+
+    @staticmethod
+    def _subagent_spans_by_tool(spans: list[TraceSpan]) -> dict[str, TraceSpan]:
+        """Index only real subagent spans by their invoking tool call ID."""
+        by_id = {span.id: span for span in spans}
+        result: dict[str, TraceSpan] = {}
+        for span in spans:
+            if span.span_type != TraceSpan.SPAN_TYPE_SUBAGENT:
+                continue
+            if span.tool_use_id:
+                result[span.tool_use_id] = span
+            parent = by_id.get(span.parent_span_id or "")
+            if parent and parent.span_type == TraceSpan.SPAN_TYPE_TOOL_CALL and parent.tool_use_id:
+                result[parent.tool_use_id] = span
+        return result
+
+    @classmethod
+    def _coalesce_assistant_turns(
+        cls,
+        records: Iterable[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Merge transcript fragments that belong to one assistant turn.
+
+        Claude JSONL commonly persists thinking, text, and tool-use blocks as
+        separate assistant records.  Their parent UUIDs form one uninterrupted
+        chain.  Treating each fragment as a model call duplicates the input and
+        loses the actual agent-loop boundary.
+        """
+        normalized: list[dict[str, Any]] = []
+        for source in records:
+            record = dict(source)
+            message = record.get("message")
+            role = message.get("role") if isinstance(message, Mapping) else record.get("type")
+            previous = normalized[-1] if normalized else None
+            previous_message = previous.get("message") if previous else None
+            previous_role = (
+                previous_message.get("role")
+                if isinstance(previous_message, Mapping)
+                else (previous.get("type") if previous else None)
+            )
+            parent_uuid = record.get("parentUuid") or record.get("parent_uuid")
+            previous_tail_uuid = previous.get("_tail_uuid") if previous else None
+            if (
+                role == "assistant"
+                and previous_role == "assistant"
+                and isinstance(parent_uuid, str)
+                and parent_uuid == previous_tail_uuid
+                and isinstance(message, Mapping)
+                and isinstance(previous_message, Mapping)
+            ):
+                merged_message = dict(previous_message)
+                merged_message["content"] = [
+                    *cls._raw_content_blocks(previous_message.get("content")),
+                    *cls._raw_content_blocks(message.get("content")),
+                ]
+                for key in ("model", "stop_reason", "usage"):
+                    if message.get(key) is not None:
+                        merged_message[key] = message.get(key)
+                previous["message"] = merged_message
+                previous["timestamp"] = record.get("timestamp") or previous.get("timestamp")
+                previous["_tail_uuid"] = record.get("uuid") or previous_tail_uuid
+                previous.setdefault("_source_uuids", []).append(record.get("uuid"))
+                continue
+            record["_tail_uuid"] = record.get("uuid")
+            record["_source_uuids"] = [record.get("uuid")]
+            normalized.append(record)
+        return normalized
+
+    @staticmethod
+    def _raw_content_blocks(content: Any) -> list[Any]:
+        if isinstance(content, list):
+            return list(content)
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        return []
+
+    @staticmethod
+    def _turn_input(
+        record: Mapping[str, Any],
+        records_by_uuid: Mapping[str, dict[str, Any]],
+        latest_user_input: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Resolve the input delta for one model turn, not its cumulative history."""
+        parent_uuid = record.get("parentUuid") or record.get("parent_uuid")
+        parent = records_by_uuid.get(parent_uuid) if isinstance(parent_uuid, str) else None
+        if parent and parent.get("role") == "user":
+            return parent
+        return latest_user_input
+
+    @staticmethod
+    def _assign_unowned_loops(
+        unowned_loops: list[AgentLoop],
+        explicit_tasks: list[_TaskState],
+        all_loops: list[AgentLoop],
+    ) -> None:
+        """Keep coordination and final-response turns in the visible call chain.
+
+        Task tools do not identify an owner for planning turns or for the final
+        answer after every task has completed.  Attach those turns to the
+        nearest explicit task instead of silently dropping them.
+        """
+        order = {loop.id: index for index, loop in enumerate(all_loops)}
+        owned = [
+            (order.get(loop.id, 0), task)
+            for task in explicit_tasks
+            for loop in task.loops
+        ]
+        for loop in unowned_loops:
+            loop_index = order.get(loop.id, 0)
+            if owned:
+                _, target = min(
+                    owned,
+                    key=lambda item: (abs(item[0] - loop_index), item[0] > loop_index),
+                )
+            else:
+                target = explicit_tasks[0]
+            if loop.id not in {item.id for item in target.loops}:
+                target.loops.append(replace(loop, task_id=target.id))
+        for task in explicit_tasks:
+            task.loops.sort(key=lambda loop: order.get(loop.id, 0))
 
     @staticmethod
     def _content_blocks(content: Any, warnings: list[str]) -> list[Any]:
@@ -397,6 +527,31 @@ class ExecutionTraceProjector:
     @staticmethod
     def _text(value: Any) -> str | None:
         return value if isinstance(value, str) and value else None
+
+    @classmethod
+    def _error_message(cls, value: Any) -> str | None:
+        if isinstance(value, str):
+            return cls._truncate_error_message(value)
+        if isinstance(value, Mapping):
+            for key in ("error", "error_message", "message", "stderr", "text", "detail"):
+                message = cls._error_message(value.get(key))
+                if message:
+                    return message
+            return None
+        if isinstance(value, list):
+            for item in value:
+                message = cls._error_message(item)
+                if message:
+                    return message
+        return None
+
+    @staticmethod
+    def _truncate_error_message(message: str) -> str | None:
+        normalized = message.strip()
+        if not normalized:
+            return None
+        max_length = 2_000
+        return normalized if len(normalized) <= max_length else f"{normalized[:max_length - 3]}..."
 
     @staticmethod
     def _timestamp(value: Any, warnings: list[str]) -> datetime | None:

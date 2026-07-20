@@ -61,6 +61,10 @@ const modelOutputByInputIndex = computed(() => {
   return pairs
 })
 const pairedModelOutputIndices = computed(() => new Set(modelOutputByInputIndex.value.values()))
+const failureMessage = computed(() => {
+  if (props.loop?.error_message) return props.loop.error_message
+  return events.value.find(event => event.is_error && event.error_message)?.error_message || null
+})
 
 const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) => {
   if (event.type === 'tool_result' && pairedResultIds.value.has(event.tool_use_id)) return []
@@ -72,6 +76,7 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
     sourceUuid: event.source_uuid,
     timestamp: event.timestamp,
     isError: Boolean(event.is_error),
+    errorMessage: event.error_message || null,
   }
 
   if (event.type === 'tool_use') {
@@ -210,6 +215,10 @@ function itemDuration(item) {
         </dl>
       </section>
 
+      <div v-if="failureMessage" class="execution-error" role="alert">
+        {{ failureMessage }}
+      </div>
+
       <div v-if="isReconstructed" class="detail-provenance">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <circle cx="8" cy="8" r="6.25"/><path d="M8 5v3.5M8 11h.01"/>
@@ -223,7 +232,7 @@ function itemDuration(item) {
       <div class="timeline-heading">
         <div>
           <h4>Event timeline</h4>
-          <p>Inputs and outputs are paired by tool call ID.</p>
+          <p>Each model turn is paired with its direct input; tool results are paired by call ID.</p>
         </div>
         <span v-if="hasMore" class="more-badge">More available</span>
       </div>
@@ -315,6 +324,7 @@ function itemDuration(item) {
 .step-stats dt { color: var(--text-tertiary); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
 .step-stats dd { margin: 3px 0 0; color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
 .detail-provenance { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 35%, var(--border-subtle)); border-radius: 8px; background: color-mix(in srgb, var(--color-warning, #f59e0b) 6%, var(--bg-secondary)); color: var(--text-secondary); font-size: 11px; }
+.execution-error { padding: 9px 12px; border-left: 2px solid var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error, #ef4444) 8%, var(--bg-secondary)); color: var(--color-error, #ef4444); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .provenance-tag, .more-badge { padding: 2px 6px; border-radius: 4px; background: var(--bg-tertiary); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
 .timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2px; }
 .timeline-heading h4 { margin: 0; color: var(--text-primary); font-size: 13px; font-weight: 600; }

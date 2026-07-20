@@ -31,3 +31,20 @@ def test_numbers_steps_in_task_order_when_assembling_tree() -> None:
 
     # Assert
     assert [loop.sequence for loop in response.tasks[0].loops] == [1, 2, 3]
+
+
+def test_maps_loop_error_message_when_assembling_tree() -> None:
+    # Arrange
+    loop = AgentLoop(
+        id="loop-1", task_id="task-1", model_input=(), assistant_content=(), events=(),
+        model=None, stop_reason=None, usage={}, provenance=ProjectionProvenance(),
+        error_message="Permission denied",
+    )
+    task = ExecutionTask("task-1", "Implement", None, "failed", True, (loop,))
+    agent = ExecutionAgent("main", (task,), (), (), ProjectionProvenance())
+
+    # Act
+    response = ExecutionTraceAssembler.to_tree_response(agent)
+
+    # Assert
+    assert response.tasks[0].loops[0].error_message == "Permission denied"

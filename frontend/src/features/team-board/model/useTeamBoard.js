@@ -162,18 +162,14 @@ export function useTeamBoard() {
     }
   }
 
-  function handleBoardEvent(event) {
-    if (!event || !event.card) return
-    const incoming = {
-      ...event.card,
-      status: String(event.card.status || '').toLowerCase(),
-    }
-    const idx = cards.value.findIndex(c => c.id === incoming.id)
-    if (idx >= 0) {
-      cards.value = cards.value.map((c, i) => i === idx ? { ...c, ...incoming } : c)
-    } else {
-      cards.value = [...cards.value, incoming]
-    }
+  async function handleBoardEvent(event) {
+    if (!event?.team_id || event.team_id !== team.value?.id) return
+    await loadBoard(event.team_id, { silent: true })
+  }
+
+  async function refreshBoardAfterReconnect() {
+    if (!team.value?.id) return
+    await loadBoard(team.value.id, { silent: true })
   }
 
   return {
@@ -194,5 +190,6 @@ export function useTeamBoard() {
     deleteArchivedCard,
     retryCard,
     handleBoardEvent,
+    refreshBoardAfterReconnect,
   }
 }

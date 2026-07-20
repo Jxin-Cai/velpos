@@ -8,7 +8,7 @@ import { listSchedules } from '@features/scheduler/api/schedulerApi'
 import { TeamBoardPage, useTeamBoard } from '@features/team-board'
 import { ChatPanelPage } from '@pages/chat-panel'
 import { SessionSidebar, useSessionList } from '@features/session-list'
-import { NotificationBell, useNotifications } from '@features/notification-center'
+import { NOTIFICATION_TYPE, NotificationBell, useNotifications } from '@features/notification-center'
 import { WorkingSessionsButton, useWorkingSessions } from '@features/working-sessions'
 import { fetchSessionRunSteps } from '@features/task-progress'
 import { fetchTraceRuns } from '@features/trace-viewer'
@@ -90,7 +90,7 @@ const schedulerProjectId = ref('')
 const scheduleCounts = ref({})
 let globalEventConnection = null
 const sidebarRef = ref(null)
-const { handleBoardEvent } = useTeamBoard()
+const { handleBoardEvent, refreshBoardAfterReconnect } = useTeamBoard()
 const vbRunning = ref(false)
 const vbMessage = ref('')
 let vbRefresh = null
@@ -216,11 +216,6 @@ async function handleGlobalEvent(data) {
     await loadSessions()
     if (data.session_id) {
       ensureConnection(data.session_id)
-      addNotification({
-        sessionId: data.session_id,
-        sessionName: 'Scheduled task',
-        type: 'info',
-      })
     }
   }
   // Forward board card events to the team board composable
@@ -236,7 +231,7 @@ async function handleGlobalEvent(data) {
       sessionId: data.session_id,
       sessionName: sess?.name || data.session_id,
       projectName: proj?.name || '',
-      type: 'auth_required',
+      type: NOTIFICATION_TYPE.AUTH_REQUIRED,
     })
   }
 }
@@ -322,11 +317,15 @@ function setupUnifiedHandler(connection, sessionId) {
         addMessageTo(sessionId, data.data)
         if (data.data && data.data.type === 'result') {
           markDone(sessionId)
-          addNotification({
-            sessionId,
-            sessionName: sess?.name || '',
-            projectName: proj?.name || '',
-          })
+          if (data.data.content?.is_error) {
+            addNotification({
+              sessionId,
+              sessionName: sess?.name || '',
+              projectName: proj?.name || '',
+              type: NOTIFICATION_TYPE.ERROR,
+              message: data.data.content?.text || '',
+            })
+          }
           maybeCloseIdle(sessionId)
         }
         break
@@ -367,6 +366,13 @@ function setupUnifiedHandler(connection, sessionId) {
       case 'error':
         if (!getCancelingFor(sessionId)) {
           setErrorFor(sessionId, data.message)
+          addNotification({
+            sessionId,
+            sessionName: sess?.name || '',
+            projectName: proj?.name || '',
+            type: NOTIFICATION_TYPE.ERROR,
+            message: data.message || '',
+          })
         }
         break
 
@@ -503,7 +509,7 @@ function setupUnifiedHandler(connection, sessionId) {
           sessionId,
           sessionName: sess?.name || '',
           projectName: proj?.name || '',
-          type: 'auth_required',
+          type: NOTIFICATION_TYPE.AUTH_REQUIRED,
         })
         break
 
@@ -520,7 +526,7 @@ function setupUnifiedHandler(connection, sessionId) {
           sessionId,
           sessionName: sess?.name || '',
           projectName: proj?.name || '',
-          type: 'auth_required',
+          type: NOTIFICATION_TYPE.AUTH_REQUIRED,
         })
         break
 
@@ -660,7 +666,7 @@ onMounted(async () => {
     globalEventConnection = createGlobalEventConnection()
     globalEventConnection.onEvent(handleGlobalEvent)
     globalEventConnection.onReconnect(() => {
-      // Board state is auto-refreshed via WebSocket events
+      refreshBoardAfterReconnect()
     })
     window.addEventListener('vp-schedules-changed', loadScheduleCounts)
     if (sidebarMode.value === 'teams') {

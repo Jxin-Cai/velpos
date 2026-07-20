@@ -56,19 +56,21 @@ class ExecutionTraceQueryService:
 
         transcript_path: str | None = None
         agent_id = "main"
+        spans = await self._trace_span_repository.find_by_run(session_id, run_id)
 
         agent_span = None
         if agent_span_id:
             span = await self._trace_span_repository.find_by_id(agent_span_id)
-            if span is None or span.session_id != session_id:
+            if span is None or span.session_id != session_id or span.run_id != run_id:
                 raise BusinessException("agent span not found")
             if span.span_type != span.SPAN_TYPE_SUBAGENT:
-                raise BusinessException("agent span is not a subagent")
+                span = self._resolve_subagent_span(span, spans)
+                if span is None:
+                    raise BusinessException("agent span is not a subagent")
             agent_span = span
             transcript_path = span.metadata.get("transcript_path") or span.metadata.get("agent_transcript_path")
             agent_id = span.agent_id or agent_span_id
 
-        spans = await self._trace_span_repository.find_by_run(session_id, run_id)
         projection_spans = spans
         if agent_span is not None:
             projection_spans = self._spans_owned_by_agent(agent_span, spans)
@@ -91,6 +93,24 @@ class ExecutionTraceQueryService:
             if request is not None:
                 agent = replace(agent, request=request)
         return agent
+
+    @staticmethod
+    def _resolve_subagent_span(span: Any, spans: list[Any]) -> Any | None:
+        """Resolve a legacy tool-call ID to the subagent span it invoked."""
+        direct_child = next((
+            candidate for candidate in spans
+            if candidate.span_type == candidate.SPAN_TYPE_SUBAGENT
+            and candidate.parent_span_id == span.id
+        ), None)
+        if direct_child is not None:
+            return direct_child
+        if not span.tool_use_id:
+            return None
+        return next((
+            candidate for candidate in spans
+            if candidate.span_type == candidate.SPAN_TYPE_SUBAGENT
+            and candidate.tool_use_id == span.tool_use_id
+        ), None)
 
     async def get_loop_detail(
         self,

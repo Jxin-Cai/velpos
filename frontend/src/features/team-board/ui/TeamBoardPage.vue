@@ -30,7 +30,6 @@ const {
 
 const createDialogVisible = ref(false)
 const ariaAnnouncement = ref('')
-const refreshTimerRef = ref(null)
 
 // Drag state
 const dragState = ref(null)
@@ -161,10 +160,6 @@ function isDropTarget(slotId) {
 onMounted(() => {
   loadBoard(props.teamId)
   document.addEventListener('keydown', handleBoardKeyDown)
-  refreshTimerRef.value = window.setInterval(
-    () => loadBoard(props.teamId, { silent: true }),
-    2500,
-  )
 })
 
 watch(() => props.teamId, (teamId, previousTeamId) => {
@@ -172,7 +167,6 @@ watch(() => props.teamId, (teamId, previousTeamId) => {
 })
 
 onBeforeUnmount(() => {
-  if (refreshTimerRef.value) window.clearInterval(refreshTimerRef.value)
   document.removeEventListener('keydown', handleBoardKeyDown)
 })
 </script>

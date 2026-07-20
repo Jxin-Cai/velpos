@@ -13,6 +13,7 @@ class ExecutionEventDto(BaseModel):
     tool_use_id: str | None = None
     tool_name: str | None = None
     is_error: bool = False
+    error_message: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime | None = None
 
@@ -41,6 +42,7 @@ class LoopDto(BaseModel):
     started_time: datetime | None = None
     ended_time: datetime | None = None
     duration_ms: int = 0
+    error_message: str | None = None
 
 
 class TaskDependencyDto(BaseModel):
@@ -55,7 +57,6 @@ class ExecutionTaskDto(BaseModel):
     status: str
     explicit: bool
     loops: list[LoopDto] = Field(default_factory=list)
-    thinking: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ProvenanceDto(BaseModel):

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from domain.team.repository.team_repository import TeamRepository
     from domain.team.repository.wish_card_repository import WishCardRepository
     from domain.project.acl.plugin_manager import PluginManager
+    from domain.session.acl.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class TeamBoardApplicationService:
         context_collector: SessionContextCollector,
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         plugin_manager: PluginManager | None = None,
+        connection_manager: ConnectionManager | None = None,
     ) -> None:
         self._team_repo = team_repo
         self._card_repo = card_repo
@@ -77,6 +79,7 @@ class TeamBoardApplicationService:
         self._context_collector = context_collector
         self._session_service_factory = session_service_factory
         self._plugin_manager = plugin_manager
+        self._connection_manager = connection_manager
 
     async def create_team(self, cmd: CreateTeamCommand) -> Team:
         from domain.team.model.team import Team
@@ -237,6 +240,17 @@ class TeamBoardApplicationService:
         cards = await self._card_repo.find_by_team_id(team_id)
         return team, cards
 
+    async def _broadcast_board_event(self, event: str, team_id: str, card_id: str | None = None) -> None:
+        if self._connection_manager is None:
+            return
+        payload: dict[str, object] = {
+            "event": event,
+            "team_id": team_id,
+        }
+        if card_id is not None:
+            payload["card_id"] = card_id
+        await self._connection_manager.broadcast_global(payload)
+
     async def create_card(self, cmd: CreateWishCardCommand) -> WishCard:
         from domain.team.model.wish_card import WishCard
 
@@ -249,6 +263,7 @@ class TeamBoardApplicationService:
             description=cmd.description,
         )
         await self._card_repo.save(card)
+        await self._broadcast_board_event("board_card_updated", card.team_id, card.id)
         return card
 
     async def archive_card(self, cmd: ArchiveWishCardCommand) -> WishCard:
@@ -259,6 +274,7 @@ class TeamBoardApplicationService:
             )
         card.archive()
         await self._card_repo.save(card)
+        await self._broadcast_board_event("board_card_updated", card.team_id, card.id)
         return card
 
     async def delete_archived_card(self, cmd: DeleteWishCardCommand) -> None:
@@ -268,6 +284,7 @@ class TeamBoardApplicationService:
         if card.status is not WishCardStatus.ARCHIVED:
             raise TeamDomainError("only archived wish cards can be deleted")
         await self._card_repo.remove(card)
+        await self._broadcast_board_event("board_card_deleted", cmd.team_id, card.id)
 
     async def _require_team_card(self, team_id: str, card_id: str) -> WishCard:
         card = await self._card_repo.find_by_id(card_id)
@@ -358,6 +375,7 @@ class TeamBoardApplicationService:
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
         safe_create_task(self._dispatch_execution_query(session.session_id, prompt))
+        await self._broadcast_board_event("board_card_updated", card.team_id, card.id)
         return execution
 
     async def retry_execution(self, cmd: RetryExecutionCommand) -> CardExecution:
@@ -399,6 +417,7 @@ class TeamBoardApplicationService:
         await self._card_repo.save(card)
         await self._execution_repo.save(new_execution)
         safe_create_task(self._dispatch_execution_query(session.session_id, prompt))
+        await self._broadcast_board_event("board_card_updated", card.team_id, card.id)
         return new_execution
 
     async def reconcile_non_terminal_executions(self) -> list[str]:

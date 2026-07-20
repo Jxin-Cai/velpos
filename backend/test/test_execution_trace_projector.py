@@ -32,6 +32,87 @@ def test_creates_implicit_task_and_loop_when_transcript_has_no_explicit_task() -
     assert projection.tasks[0].loops[0].provenance.reconstructed_from_transcript is True
 
 
+def test_uses_direct_parent_message_as_input_for_each_agent_loop() -> None:
+    # Arrange
+    records = [
+        {"type": "user", "uuid": "user-request", "message": {"role": "user", "content": "Inspect"}},
+        {"type": "assistant", "uuid": "assistant-read", "parentUuid": "user-request", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "read-1", "name": "Read", "input": {"file_path": "app.py"}},
+        ]}},
+        {"type": "user", "uuid": "user-result", "parentUuid": "assistant-read", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "read-1", "content": "file contents"},
+        ]}},
+        {"type": "assistant", "uuid": "assistant-final", "parentUuid": "user-result", "message": {"role": "assistant", "content": "Done"}},
+    ]
+
+    # Act
+    loops = ExecutionTraceProjector().project(records).tasks[0].loops
+
+    # Assert
+    assert loops[0].model_input[0]["uuid"] == "user-request"
+    assert loops[1].model_input[0]["uuid"] == "user-result"
+    assert len(loops[1].model_input) == 1
+
+
+def test_coalesces_parent_linked_assistant_fragments_into_complete_turn() -> None:
+    # Arrange
+    records = [
+        {"type": "user", "uuid": "user-1", "message": {"role": "user", "content": "Inspect"}},
+        {"type": "assistant", "uuid": "thinking-1", "parentUuid": "user-1", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "I should read the file."},
+        ]}},
+        {"type": "assistant", "uuid": "text-1", "parentUuid": "thinking-1", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "I will inspect it."},
+        ]}},
+        {"type": "assistant", "uuid": "tool-1-record", "parentUuid": "text-1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "read-1", "name": "Read", "input": {"file_path": "app.py"}},
+        ]}},
+        {"type": "user", "uuid": "result-1", "parentUuid": "tool-1-record", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "read-1", "content": "file contents"},
+        ]}},
+    ]
+
+    # Act
+    task = ExecutionTraceProjector().project(records).tasks[0]
+
+    # Assert
+    assert len(task.loops) == 1
+    assert [block["type"] for block in task.loops[0].assistant_content] == ["thinking", "text", "tool_use"]
+    assert [event.type for event in task.loops[0].events] == [
+        ExecutionEventType.MODEL_INPUT,
+        ExecutionEventType.THINKING,
+        ExecutionEventType.MODEL_OUTPUT,
+        ExecutionEventType.TOOL_USE,
+        ExecutionEventType.TOOL_RESULT,
+    ]
+
+
+def test_keeps_planning_and_final_response_loops_when_explicit_tasks_exist() -> None:
+    # Arrange
+    records = [
+        {"type": "assistant", "uuid": "plan", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "create-1", "name": "TaskCreate", "input": {"taskId": "1", "subject": "Inspect"}},
+        ]}},
+        {"type": "assistant", "uuid": "start", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "start-1", "name": "TaskUpdate", "input": {"taskId": "1", "status": "in_progress"}},
+        ]}},
+        {"type": "assistant", "uuid": "work", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "read-1", "name": "Read", "input": {"file_path": "app.py"}},
+        ]}},
+        {"type": "assistant", "uuid": "complete", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "complete-1", "name": "TaskUpdate", "input": {"taskId": "1", "status": "completed"}},
+        ]}},
+        {"type": "assistant", "uuid": "final", "message": {"role": "assistant", "content": "Implemented and verified."}},
+    ]
+
+    # Act
+    loops = ExecutionTraceProjector().project(records).tasks[0].loops
+
+    # Assert
+    assert [loop.id for loop in loops] == ["loop-plan", "loop-start", "loop-work", "loop-complete", "loop-final"]
+    assert [loop.sequence for loop in loops] == [1, 2, 3, 4, 5]
+
+
 def test_projects_thinking_block_as_planning_event_before_explicit_tasks() -> None:
     # Arrange
     records = [{
@@ -52,7 +133,7 @@ def test_projects_thinking_block_as_planning_event_before_explicit_tasks() -> No
     assert planning[0].metadata["phase"] == "planning"
 
 
-def test_attaches_pre_execution_planning_to_first_explicit_task() -> None:
+def test_attaches_planning_event_to_first_step_when_explicit_task_exists() -> None:
     # Arrange
     records = [
         {
@@ -91,7 +172,12 @@ def test_attaches_pre_execution_planning_to_first_explicit_task() -> None:
 
     # Assert
     assert task.id == "task-1"
-    assert task.thinking[0]["content"] == "Inspect first, then implement."
+    planning_events = [
+        event
+        for event in task.loops[0].events
+        if event.type == ExecutionEventType.THINKING
+    ]
+    assert planning_events[0].content == "Inspect first, then implement."
 
 
 def test_pairs_parallel_tool_results_by_id_when_results_are_reordered() -> None:
@@ -183,7 +269,11 @@ def test_projects_explicit_tasks_and_dependencies_when_task_tools_are_present() 
     explicit = next(task for task in projection.tasks if task.id == "task-2")
     assert explicit.subject == "Implement projector"
     assert explicit.status == "completed"
-    assert explicit.loops[0].id == "loop-assistant-2"
+    assert [loop.id for loop in explicit.loops] == [
+        "loop-assistant-1",
+        "loop-assistant-2",
+        "loop-assistant-3",
+    ]
     assert {(edge.task_id, edge.depends_on_task_id) for edge in projection.dependencies} == {
         ("task-2", "task-1"),
         ("task-2", "task-0"),
@@ -444,6 +534,42 @@ def test_returns_lazy_subagent_placeholder_when_agent_tool_has_trace_metadata() 
     assert placeholder.is_expandable is True
 
 
+def test_resolves_subagent_span_from_parent_tool_when_subagent_has_no_tool_use_id() -> None:
+    # Arrange
+    tool = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_TOOL_CALL,
+        name="Agent",
+        tool_use_id="agent-tool",
+    )
+    subagent = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_SUBAGENT,
+        name="researcher",
+        parent_span_id=tool.id,
+        agent_id="agent-1",
+    )
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "message": {"role": "assistant", "content": [{
+            "type": "tool_use",
+            "id": "agent-tool",
+            "name": "Agent",
+            "input": {"subagent_type": "researcher", "prompt": "Inspect"},
+        }]},
+    }]
+
+    # Act
+    placeholder = ExecutionTraceProjector().project(records, spans=[tool, subagent]).subagents[0]
+
+    # Assert
+    assert placeholder.span_id == subagent.id
+    assert placeholder.is_expandable is True
+
+
 def test_projects_task_tool_as_subagent_when_it_has_agent_input() -> None:
     records = [{
         "type": "assistant",
@@ -544,3 +670,41 @@ def test_marks_projection_partial_when_tool_result_is_missing() -> None:
     # Assert
     assert projection.provenance.completeness == ProjectionCompleteness.PARTIAL
     assert projection.provenance.warnings == ("missing_tool_result:tool-1",)
+
+
+def test_projects_first_error_message_to_loop_when_tool_result_fails() -> None:
+    # Arrange
+    records = [
+        {"type": "assistant", "uuid": "assistant-1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"file_path": "missing"}},
+        ]}},
+        {"type": "user", "uuid": "user-1", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tool-1", "is_error": True, "content": {"error": {"message": "File not found"}}},
+        ]}},
+    ]
+
+    # Act
+    loop = ExecutionTraceProjector().project(records).tasks[0].loops[0]
+
+    # Assert
+    assert loop.error_message == "File not found"
+    assert loop.events[-1].error_message == "File not found"
+
+
+def test_truncates_error_message_when_tool_result_error_is_too_long() -> None:
+    # Arrange
+    message = "x" * 2_100
+    records = [
+        {"type": "assistant", "uuid": "assistant-1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {}},
+        ]}},
+        {"type": "user", "uuid": "user-1", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tool-1", "is_error": True, "content": {"detail": message}},
+        ]}},
+    ]
+
+    # Act
+    error_message = ExecutionTraceProjector().project(records).tasks[0].loops[0].error_message
+
+    # Assert
+    assert error_message == f"{'x' * 1_997}..."

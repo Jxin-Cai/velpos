@@ -31,6 +31,12 @@ function truncate(text, max = 80) {
   return text.slice(0, max) + '...'
 }
 
+function failureReason(task) {
+  if (task.status !== 'failed' && task.status !== 'stopped') return null
+  const candidates = [task.error, task.error_message, task.metadata?.error, task.summary]
+  return candidates.find(value => typeof value === 'string' && value.trim())?.trim() || null
+}
+
 // Segmented progress: percentage for completed and in_progress
 const planProgressCompleted = computed(() => {
   const t = planTaskCounts.value.total
@@ -122,7 +128,10 @@ const planProgressActive = computed(() => {
             <span v-if="task.last_tool_name" class="task-tool">{{ task.last_tool_name }}</span>
             <span class="task-elapsed">{{ formatElapsed(task.startTime) }}</span>
           </div>
-          <div class="task-meta" v-else-if="task.summary">
+          <div v-else-if="failureReason(task)" class="task-meta task-failure" role="alert">
+            <span class="task-summary">{{ truncate(failureReason(task)) }}</span>
+          </div>
+          <div v-else-if="task.summary" class="task-meta">
             <span class="task-summary">{{ truncate(task.summary) }}</span>
           </div>
         </div>
@@ -490,5 +499,9 @@ const planProgressActive = computed(() => {
 .task-summary {
   color: var(--text-secondary);
   line-height: 1.3;
+}
+
+.task-failure .task-summary {
+  color: var(--color-error, #ef4444);
 }
 </style>

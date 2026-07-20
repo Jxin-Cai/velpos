@@ -35,6 +35,7 @@ class ExecutionEvent:
     tool_use_id: str | None = None
     tool_name: str | None = None
     is_error: bool = False
+    error_message: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime | None = None
 
@@ -49,7 +50,7 @@ class SubagentPlaceholder:
 
     @property
     def is_expandable(self) -> bool:
-        return self.transcript_path is not None
+        return self.span_id is not None
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,8 @@ class AgentLoop:
     started_time: datetime | None = None
     ended_time: datetime | None = None
     duration_ms: int = 0
+    error_message: str | None = None
+    sequence: int = 0
 
     @property
     def subagent_count(self) -> int:
@@ -137,20 +140,6 @@ class ExecutionTask:
     status: str
     explicit: bool
     loops: tuple[AgentLoop, ...]
-
-    @property
-    def thinking(self) -> tuple[dict[str, Any], ...]:
-        return tuple(
-            {
-                "content": event.content,
-                "phase": event.metadata.get("phase", "thinking"),
-                "timestamp": event.timestamp,
-                "loop_id": loop.id,
-            }
-            for loop in self.loops
-            for event in loop.events
-            if event.type == ExecutionEventType.THINKING
-        )
 
 
 @dataclass(frozen=True)
