@@ -132,6 +132,8 @@ class TraceSpanRepositoryImpl(TraceSpanRepository):
             ended_time=span.ended_time,
             duration_ms=span.duration_ms,
             created_time=span.created_time,
+            sequence=span.sequence,
+            revision=span.revision,
         )
 
     @staticmethod
@@ -153,4 +155,6 @@ class TraceSpanRepositoryImpl(TraceSpanRepository):
             ended_time=model.ended_time,
             duration_ms=model.duration_ms,
             created_time=model.created_time,
+            sequence=model.sequence,
+            revision=model.revision,
         )

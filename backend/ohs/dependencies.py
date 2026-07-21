@@ -593,4 +593,5 @@ async def get_team_board_service(
         session_service_factory=_create_session_service,
         plugin_manager=_claude_plugin_manager,
         connection_manager=_connection_manager,
+        session_repo=SessionRepositoryImpl(db_session),
     )

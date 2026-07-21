@@ -43,6 +43,8 @@ class LoopDto(BaseModel):
     ended_time: datetime | None = None
     duration_ms: int = 0
     error_message: str | None = None
+    error_count: int = 0
+    error_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskDependencyDto(BaseModel):
@@ -57,6 +59,7 @@ class ExecutionTaskDto(BaseModel):
     status: str
     explicit: bool
     loops: list[LoopDto] = Field(default_factory=list)
+    error_count: int = 0
 
 
 class ProvenanceDto(BaseModel):

@@ -281,6 +281,10 @@ class ExecutionTraceQueryService:
         run id. Trace span timestamps are the reliable boundary between user
         turns; records without timestamps are retained for backwards
         compatibility with older imported transcripts.
+
+        Records that belong to subagent conversations (identified by
+        parent_tool_use_id) are excluded so that the main agent projection
+        does not duplicate subagent activity as top-level loops.
         """
         timestamps = [
             span.started_time
@@ -300,6 +304,8 @@ class ExecutionTraceQueryService:
 
         filtered: list[dict[str, Any]] = []
         for record in records:
+            if record.get("parent_tool_use_id") or record.get("parentToolUseId"):
+                continue
             raw_timestamp = record.get("timestamp")
             if not isinstance(raw_timestamp, str) or not raw_timestamp:
                 filtered.append(record)

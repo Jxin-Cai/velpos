@@ -98,3 +98,77 @@ class TraceCollectorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TraceCollectorAbandonTest(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.collector = TraceCollector(repository=_RepositoryStub())  # type: ignore[arg-type]
+        self.session_id = "session1"
+        self.run_id = "run1"
+
+    def test_finish_run_marks_spans_abandoned_when_flag_set(self) -> None:
+        self.collector.ensure_run_span(self.session_id, self.run_id)
+        main = self.collector.find_main_agent_span(self.session_id, self.run_id)
+        turn_id = self.collector.create_span(
+            self.session_id, self.run_id,
+            TraceSpan.SPAN_TYPE_LLM_TURN, "assistant",
+            parent_span_id=main.id if main else None,
+        )
+
+        self.collector.finish_run(self.session_id, self.run_id, abandoned=True)
+
+        turn = self.collector.find_span_by_id(turn_id or "")
+        self.assertEqual(turn.status if turn else None, TraceSpan.STATUS_ABANDONED)
+        run_span = self.collector.find_run_span(self.session_id, self.run_id)
+        self.assertEqual(run_span.status if run_span else None, TraceSpan.STATUS_ABANDONED)
+
+    def test_abandon_all_running_closes_all_sessions_spans(self) -> None:
+        self.collector.ensure_run_span(self.session_id, self.run_id)
+        self.collector.create_span(
+            self.session_id, self.run_id,
+            TraceSpan.SPAN_TYPE_LLM_TURN, "turn1",
+        )
+        self.collector.ensure_run_span(self.session_id, "run2")
+
+        self.collector.abandon_all_running(self.session_id, reason="Process lost")
+
+        running = [
+            s for s in self.collector._buffer.values()
+            if s.session_id == self.session_id and s.status == TraceSpan.STATUS_RUNNING
+        ]
+        self.assertEqual(len(running), 0)
+
+    def test_find_subagent_by_tool_use_id_filters_by_run_id(self) -> None:
+        self.collector.create_span(
+            self.session_id, "run1",
+            TraceSpan.SPAN_TYPE_SUBAGENT, "sub1",
+            tool_use_id="tool-1",
+        )
+        self.collector.create_span(
+            self.session_id, "run2",
+            TraceSpan.SPAN_TYPE_SUBAGENT, "sub2",
+            tool_use_id="tool-1",
+        )
+
+        result = self.collector.find_subagent_by_tool_use_id(
+            self.session_id, "tool-1", run_id="run1"
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.name, "sub1")
+
+    def test_find_latest_llm_turn_returns_most_recent_regardless_of_status(self) -> None:
+        turn1_id = self.collector.create_span(
+            self.session_id, self.run_id,
+            TraceSpan.SPAN_TYPE_LLM_TURN, "turn1",
+        )
+        self.collector.complete_span(turn1_id or "")
+        turn2_id = self.collector.create_span(
+            self.session_id, self.run_id,
+            TraceSpan.SPAN_TYPE_LLM_TURN, "turn2",
+        )
+        self.collector.complete_span(turn2_id or "")
+
+        result = self.collector.find_latest_llm_turn(self.session_id, self.run_id)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.id, turn2_id)

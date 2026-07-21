@@ -95,6 +95,16 @@ const vbRunning = ref(false)
 const vbMessage = ref('')
 let vbRefresh = null
 const teamBoardVisible = ref(false)
+const focusCardId = ref(null)
+const focusRequestId = ref(0)
+
+function handleOpenWishCard({ teamId, cardId }) {
+  handleProjectSelect(
+    projects.value.find(p => p.team_config?.team_id === teamId)?.id || null
+  )
+  focusCardId.value = cardId
+  focusRequestId.value++
+}
 
 async function handleApplyVb(payload) {
   if (!currentSessionId.value || !currentProject.value || vbRunning.value) return
@@ -868,6 +878,7 @@ useGlobalHotkeys({
           @reorder-projects="handleReorderProjects"
           @select-project="handleProjectSelect"
           @mode-change="handleSidebarModeChange"
+          @open-wish-card="handleOpenWishCard"
         />
         <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }">
           <div class="sidebar-hover-zone"></div>
@@ -902,6 +913,8 @@ useGlobalHotkeys({
             :key="currentProject.team_config.team_id"
             :team-id="currentProject.team_config.team_id"
             :project-id="currentProject.id"
+            :focus-card-id="focusCardId"
+            :focus-request-id="focusRequestId"
             @navigate-session="handleTeamNavigate"
           />
           <div v-else-if="sidebarMode === 'teams'" class="empty-state">

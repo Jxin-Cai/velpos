@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.message import Message
@@ -99,6 +99,18 @@ class SessionRepositoryImpl(SessionRepository):
 
     async def remove(self, session_id: str) -> bool:
         return await remove_by_pk(self._session, SessionModel.session_id, session_id)
+
+    async def clear_card_execution_references(self, execution_ids: list[str]) -> int:
+        if not execution_ids:
+            return 0
+        stmt = (
+            update(SessionModel)
+            .where(SessionModel.card_execution_id.in_(execution_ids))
+            .values(card_execution_id=None)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return result.rowcount or 0
 
     async def find_by_sdk_session_id(self, sdk_session_id: str) -> Session | None:
         if not sdk_session_id:

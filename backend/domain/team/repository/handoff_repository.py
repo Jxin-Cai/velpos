@@ -19,3 +19,8 @@ class HandoffRepository(ABC):
     @abstractmethod
     def remove(self, handoff: Handoff) -> None:
         pass
+
+    @abstractmethod
+    def remove_by_card_id(self, card_id: str) -> None:
+        """Delete every handoff (and its artifacts) belonging to the card."""
+        pass

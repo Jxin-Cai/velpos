@@ -1,4 +1,4 @@
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { useSession } from '@entities/session'
 import { fetchExecutionTree, fetchLoopDetail } from '../api/traceApi'
 
@@ -9,12 +9,15 @@ const NodeStatus = Object.freeze({
   ERROR: 'error',
 })
 
+const REFRESH_DEBOUNCE_MS = 1500
+
 export function useExecutionTree() {
-  const { currentSessionId } = useSession()
+  const { currentSessionId, getTraceSpansFor } = useSession()
 
   const tree = ref(null)
   const loading = ref(false)
   const error = ref('')
+  let refreshTimer = null
 
   const expandedTasks = reactive(new Set())
   const expandedLoops = reactive(new Set())
@@ -211,6 +214,31 @@ export function useExecutionTree() {
     if (!sessionId || !runId) return
     loadTree(sessionId, runId)
   }
+
+  function debouncedRefresh() {
+    if (loading.value) return
+    if (!selectedRunId.value || !currentSessionId.value) return
+    clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(() => {
+      if (!loading.value && selectedRunId.value && currentSessionId.value) {
+        refreshSummary()
+      }
+    }, REFRESH_DEBOUNCE_MS)
+  }
+
+  const traceSpans = computed(() => {
+    const sid = currentSessionId.value
+    return sid ? getTraceSpansFor(sid) : []
+  })
+
+  watch(
+    () => traceSpans.value.length,
+    (newLen, oldLen) => {
+      if (oldLen != null && newLen !== oldLen && tree.value) {
+        debouncedRefresh()
+      }
+    },
+  )
 
   return {
     tree,

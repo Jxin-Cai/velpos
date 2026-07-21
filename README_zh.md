@@ -233,6 +233,9 @@ cp build/dev/.env.example build/dev/.env
 | `SESSION_MAX_CONCURRENT_QUERIES` | `8` | 全局并行 Agent 查询数（建议按 CPU/额度调整，最大 64） |
 | `CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS` | `60` | 无输出时的检测间隔 |
 | `CLAUDE_STREAM_MAX_SILENT_TIMEOUTS` | `10` | 连续无输出次数上限；达到后断开并释放执行 slot，等待用户输入时不触发 |
+| `CLAUDE_RESULT_SETTLE_SECONDS` | `0.1` | SDK Result 后等待紧随其后的后台任务事件的宽限时间 |
+| `CLAUDE_FINAL_RESULT_TIMEOUT_SECONDS` | `300` | 后台任务全部结束后等待最终 Result 的最大静默时间 |
+| `CLAUDE_BACKGROUND_TASK_TIMEOUT_SECONDS` | `3600` | 单轮后台任务允许的最长总运行时间 |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | **宿主机文件系统**上的项目根目录 |
 | `CORS_ALLOW_ORIGINS` | `*` | 允许的浏览器来源 |
 

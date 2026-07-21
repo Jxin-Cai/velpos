@@ -329,3 +329,84 @@ def test_session_associations_none_when_created_without_team_fields() -> None:
     # Assert
     assert session.card_execution_id is None
     assert session.agent_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_archived_card_deleted_when_has_execution_and_session(
+    db_session: AsyncSession,
+) -> None:
+    """Archived wish card with execution history and linked session deletes
+    successfully. The session is preserved with card_execution_id set to NULL."""
+    # Arrange
+    team = await _save_team(db_session)
+    card = _card(team)
+    execution = card.assign_to(team.agent_slots[0].id)
+    card.start_execution(execution.id)
+    card.complete_execution(execution.id)
+    card.archive()
+    card_repo = WishCardRepositoryImpl(db_session)
+    await card_repo.save(card)
+
+    # Link a session to the execution
+    session = Session.create(
+        card_execution_id=execution.id,
+        agent_slot_id=team.agent_slots[0].id,
+    )
+    session_repo = SessionRepositoryImpl(db_session)
+    await session_repo.save(session)
+
+    # Create a handoff with artifact
+    handoff = Handoff.create(
+        team.id, card.id, execution.id,
+        team.agent_slots[0].id, team.agent_slots[1].id,
+        "Handoff summary",
+    )
+    handoff.add_artifact("notes.md", "workspace/notes.md", "text/markdown")
+    handoff_repo = HandoffRepositoryImpl(db_session)
+    await handoff_repo.save(handoff)
+
+    execution_repo = CardExecutionRepositoryImpl(db_session)
+
+    # Act — simulate the application service's ordered cleanup
+    await session_repo.clear_card_execution_references([execution.id])
+    await handoff_repo.remove_by_card_id(card.id)
+    await execution_repo.remove_by_card_id(card.id)
+    await card_repo.remove(card)
+
+    # Assert — card and dependents gone; session preserved with null ref
+    assert await card_repo.find_by_id(card.id) is None
+    assert await execution_repo.find_by_card_id(card.id) == []
+    assert await handoff_repo.find_by_card_id(card.id) == []
+    reloaded_session = await session_repo.find_by_id(session.session_id)
+    assert reloaded_session is not None
+    assert reloaded_session.card_execution_id is None
+
+
+@pytest.mark.asyncio
+async def test_archived_card_deleted_when_no_execution_history(
+    db_session: AsyncSession,
+) -> None:
+    """Archived card with no executions deletes cleanly."""
+    # Arrange
+    team = await _save_team(db_session)
+    card = WishCard(
+        id="card-empty",
+        team_id=team.id,
+        title="Empty card",
+        description="",
+        status=WishCardStatus.ARCHIVED,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    card_repo = WishCardRepositoryImpl(db_session)
+    await card_repo.save(card)
+    execution_repo = CardExecutionRepositoryImpl(db_session)
+    handoff_repo = HandoffRepositoryImpl(db_session)
+
+    # Act
+    await handoff_repo.remove_by_card_id(card.id)
+    await execution_repo.remove_by_card_id(card.id)
+    await card_repo.remove(card)
+
+    # Assert
+    assert await card_repo.find_by_id(card.id) is None

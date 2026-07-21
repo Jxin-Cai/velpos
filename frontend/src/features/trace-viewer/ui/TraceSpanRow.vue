@@ -65,6 +65,7 @@ const statusLabel = computed(() => ({
   failed: 'Failed',
   denied: 'Denied',
   cancelled: 'Cancelled',
+  abandoned: 'Abandoned',
   running: 'Running',
 })[props.node.status] || props.node.status || 'Unknown')
 
@@ -124,6 +125,9 @@ function formatDuration(ms) {
       </span>
       <span v-if="node.tool_count && node.span_type !== 'tool_call'" class="span-count">
         {{ node.tool_count }} {{ node.tool_count === 1 ? 'tool' : 'tools' }}
+      </span>
+      <span v-if="node.metadata?.input_tokens" class="span-tokens" :title="`In: ${node.metadata.input_tokens} Out: ${node.metadata.output_tokens || 0}`">
+        {{ Math.round((node.metadata.input_tokens + (node.metadata.output_tokens || 0)) / 1000) }}k tok
       </span>
       <span v-if="node.agent_id && !['main', 'agent'].includes(node.agent_id)" class="span-agent">{{ node.agent_id.slice(0, 8) }}</span>
       <span v-if="node.duration_ms" class="span-duration">{{ formatDuration(node.duration_ms) }}</span>
@@ -205,6 +209,7 @@ function formatDuration(ms) {
 .span-row--tool_call .span-name { flex-shrink: 0; }
 .span-summary { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .span-count { flex-shrink: 0; padding: 2px 6px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-tertiary); font-size: 9px; }
+.span-tokens { flex-shrink: 0; padding: 2px 5px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; opacity: 0.8; }
 .span-duration, .span-agent { flex-shrink: 0; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
 .span-agent { max-width: 78px; overflow: hidden; padding: 2px 5px; border-radius: 4px; background: var(--bg-tertiary); text-overflow: ellipsis; }
 .span-status { min-width: 66px; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--text-tertiary); font-size: 10px; }

@@ -70,3 +70,48 @@ class SchedulerRunner:
                 raise
             if runs:
                 logger.info("scheduler triggered %d task(s)", len(runs))
+
+
+class ExecutionWatchdogRunner:
+
+    def __init__(self, interval_seconds: int = 60) -> None:
+        self._interval_seconds = interval_seconds
+        self._task: asyncio.Task | None = None
+        self._stopped = asyncio.Event()
+
+    def start(self) -> None:
+        if self._task is None or self._task.done():
+            self._stopped.clear()
+            self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        self._stopped.set()
+        if self._task is not None:
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+
+    async def _loop(self) -> None:
+        while not self._stopped.is_set():
+            try:
+                await self._run_once()
+            except Exception:
+                logger.warning("execution watchdog tick failed", exc_info=True)
+            try:
+                await asyncio.wait_for(self._stopped.wait(), timeout=self._interval_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _run_once(self) -> None:
+        from ohs.dependencies import get_team_board_service
+
+        async with async_session_factory() as db_session:
+            service = await get_team_board_service(db_session)
+            try:
+                reconciled = await service.reconcile_non_terminal_executions()
+                await db_session.commit()
+            except Exception:
+                await db_session.rollback()
+                raise
+            if reconciled:
+                logger.info("execution watchdog reconciled %d execution(s): %s", len(reconciled), reconciled)

@@ -82,6 +82,7 @@ function handleKeyDown(e) {
       'wish-card--failed': card.status === 'failed',
       'wish-card--needs-attention': card.needs_user_action,
     }"
+    :data-wish-card-id="card.id"
     :draggable="draggable"
     :tabindex="draggable ? 0 : -1"
     :aria-grabbed="keyboardDragging"

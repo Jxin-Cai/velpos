@@ -24,12 +24,32 @@ from domain.session.acl.claude_agent_gateway import (
     ClaudeAgentGateway as ClaudeAgentGatewayPort,
 )
 from domain.shared.async_utils import safe_create_task
+from infr.client.claude_event_pump import (
+    ClaudeConnectionEventPump,
+    ResponseTurn,
+    TurnPhase,
+)
 from infr.client.claude_settings_env import load_claude_settings_env
 
 logger = logging.getLogger(__name__)
 
 
 class ClaudeAgentGateway(ClaudeAgentGatewayPort):
+
+    _QUERY_ACTIVE_STATES = frozenset({
+        TurnPhase.STREAMING.value,
+        TurnPhase.SETTLING_RESULT.value,
+        TurnPhase.WAITING_BACKGROUND.value,
+        TurnPhase.AWAITING_FINAL_RESULT.value,
+        TurnPhase.INTERRUPTED.value,
+        "waiting_permission",
+    })
+
+    _STEERABLE_STATES = frozenset({
+        TurnPhase.STREAMING.value,
+        TurnPhase.WAITING_BACKGROUND.value,
+        TurnPhase.AWAITING_FINAL_RESULT.value,
+    })
 
     def __init__(
         self,
@@ -46,8 +66,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._max_buffer_size = max_buffer_size or int(os.getenv("CLAUDE_MAX_BUFFER_SIZE", str(10 * 1024 * 1024)))
         self._idle_timeout = float(os.getenv("CLAUDE_IDLE_TIMEOUT", "300"))
         self._user_response_timeout = float(os.getenv("CLAUDE_USER_RESPONSE_TIMEOUT", "3600"))
+        self._result_settle_seconds = float(os.getenv("CLAUDE_RESULT_SETTLE_SECONDS", "0.1"))
+        self._final_result_timeout = float(os.getenv("CLAUDE_FINAL_RESULT_TIMEOUT_SECONDS", "300"))
+        self._background_task_timeout = float(os.getenv("CLAUDE_BACKGROUND_TASK_TIMEOUT_SECONDS", "3600"))
         # session_id -> ClaudeSDKClient (long-lived connections)
         self._clients: dict[str, ClaudeSDKClient] = {}
+        # session_id -> the connection's sole long-lived SDK message reader
+        self._event_pumps: dict[str, ClaudeConnectionEventPump] = {}
         # session_id -> SDK session_id (UUID) for JSONL cleanup
         self._sdk_session_ids: dict[str, str] = {}
         # session_id -> project_dir (cwd) for JSONL cleanup
@@ -97,6 +122,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     def is_waiting_for_user_input(self, session_id: str) -> bool:
         fut = self._pending_user_responses.get(session_id)
         return self.get_state(session_id) == "waiting_permission" or bool(fut and not fut.done())
+
+    def is_waiting_for_background_tasks(self, session_id: str) -> bool:
+        return self.get_state(session_id) in {
+            TurnPhase.WAITING_BACKGROUND.value,
+            TurnPhase.AWAITING_FINAL_RESULT.value,
+        }
 
     def set_broadcast_fn(self, fn: Callable[[str, dict[str, Any]], Any]) -> None:
         """Set the broadcast function for pushing events to WebSocket clients."""
@@ -376,20 +407,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             enable_file_checkpointing=enable_file_checkpointing,
         )
 
-        # Send query and receive response until ResultMessage
-        self._set_state(session_id, "streaming")
-        await client.query(prompt=prompt)
-
         # Signal resume failure to caller so it can clear stale sdk_session_id
         if resume_failed:
             yield {"message_type": "_meta", "resume_failed": True}
 
-        try:
-            async for info in self._iter_response(session_id, client):
-                yield info
-        finally:
-            if self._clients.get(session_id) is client:
-                self._set_state(session_id, "connected")
+        async for info in self._execute_query(session_id, client, prompt):
+            yield info
 
     async def _run_query(
         self,
@@ -400,14 +423,32 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         if client is None:
             raise RuntimeError(f"No active connection for session {session_id}")
 
+        async for info in self._execute_query(session_id, client, prompt):
+            yield info
+
+    async def _execute_query(
+        self,
+        session_id: str,
+        client: ClaudeSDKClient,
+        prompt: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        pump = self._event_pumps.get(session_id)
+        if pump is None:
+            raise RuntimeError(f"No event pump for session {session_id}")
+
         self._touch(session_id)
-        self._set_state(session_id, "streaming")
-        await client.query(prompt=prompt)
+        turn = await pump.begin_turn()
+        try:
+            await client.query(prompt=prompt)
+        except Exception as exc:
+            await pump.fail_turn(turn, exc)
+            raise
 
         try:
-            async for info in self._iter_response(session_id, client):
+            async for info in self._iter_response(session_id, turn):
                 yield info
         finally:
+            await pump.abandon_turn(turn)
             if self._clients.get(session_id) is client:
                 self._set_state(session_id, "connected")
 
@@ -436,14 +477,19 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     async def _iter_response(
         self,
         session_id: str,
-        client: ClaudeSDKClient,
+        turn: ResponseTurn,
     ) -> AsyncIterator[dict[str, Any]]:
-        async for msg in client.receive_response():
-            sdk_sid = getattr(msg, "session_id", None)
+        async for msg in turn.messages():
+            sdk_sid = (
+                msg.get("session_id")
+                if isinstance(msg, dict)
+                else getattr(msg, "session_id", None)
+            )
             if sdk_sid:
                 old_sid = self._sdk_session_ids.get(session_id)
                 if old_sid != sdk_sid:
                     self._sdk_session_ids[session_id] = sdk_sid
+
             info = self._extract_message_info(msg)
             if info is not None:
                 if sdk_sid:
@@ -458,13 +504,16 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         if client is None:
             raise RuntimeError(f"No active connection for session {session_id}")
         self._set_state(session_id, "interrupted")
+        pump = self._event_pumps.get(session_id)
+        if pump is not None:
+            await pump.interrupt_turn()
         await client.interrupt()
 
     async def steer(self, session_id: str, prompt: str) -> None:
         client = self._clients.get(session_id)
         if client is None:
             raise RuntimeError(f"No active connection for session {session_id}")
-        if not self.is_active(session_id) or self.get_state(session_id) != "streaming":
+        if not self.is_active(session_id) or self.get_state(session_id) not in self._STEERABLE_STATES:
             raise RuntimeError(f"No streaming query for session {session_id}")
         self._touch(session_id)
         await client.query(prompt=prompt)
@@ -509,6 +558,16 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             self._clients[session_id] = client
             self._connected_models[session_id] = model
             self._set_state(session_id, "connected")
+            pump = ClaudeConnectionEventPump(
+                session_id,
+                client,
+                phase_changed=lambda phase, sid=session_id: self._on_turn_phase_changed(sid, phase),
+                result_settle_seconds=self._result_settle_seconds,
+                final_result_timeout_seconds=self._final_result_timeout,
+                background_task_timeout_seconds=self._background_task_timeout,
+            )
+            self._event_pumps[session_id] = pump
+            pump.start()
             self._touch(session_id)
             if cwd:
                 self._session_cwds[session_id] = cwd
@@ -520,6 +579,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             await self._disconnect_unlocked(session_id)
 
     async def _disconnect_unlocked(self, session_id: str) -> None:
+        pump = self._event_pumps.pop(session_id, None)
+        if pump is not None:
+            await pump.close()
         client = self._clients.pop(session_id, None)
         if client is not None:
             try:
@@ -537,6 +599,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._set_state(session_id, "idle")
         # Note: _sdk_session_ids, _session_cwds, _session_permission_modes persist
         # across reconnects to support resume and cleanup
+
+    def _on_turn_phase_changed(self, session_id: str, phase: TurnPhase) -> None:
+        if phase is not TurnPhase.TERMINAL:
+            self._set_state(session_id, phase.value)
 
     @staticmethod
     def _force_kill_client(client: ClaudeSDKClient) -> None:
@@ -556,6 +622,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
     async def cleanup_session(self, session_id: str) -> None:
         """Remove all tracked state for a session (call after full deletion)."""
+        pump = self._event_pumps.pop(session_id, None)
+        if pump is not None:
+            await pump.close()
         pending_permission = self._pending_permission_tasks.pop(session_id, None)
         if pending_permission is not None and not pending_permission.done():
             pending_permission.cancel()
@@ -723,7 +792,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         # control-request deadline and report a timeout.  Defer the request
         # until the query has finished; the selected mode is already persisted
         # and will also be used when reconnecting.
-        if self.get_state(session_id) in {"streaming", "waiting_permission"}:
+        if self.get_state(session_id) in self._QUERY_ACTIVE_STATES:
             previous = self._pending_permission_tasks.pop(session_id, None)
             if previous is not None and not previous.done():
                 previous.cancel()
@@ -761,10 +830,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     ) -> None:
         """Apply a mode after a concurrent SDK query has become idle."""
         try:
-            while self._clients.get(session_id) is client and self.get_state(session_id) in {
-                "streaming",
-                "waiting_permission",
-            }:
+            while (
+                self._clients.get(session_id) is client
+                and self.get_state(session_id) in self._QUERY_ACTIVE_STATES
+            ):
                 await asyncio.sleep(0.1)
             if self._clients.get(session_id) is not client:
                 return
@@ -1114,6 +1183,15 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     },
                     "input_tokens": usage.get("input_tokens", 0),
                     "output_tokens": usage.get("output_tokens", 0),
+                }
+            if message_type in {"system", "SystemMessage"}:
+                return {
+                    "message_type": "system",
+                    "content": {
+                        key: value
+                        for key, value in msg.items()
+                        if key not in {"message_type", "type", "session_id", "uuid"}
+                    },
                 }
             return None
 

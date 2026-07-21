@@ -267,15 +267,18 @@ async def _handle_set_permission_mode(ctx: _WsContext, data: dict) -> None:
     if mode:
         try:
             await ctx.service.set_permission_mode(ctx.session_id, mode)
-            await ctx.websocket.send_json({
-                "event": "info",
-                "message": f"Permission mode changed to {mode}",
-            })
+        except WebSocketDisconnect:
+            raise
         except Exception as e:
             await ctx.websocket.send_json({
                 "event": "error",
                 "message": str(e),
             })
+            return
+        await ctx.websocket.send_json({
+            "event": "info",
+            "message": f"Permission mode changed to {mode}",
+        })
 
 
 async def _handle_user_response(ctx: _WsContext, data: dict) -> None:

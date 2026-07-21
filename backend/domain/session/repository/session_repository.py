@@ -63,6 +63,18 @@ class SessionRepository(ABC):
         ...
 
     @abstractmethod
+    async def clear_card_execution_references(self, execution_ids: list[str]) -> int:
+        """Detach sessions from the given card executions by nulling their
+        ``card_execution_id``.
+
+        Used when a wish card is deleted: the card's executions are being
+        removed, but the sessions themselves are preserved for history. Returns
+        the number of session rows updated. A no-op (returns 0) for an empty
+        input list.
+        """
+        ...
+
+    @abstractmethod
     async def commit(self) -> None:
         """Commit the current unit of work."""
         ...

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.team.model.card_execution import CardExecution
@@ -42,6 +42,11 @@ class CardExecutionRepositoryImpl(CardExecutionRepository):
         )
         result = await self._session.execute(stmt)
         return [self._to_domain(model) for model in result.scalars().all()]
+
+    async def remove_by_card_id(self, card_id: str) -> None:
+        stmt = delete(CardExecutionModel).where(CardExecutionModel.card_id == card_id)
+        await self._session.execute(stmt)
+        await self._session.flush()
 
     @staticmethod
     def _to_model(execution: CardExecution) -> CardExecutionModel:

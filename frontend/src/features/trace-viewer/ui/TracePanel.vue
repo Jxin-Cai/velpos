@@ -1,5 +1,6 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import { useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTraceTree } from '../model/useTraceTree'
 import TraceSpanRow from './TraceSpanRow.vue'
 import ExecutionTreePanel from './ExecutionTreePanel.vue'
@@ -14,6 +15,9 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 const dialogEl = ref(null)
 const viewMode = ref(ViewMode.EXECUTION)
+const spanFilter = ref('all')
+
+useEscapeToClose(() => props.visible, () => emit('close'))
 
 const {
   currentSessionId,
@@ -46,10 +50,26 @@ const runPosition = computed(() => {
 const overallStatus = computed(() => {
   if (!stats.value.spanCount) return { label: 'No data', className: 'is-empty' }
   if (stats.value.runningCount) return { label: 'Running', className: 'is-running' }
+  if (stats.value.abandonedCount) return { label: 'Partial trace', className: 'is-abandoned' }
   if (stats.value.failedCount) return { label: 'Needs attention', className: 'is-failed' }
   if (stats.value.cancelledCount) return { label: 'Cancelled', className: 'is-cancelled' }
   return { label: 'Completed', className: 'is-completed' }
 })
+
+const SLOW_THRESHOLD_MS = 5000
+
+const filteredTree = computed(() => {
+  if (spanFilter.value === 'all') return traceTree.value
+  return traceTree.value.filter(node => matchesFilter(node, spanFilter.value))
+})
+
+function matchesFilter(node, filter) {
+  if (filter === 'errors') return node.status === 'failed' || node.status === 'denied' || node.status === 'abandoned' || node.children?.some(c => matchesFilter(c, filter))
+  if (filter === 'slow') return (node.duration_ms || 0) >= SLOW_THRESHOLD_MS || node.children?.some(c => matchesFilter(c, filter))
+  if (filter === 'tools') return node.span_type === 'tool_call' || node.children?.some(c => matchesFilter(c, filter))
+  if (filter === 'subagents') return node.span_type === 'subagent' || node.children?.some(c => matchesFilter(c, filter))
+  return true
+}
 
 function formatDuration(ms) {
   if (!ms || ms <= 0) return '0ms'
@@ -57,18 +77,29 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
-function handleWindowKeydown(event) {
-  if (props.visible && event.key === 'Escape') emit('close')
+function exportTrace() {
+  const data = {
+    session_id: currentSessionId.value,
+    run_id: selectedRunId.value,
+    exported_at: new Date().toISOString(),
+    stats: stats.value,
+    spans: traceTree.value,
+  }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `trace-${currentSessionId.value || 'unknown'}-${Date.now()}.json`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
-onMounted(() => window.addEventListener('keydown', handleWindowKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown))
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="trace-sheet">
-      <div v-if="visible" class="trace-overlay" @click.self="emit('close')" @keydown.esc="emit('close')">
+      <div v-if="visible" class="trace-overlay" @click.self="emit('close')">
         <section
           ref="dialogEl"
           class="trace-panel"
@@ -160,11 +191,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
                 <p class="trace-empty-hint">Trace activity appears here while the agent works.</p>
               </div>
               <div v-else class="trace-tree">
+                <nav class="span-filter-bar" aria-label="Span filter">
+                  <button v-for="f in ['all','errors','slow','tools','subagents']" :key="f" type="button" class="filter-chip" :class="{ active: spanFilter === f }" @click="spanFilter = f">{{ f === 'all' ? 'All' : f === 'errors' ? 'Errors' : f === 'slow' ? 'Slow' : f === 'tools' ? 'Tools' : 'Subagents' }}</button>
+                </nav>
                 <div class="tree-caption">
                   <span>Execution flow</span>
                   <span>{{ stats.turnCount }} turns · {{ stats.toolCallCount }} tools</span>
                 </div>
-                <TraceSpanRow v-for="node in traceTree" :key="node.id" :node="node" :depth="0" />
+                <TraceSpanRow v-for="node in filteredTree" :key="node.id" :node="node" :depth="0" />
               </div>
             </template>
           </main>
@@ -178,6 +212,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
             <div class="footer-spacer"></div>
             <div v-if="stats.failedCount" class="footer-alert stat-error">{{ stats.failedCount }} failed</div>
             <div v-if="stats.cancelledCount" class="footer-alert stat-cancelled">{{ stats.cancelledCount }} cancelled</div>
+            <div v-if="stats.abandonedCount" class="footer-alert stat-abandoned">{{ stats.abandonedCount }} abandoned</div>
+            <button type="button" class="footer-export-btn" title="Export trace as JSON" @click="exportTrace">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M3 10v3h10v-3M8 2v8M5 7l3 3 3-3"/>
+              </svg>
+            </button>
           </footer>
         </section>
       </div>
@@ -256,6 +296,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
 .trace-state.is-completed .state-dot { background: var(--color-success, #22c55e); }
 .trace-state.is-failed .state-dot { background: var(--color-error, #ef4444); }
 .trace-state.is-cancelled .state-dot { background: var(--color-warning, #f59e0b); }
+.trace-state.is-abandoned .state-dot { background: var(--color-warning, #f59e0b); }
 .trace-subtitle { margin: 7px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.5; }
 .close-btn {
   display: flex;
@@ -371,6 +412,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
   text-transform: uppercase;
 }
 .trace-tree { display: flex; flex-direction: column; gap: 1px; }
+.span-filter-bar { display: flex; gap: 4px; padding: 0 10px 10px; flex-wrap: wrap; }
+.filter-chip { padding: 4px 10px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--text-tertiary); font-size: 10px; font-weight: 500; cursor: pointer; transition: all 140ms ease; }
+.filter-chip:hover { color: var(--text-secondary); border-color: var(--border); }
+.filter-chip.active { color: var(--text-primary); background: var(--bg-secondary); border-color: var(--border); }
 .trace-footer {
   min-height: 50px;
   display: flex;
@@ -389,6 +434,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWindowKeydown)
 .footer-alert { font-size: 11px; white-space: nowrap; }
 .stat-error { color: var(--color-error, #ef4444); }
 .stat-cancelled { color: var(--color-warning, #f59e0b); }
+.stat-abandoned { color: var(--color-warning, #f59e0b); }
+.footer-export-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 6px; background: transparent; color: var(--text-tertiary); cursor: pointer; transition: color 140ms, background 140ms; }
+.footer-export-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .trace-sheet-enter-active, .trace-sheet-leave-active { transition: opacity 180ms ease; }
 .trace-sheet-enter-active .trace-panel, .trace-sheet-leave-active .trace-panel { transition: transform 220ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease; }
 .trace-sheet-enter-from, .trace-sheet-leave-to { opacity: 0; }

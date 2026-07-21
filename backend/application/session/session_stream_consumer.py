@@ -87,9 +87,10 @@ class SessionStreamConsumer:
         if previous:
             self._trace_collector.complete_span(previous.id)
         main_agent_span = self._trace_collector.find_main_agent_span(session_id, run_id)
-        subagent_span = self._trace_collector.find_running_subagent_by_tool_use_id(
+        subagent_span = self._trace_collector.find_subagent_by_tool_use_id(
             session_id,
             parent_tool_use_id,
+            run_id=run_id,
         )
 
         turn_span_id = self._trace_collector.create_span(
@@ -239,6 +240,7 @@ class SessionStreamConsumer:
                         self._max_silent_timeouts > 0
                         and consecutive_silent_timeouts >= self._max_silent_timeouts
                         and not self._claude_agent_gateway.is_waiting_for_user_input(session.session_id)
+                        and not self._claude_agent_gateway.is_waiting_for_background_tasks(session.session_id)
                     ):
                         next_msg_task.cancel()
                         await asyncio.gather(next_msg_task, return_exceptions=True)
@@ -370,6 +372,23 @@ class SessionStreamConsumer:
                             input_tokens=msg_dict["input_tokens"],
                             output_tokens=msg_dict["output_tokens"],
                         )
+
+                    if self._trace_collector and self._trace_collector.enabled:
+                        turn = self._trace_collector.find_latest_llm_turn(
+                            session.session_id, run_id
+                        )
+                        if turn:
+                            usage_meta = {
+                                "input_tokens": msg_dict["input_tokens"],
+                                "output_tokens": msg_dict["output_tokens"],
+                            }
+                            if msg_dict.get("model"):
+                                usage_meta["model"] = msg_dict["model"]
+                            if msg_dict.get("stop_reason"):
+                                usage_meta["stop_reason"] = msg_dict["stop_reason"]
+                            self._trace_collector.update_span_details(
+                                turn.id, metadata=usage_meta
+                            )
 
                 if "sdk_session_id" in msg_dict:
                     new_sid = msg_dict["sdk_session_id"]

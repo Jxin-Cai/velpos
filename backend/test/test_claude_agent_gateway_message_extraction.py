@@ -35,3 +35,29 @@ def test_extracts_mapping_result_message_as_terminal_result() -> None:
     assert extracted is not None
     assert extracted["message_type"] == "result"
     assert extracted["content"]["text"] == "Done"
+
+
+def test_extracts_synthetic_task_timeout_notification_as_system_message() -> None:
+    # Arrange
+    message = {
+        "type": "system",
+        "subtype": "task_notification",
+        "task_id": "task-1",
+        "status": "failed",
+        "summary": "Background task timed out before reporting completion.",
+        "session_id": "session-1",
+    }
+
+    # Act
+    extracted = ClaudeAgentGateway._extract_message_info(message)
+
+    # Assert
+    assert extracted == {
+        "message_type": "system",
+        "content": {
+            "subtype": "task_notification",
+            "task_id": "task-1",
+            "status": "failed",
+            "summary": "Background task timed out before reporting completion.",
+        },
+    }

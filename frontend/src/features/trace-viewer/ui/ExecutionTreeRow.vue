@@ -70,8 +70,24 @@ const statusClass = computed(() => {
   if (s === 'completed' || s === 'end_turn') return 'status-completed'
   if (s === 'in_progress' || s === 'running') return 'status-running'
   if (s === 'failed' || s === 'error') return 'status-failed'
+  if (s === 'abandoned') return 'status-abandoned'
   if (s === 'pending') return 'status-pending'
   return ''
+})
+
+const errorCount = computed(() => {
+  if (props.nodeType === 'task') return props.node.error_count || 0
+  if (props.nodeType === 'loop') return props.node.error_count || 0
+  return 0
+})
+
+const errorTooltip = computed(() => {
+  const summary = props.node.error_summary
+  if (!summary || !summary.total) return ''
+  const parts = [`${summary.total} error${summary.total > 1 ? 's' : ''}`]
+  if (summary.permission_errors) parts.push(`${summary.permission_errors} denied`)
+  if (summary.failed_tools?.length) parts.push(summary.failed_tools.join(', '))
+  return parts.join(' · ')
 })
 
 const meta = computed(() => {
@@ -178,6 +194,12 @@ function viewEvents() {
           <span v-if="supportingText" class="exec-support">{{ supportingText }}</span>
           <span v-if="meta" class="exec-meta">{{ meta }}</span>
         </span>
+      </span>
+      <span v-if="errorCount > 0" class="exec-error-badge" :title="errorTooltip || `${errorCount} error${errorCount > 1 ? 's' : ''}`">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.25"/><path d="M8 5v3.5M8 11h.01"/>
+        </svg>
+        {{ errorCount }}
       </span>
       <span v-if="loadState === 'loading'" class="exec-spinner" aria-hidden="true"></span>
       <span v-if="statusLabel" class="exec-status" :class="statusClass">{{ statusLabel }}</span>
@@ -289,11 +311,14 @@ function viewEvents() {
 .exec-name { flex: 1; min-width: 0; overflow: hidden; color: var(--text-primary); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .exec-support { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .exec-meta { margin-left: auto; flex-shrink: 0; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
+.exec-error-badge { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 2px 6px; border-radius: 5px; background: color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent); color: var(--color-error, #ef4444); font-family: var(--font-mono); font-size: 10px; font-weight: 600; }
+.exec-error-badge svg { flex-shrink: 0; }
 .exec-spinner { width: 12px; height: 12px; flex-shrink: 0; border: 1.5px solid var(--border); border-top-color: var(--text-secondary); border-radius: 50%; animation: exec-spin 700ms linear infinite; }
 .exec-status { flex-shrink: 0; padding: 2px 7px; border-radius: 5px; font-size: 11px; font-weight: 500; background: var(--bg-secondary); color: var(--text-tertiary); }
 .exec-status.status-completed { color: var(--color-success, #22c55e); }
 .exec-status.status-running { color: var(--text-accent); }
 .exec-status.status-failed { color: var(--color-error, #ef4444); }
+.exec-status.status-abandoned { color: var(--color-warning, #f59e0b); }
 .exec-status.status-pending { color: var(--text-tertiary); }
 .exec-inspect-btn {
   display: inline-flex;

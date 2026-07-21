@@ -233,6 +233,9 @@ All dev settings are in this single file. `CLAUDE_CLI_PATH` is **auto-detected**
 | `SESSION_MAX_CONCURRENT_QUERIES` | `8` | Maximum concurrent Agent queries across sessions (max 64) |
 | `CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS` | `60` | Silence detection interval |
 | `CLAUDE_STREAM_MAX_SILENT_TIMEOUTS` | `10` | Consecutive silent intervals before releasing a stuck execution slot |
+| `CLAUDE_RESULT_SETTLE_SECONDS` | `0.1` | Grace window for task events that arrive immediately after an SDK result |
+| `CLAUDE_FINAL_RESULT_TIMEOUT_SECONDS` | `300` | Maximum idle wait for a final result after all background tasks finish |
+| `CLAUDE_BACKGROUND_TASK_TIMEOUT_SECONDS` | `3600` | Maximum total runtime for background tasks in one turn |
 | `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project root on the **host filesystem** |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed browser origins |
 

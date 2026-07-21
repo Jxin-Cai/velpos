@@ -36,6 +36,7 @@ class ExecutionEvent:
     tool_name: str | None = None
     is_error: bool = False
     error_message: str | None = None
+    error_source: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime | None = None
 
@@ -98,6 +99,27 @@ class AgentLoop:
             for event in self.events
             if event.type == ExecutionEventType.SUBAGENT
         )
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for e in self.events if e.is_error)
+
+    @property
+    def error_summary(self) -> dict[str, Any]:
+        errors = [e for e in self.events if e.is_error]
+        if not errors:
+            return {"total": 0}
+        tool_errors = [e for e in errors if e.type == ExecutionEventType.TOOL_RESULT]
+        permission_errors = [e for e in errors if e.error_source == "permission"]
+        failed_tools = list(dict.fromkeys(
+            e.tool_name for e in errors if e.tool_name
+        ))
+        return {
+            "total": len(errors),
+            "tool_errors": len(tool_errors),
+            "permission_errors": len(permission_errors),
+            "failed_tools": failed_tools,
+        }
 
     @property
     def tool_names(self) -> tuple[str, ...]:

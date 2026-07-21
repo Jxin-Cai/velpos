@@ -7,6 +7,7 @@ import {
   moveCard as moveCardApi,
   retryExecution as retryExecutionApi,
 } from '../api/teamBoardApi'
+import { useWishCards } from '@entities/wish-card'
 
 const CARD_STATUS = Object.freeze({
   BACKLOG: 'backlog',
@@ -25,11 +26,36 @@ const DRAGGABLE_STATUSES = Object.freeze([
   CARD_STATUS.CANCELLED,
 ])
 
+const TERMINAL_STATUSES = new Set([
+  CARD_STATUS.COMPLETED,
+  CARD_STATUS.FAILED,
+  CARD_STATUS.CANCELLED,
+  CARD_STATUS.ARCHIVED,
+])
+const BOARD_RELOAD_DEBOUNCE_MS = 400
+const EVENT_CARD_FIELDS = Object.freeze([
+  'status',
+  'current_slot_id',
+  'version',
+  'updated_at',
+  'session_id',
+  'execution_id',
+  'failure_reason',
+])
+
 const team = ref(null)
 const slots = ref([])
 const cards = ref([])
 const loading = ref(false)
 const error = ref(null)
+
+let boardReloadTimer = null
+let activeTeamId = null
+let activeTeamGeneration = 0
+let activeTeamInitialized = false
+let requestSequence = 0
+let latestRequestId = 0
+let loadingRequestId = null
 
 const cardsBySlot = computed(() => {
   const map = new Map()
@@ -60,7 +86,53 @@ function updateCardLocally(cardId, patch) {
   }
 }
 
+function normalizeCard(card) {
+  return { ...card, status: String(card.status || '').toLowerCase() }
+}
+
+function isNewerOrEqual(incoming, existing) {
+  if (!existing) return true
+  const inVer = incoming.version ?? -1
+  const exVer = existing.version ?? -1
+  if (inVer !== exVer) return inVer > exVer
+  if (incoming.updated_at && existing.updated_at) {
+    return incoming.updated_at >= existing.updated_at
+  }
+  if (TERMINAL_STATUSES.has(incoming.status) && !TERMINAL_STATUSES.has(existing.status)) return true
+  if (!TERMINAL_STATUSES.has(incoming.status) && TERMINAL_STATUSES.has(existing.status)) return false
+  return true
+}
+
+function mergeCardLocally(cardData) {
+  const normalized = normalizeCard(cardData)
+  const idx = cards.value.findIndex(c => c.id === normalized.id)
+  if (idx >= 0) {
+    const existing = cards.value[idx]
+    if (isNewerOrEqual(normalized, existing)) {
+      const patch = {}
+      for (const f of EVENT_CARD_FIELDS) {
+        if (normalized[f] !== undefined) patch[f] = normalized[f]
+      }
+      cards.value = cards.value.map((c, i) => i === idx ? { ...c, ...patch } : c)
+    }
+  } else {
+    cards.value = [...cards.value, normalized]
+  }
+}
+
+function scheduleBoardReload(teamId, loadFn) {
+  if (boardReloadTimer !== null) clearTimeout(boardReloadTimer)
+  boardReloadTimer = setTimeout(async () => {
+    boardReloadTimer = null
+    if (team.value?.id === teamId) {
+      await loadFn(teamId, { silent: true })
+    }
+  }, BOARD_RELOAD_DEBOUNCE_MS)
+}
+
 export function useTeamBoard() {
+  const { setTeamCards, removeTeamCard, mergeTeamCard } = useWishCards()
+
   async function loadBoard(teamId, { silent = false } = {}) {
     if (!silent) loading.value = true
     error.value = null
@@ -72,6 +144,7 @@ export function useTeamBoard() {
         ...card,
         status: String(card.status || '').toLowerCase(),
       }))
+      setTeamCards(teamId, cards.value)
     } catch (e) {
       error.value = e.message || 'Failed to load board'
     } finally {
@@ -144,6 +217,7 @@ export function useTeamBoard() {
     try {
       await deleteCardApi(team.value.id, cardId)
       cards.value = cards.value.filter(card => card.id !== cardId)
+      removeTeamCard(team.value.id, cardId)
       return true
     } catch (e) {
       error.value = e.message || 'Delete failed'
@@ -163,8 +237,15 @@ export function useTeamBoard() {
   }
 
   async function handleBoardEvent(event) {
-    if (!event?.team_id || event.team_id !== team.value?.id) return
-    await loadBoard(event.team_id, { silent: true })
+    if (!event?.team_id) return
+    if (event.card) {
+      mergeTeamCard(event.team_id, event.card)
+    }
+    if (event.team_id !== team.value?.id) return
+    if (event.card) {
+      mergeCardLocally(event.card)
+    }
+    scheduleBoardReload(event.team_id, loadBoard)
   }
 
   async function refreshBoardAfterReconnect() {

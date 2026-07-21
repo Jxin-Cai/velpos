@@ -80,7 +80,7 @@ async def get_board(team_id: str, service: ServiceDep) -> ApiResponse[dict]:
         team, cards = await service.get_board(team_id)
     except TeamDomainError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    slots = [{"id": s.id, "display_name": s.name, "agent_profile_id": s.role}
+    slots = [{"id": s.id, "display_name": s.name, "agent_profile_id": s.role, "availability": s.availability.value}
              for s in team.agent_slots]
     card_list = []
     for card in cards:

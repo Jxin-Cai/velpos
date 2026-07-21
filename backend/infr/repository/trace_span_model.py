@@ -32,10 +32,13 @@ class TraceSpanModel(Base):
     ended_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     created_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
         Index("idx_trace_spans_session_run", "session_id", "run_id", "started_time"),
         Index("idx_trace_spans_tool_use", "session_id", "tool_use_id"),
+        Index("idx_trace_spans_run_tool", "session_id", "run_id", "tool_use_id"),
         Index("idx_trace_spans_agent", "session_id", "agent_id"),
         Index("idx_trace_spans_parent", "parent_span_id"),
     )

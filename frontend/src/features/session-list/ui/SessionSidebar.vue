@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, reactive, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useProject } from '@entities/project'
+import { useWishCards } from '@entities/wish-card'
 import { PINNED_PROJECTS_KEY, PINNED_SESSIONS_KEY, compareSessions, loadPinnedIds, savePinnedIds, splitPinnedProjects, togglePinnedId } from '@shared/lib/pinning'
 import { useTimeout } from '@shared/lib/useTimeout'
 import SessionListItem from './SessionListItem.vue'
@@ -40,12 +41,15 @@ const emit = defineEmits([
   'reorder-projects',
   'select-project',
   'mode-change',
+  'open-wish-card',
 ])
 
 const { projects, sidebarMode, setSidebarMode, addProject, setCurrentProjectId } = useProject()
+const { activeCardsForTeam, loadTeamCards, isTeamLoaded } = useWishCards()
 
 const showCreateDialog = ref(false)
 const showCreateTeamDialog = ref(false)
+const selectedWishCardId = ref(null)
 
 // Pinned management
 const pinnedProjectIds = ref(loadPinnedIds(PINNED_PROJECTS_KEY))
@@ -397,8 +401,22 @@ function handleModeChange(mode) {
 }
 
 function handleProjectHeaderClick(group) {
-  if (group.project_type === 'team') emit('select-project', group.id)
+  if (group.project_type === 'team') {
+    emit('select-project', group.id)
+    const teamId = group.team_config?.team_id
+    if (teamId && !isTeamLoaded(teamId)) {
+      loadTeamCards(teamId)
+    }
+  }
   toggleGroup(group.id)
+}
+
+function handleWishCardClick(group, cardId) {
+  const teamId = group.team_config?.team_id
+  if (!teamId) return
+  selectedWishCardId.value = cardId
+  emit('select-project', group.id)
+  emit('open-wish-card', { teamId, cardId })
 }
 
 function scrollToSession(sessionId) {
@@ -537,7 +555,7 @@ defineExpose({ scrollToSession })
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
               </svg>
               <span class="project-name">{{ group.displayName || group.name }}</span>
-              <span class="project-count">{{ group.sessions.length }}</span>
+              <span class="project-count">{{ group.project_type === 'team' ? activeCardsForTeam(group.team_config?.team_id).length : group.sessions.length }}</span>
               <Transition name="confirm-swap" mode="out-in">
               <span v-if="deletingProject === group.id" key="confirm" class="project-delete-confirm" @click.stop>
                 <button class="confirm-delete-all" @click.stop="confirmDeleteProject(group.id)" title="Delete project and all sessions">
@@ -628,22 +646,49 @@ defineExpose({ scrollToSession })
               :class="{ collapsed: isGroupCollapsed(group.id) }"
               :ref="el => { if (el) groupContentRefs[group.id] = el; else delete groupContentRefs[group.id] }"
             >
-            <SessionListItem
-              v-for="session in group.sessions"
-              :key="session.session_id"
-              :data-session-id="session.session_id"
-              :session="session"
-              :active="session.session_id === currentSessionId"
-              :selectable="selectionMode"
-              :selected="selectedIds.has(session.session_id)"
-              :pinned="isSessionPinned(session.session_id)"
-              class="indented-session"
-              @select="emit('select', $event)"
-              @delete="emit('delete', $event)"
-              @rename="emit('rename', $event)"
-              @toggle-select="toggleSelect"
-              @toggle-pin="toggleSessionPin"
-            />
+            <!-- Team projects: show WishCard buttons -->
+            <template v-if="group.project_type === 'team'">
+              <ul class="wish-card-list" role="list" :aria-label="group.name + ' cards'">
+                <li
+                  v-for="card in activeCardsForTeam(group.team_config?.team_id)"
+                  :key="card.id"
+                  class="wish-card-sidebar-item"
+                >
+                  <button
+                    class="wish-card-btn"
+                    :class="{ 'wish-card-btn--selected': selectedWishCardId === card.id }"
+                    :aria-current="selectedWishCardId === card.id ? 'true' : undefined"
+                    :data-wish-card-id="card.id"
+                    @click="handleWishCardClick(group, card.id)"
+                  >
+                    <span class="wish-card-btn__status" :class="'wish-card-btn__status--' + card.status"></span>
+                    <span class="wish-card-btn__title">{{ card.title }}</span>
+                  </button>
+                </li>
+                <li v-if="activeCardsForTeam(group.team_config?.team_id).length === 0" class="wish-card-empty">
+                  No active cards
+                </li>
+              </ul>
+            </template>
+            <!-- Non-team projects: show sessions -->
+            <template v-else>
+              <SessionListItem
+                v-for="session in group.sessions"
+                :key="session.session_id"
+                :data-session-id="session.session_id"
+                :session="session"
+                :active="session.session_id === currentSessionId"
+                :selectable="selectionMode"
+                :selected="selectedIds.has(session.session_id)"
+                :pinned="isSessionPinned(session.session_id)"
+                class="indented-session"
+                @select="emit('select', $event)"
+                @delete="emit('delete', $event)"
+                @rename="emit('rename', $event)"
+                @toggle-select="toggleSelect"
+                @toggle-pin="toggleSessionPin"
+              />
+            </template>
           </div>
           <!-- Separator after last pinned project (outside group-content so it stays visible when collapsed) -->
           <div v-if="group.isLastPinned" class="pinned-separator"></div>
@@ -1017,6 +1062,80 @@ defineExpose({ scrollToSession })
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   white-space: nowrap;
+}
+
+/* Wish card sidebar list */
+.wish-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 8px 4px 24px;
+}
+
+.wish-card-sidebar-item {
+  margin-bottom: 1px;
+}
+
+.wish-card-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  min-height: 34px;
+  transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.wish-card-btn:hover {
+  background: var(--layer-glass);
+  color: var(--text-primary);
+}
+
+.wish-card-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.wish-card-btn--selected {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.wish-card-btn__status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.wish-card-btn__status--backlog { background: var(--text-muted); }
+.wish-card-btn__status--preparing { background: var(--blue); }
+.wish-card-btn__status--running { background: var(--green); animation: pulse 1.5s ease-in-out infinite; }
+.wish-card-btn__status--completed { background: var(--green); }
+.wish-card-btn__status--failed { background: var(--red); }
+.wish-card-btn__status--cancelled { background: var(--text-muted); }
+
+.wish-card-btn__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wish-card-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 /* Project delete confirm */

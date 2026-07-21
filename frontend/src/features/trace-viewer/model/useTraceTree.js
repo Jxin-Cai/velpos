@@ -49,6 +49,7 @@ export function useTraceTree() {
     const failedCount = spans.filter(s => s.status === 'failed').length
     const cancelledCount = spans.filter(s => s.status === 'cancelled').length
     const runningCount = spans.filter(s => s.status === 'running').length
+    const abandonedCount = spans.filter(s => s.status === 'abandoned').length
     const subagentCount = spans.filter(s => s.span_type === 'subagent').length
     const turnCount = spans.filter(s => (
       s.span_type === 'llm_turn'
@@ -62,6 +63,7 @@ export function useTraceTree() {
       failedCount,
       cancelledCount,
       runningCount,
+      abandonedCount,
       subagentCount,
       turnCount,
     }

@@ -19,11 +19,11 @@ class ClaudeAgentGateway(ABC):
         max_turns: int | None = None,
         max_budget_usd: float | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Connect to Claude and send initial query, returning a persistent message stream.
+        """Connect to Claude and send an initial query, returning that turn's stream.
 
-        Creates a long-lived SDK client bound to the session. The returned
-        iterator yields messages via receive_messages() until the session
-        is disconnected.
+        Creates a long-lived SDK client bound to the session. A connection-level
+        event pump remains active between turns, while the returned iterator ends
+        only when this turn and all of its background tasks reach a terminal state.
 
         Args:
             session_id: Session identifier for client lifecycle management.
@@ -152,6 +152,10 @@ class ClaudeAgentGateway(ABC):
         return "idle"
 
     def is_waiting_for_user_input(self, session_id: str) -> bool:
+        return False
+
+    def is_waiting_for_background_tasks(self, session_id: str) -> bool:
+        """Return whether the active turn is waiting for background task completion."""
         return False
 
     def get_connected_model(self, session_id: str) -> str | None:

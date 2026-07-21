@@ -57,6 +57,7 @@ class TeamRepositoryImpl(TeamRepository):
                     name=slot.name,
                     role=slot.role,
                     workspace_ref=slot.workspace_ref,
+                    availability=slot.availability.value,
                     created_time=slot.created_at,
                 )
                 for slot in team.agent_slots
@@ -65,6 +66,8 @@ class TeamRepositoryImpl(TeamRepository):
 
     @staticmethod
     def _to_domain(model: TeamModel) -> Team:
+        from domain.team.model.status import SlotAvailability
+
         return Team(
             id=model.id,
             project_id=model.project_id,
@@ -79,6 +82,7 @@ class TeamRepositoryImpl(TeamRepository):
                     role=slot.role,
                     workspace_ref=slot.workspace_ref,
                     created_at=slot.created_time,
+                    availability=SlotAvailability(slot.availability) if slot.availability else SlotAvailability.AVAILABLE,
                 )
                 for slot in model.agent_slots
             ],

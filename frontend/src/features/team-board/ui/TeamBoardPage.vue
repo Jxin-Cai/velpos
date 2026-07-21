@@ -7,6 +7,8 @@ import CreateCardDialog from './CreateCardDialog.vue'
 const props = defineProps({
   teamId: { type: String, required: true },
   projectId: { type: String, required: true },
+  focusCardId: { type: String, default: null },
+  focusRequestId: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['navigate-session'])
@@ -157,6 +159,22 @@ function isDropTarget(slotId) {
   return dropTargetSlotId.value === slotId
 }
 
+function scrollToCard(cardId) {
+  if (!cardId) return
+  nextTick(() => {
+    const el = document.querySelector(`[data-wish-card-id="${cardId}"]`)
+    if (el) {
+      const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: prefersReduced ? 'instant' : 'smooth' })
+      el.focus({ preventScroll: true })
+    }
+  })
+}
+
+watch(() => props.focusRequestId, () => {
+  if (props.focusCardId) scrollToCard(props.focusCardId)
+})
+
 onMounted(() => {
   loadBoard(props.teamId)
   document.addEventListener('keydown', handleBoardKeyDown)
@@ -249,6 +267,7 @@ onBeforeUnmount(() => {
             </svg>
           </div>
           <span class="column-header__name">{{ slot.display_name }}</span>
+          <span v-if="slot.availability === 'unstable'" class="column-header__unstable" title="Agent unstable — retry manually">!</span>
           <span class="column-header__count">{{ (cardsBySlot.get(slot.id) || []).length }}</span>
         </div>
         <div class="column-cards" role="list">
@@ -475,6 +494,16 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+.column-header__unstable {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--red);
+  background: var(--red-dim);
+  padding: 1px 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .column-header__count {

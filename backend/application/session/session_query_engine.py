@@ -39,9 +39,19 @@ class _QueryContext:
     actual_prompt: str
     message_id: str
     cancelled_during_stream: bool = False
+    card_sync_succeeded: bool | None = None
+    card_sync_reason: str = ""
 
 
 class SessionQueryEngine:
+    _TRANSIENT_RESULT_ERROR_MARKERS = (
+        "channel_unavailable",
+        "service temporarily unavailable",
+        "service_unavailable",
+        "upstream returned http 502",
+        "upstream returned http 503",
+        "upstream returned http 504",
+    )
     _session_lock_pool = KeyedLockPool(max_size=500)
     _cancelled_sessions: set[str] = set()
     _queued_messages: dict[str, RunQueryCommand] = {}
@@ -454,6 +464,8 @@ class SessionQueryEngine:
             else:
                 raise
 
+        got_result = await self._retry_transient_result(ctx, got_result)
+
         auto_continue_count = 0
         while not got_result and auto_continue_count < max_auto_continues:
             if command.session_id in self._cancelled_sessions:
@@ -522,23 +534,122 @@ class SessionQueryEngine:
 
         await self._refresh_context_usage(session)
 
+    async def _retry_transient_result(
+        self,
+        ctx: _QueryContext,
+        got_result: bool,
+    ) -> bool:
+        """Retry terminal upstream availability errors returned as ResultMessage."""
+        if not got_result:
+            return False
+
+        max_retries = self._configured_transient_result_retries()
+        base_delay = self._configured_transient_retry_delay()
+        for attempt in range(1, max_retries + 1):
+            failure_reason = self._result_failure_reason(ctx.session)
+            if not self._is_transient_result_error(failure_reason):
+                break
+            if ctx.command.session_id in self._cancelled_sessions:
+                break
+
+            delay_seconds = min(30.0, base_delay * (2 ** (attempt - 1)))
+            retry_payload = {
+                "run_id": ctx.run_id,
+                "attempt": attempt,
+                "max": max_retries,
+                "delay_seconds": delay_seconds,
+                "error": failure_reason[:500],
+            }
+            logger.warning(
+                "[session=%s] 上游服务暂时不可用，%.1f 秒后重试 (%d/%d)",
+                ctx.command.session_id,
+                delay_seconds,
+                attempt,
+                max_retries,
+            )
+            await self._recorder.record_audit_event(
+                ctx.command.session_id,
+                "query_retrying",
+                payload=retry_payload,
+            )
+            await self._recorder.record_timeline_event(
+                ctx.command.session_id,
+                ctx.run_id,
+                "retry",
+                f"上游服务暂时不可用，自动重试 ({attempt}/{max_retries})",
+                retry_payload,
+            )
+            await self._connection_manager.broadcast(
+                ctx.command.session_id,
+                {
+                    "event": "query_retrying",
+                    "attempt": attempt,
+                    "max": max_retries,
+                    "delay_seconds": delay_seconds,
+                },
+            )
+            await asyncio.sleep(delay_seconds)
+            if ctx.command.session_id in self._cancelled_sessions:
+                break
+
+            retry_stream = self._claude_agent_gateway.send_query(
+                session_id=ctx.command.session_id,
+                prompt=ctx.actual_prompt,
+            )
+            got_result = await self._stream_consumer.consume(
+                ctx.session,
+                retry_stream,
+                ctx.run_id,
+            )
+            if not got_result:
+                break
+
+        return got_result
+
+    @classmethod
+    def _is_transient_result_error(cls, reason: str) -> bool:
+        normalized_reason = reason.casefold()
+        return any(
+            marker in normalized_reason
+            for marker in cls._TRANSIENT_RESULT_ERROR_MARKERS
+        )
+
+    @staticmethod
+    def _configured_transient_result_retries() -> int:
+        raw_retries = os.getenv("CLAUDE_TRANSIENT_RESULT_RETRIES", "2")
+        try:
+            return min(5, max(0, int(raw_retries)))
+        except ValueError:
+            logger.warning(
+                "Invalid CLAUDE_TRANSIENT_RESULT_RETRIES=%r; using 2",
+                raw_retries,
+            )
+            return 2
+
+    @staticmethod
+    def _configured_transient_retry_delay() -> float:
+        raw_delay = os.getenv("CLAUDE_TRANSIENT_RETRY_BASE_DELAY_SECONDS", "1")
+        try:
+            return min(30.0, max(0.0, float(raw_delay)))
+        except ValueError:
+            logger.warning(
+                "Invalid CLAUDE_TRANSIENT_RETRY_BASE_DELAY_SECONDS=%r; using 1",
+                raw_delay,
+            )
+            return 1.0
+
     @staticmethod
     def _build_stream_end_result(session: Session, auto_continue_count: int) -> Message:
-        has_assistant_output = bool(MessageConversionService.extract_assistant_text(session.messages))
         return Message.create(
             message_type=MessageType.RESULT,
             content={
-                "text": "" if has_assistant_output else "Agent stream ended without a successful result.",
+                "text": "Agent stream ended without a successful result.",
                 "duration_ms": 0,
                 "duration_api_ms": 0,
                 "num_turns": 0,
-                "is_error": not has_assistant_output,
+                "is_error": True,
                 "total_cost_usd": 0,
-                "stop_reason": (
-                    "stream_ended_after_output"
-                    if has_assistant_output
-                    else "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended"
-                ),
+                "stop_reason": "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended",
                 "usage": {
                     "input_tokens": session.usage.input_tokens,
                     "output_tokens": session.usage.output_tokens,
@@ -559,6 +670,9 @@ class SessionQueryEngine:
         from infr.config.database import async_session_factory
         from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
         from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
+        from infr.repository.team_repository_impl import TeamRepositoryImpl
+
+        slot_availability: str | None = None
 
         async with async_session_factory() as db_session:
             execution_repo = CardExecutionRepositoryImpl(db_session)
@@ -581,14 +695,34 @@ class SessionQueryEngine:
                 return
             if succeeded:
                 card.complete_execution(execution.id)
+                if execution.agent_slot_id:
+                    team_repo = TeamRepositoryImpl(db_session)
+                    team = await team_repo.find_by_id(card.team_id)
+                    if team is not None:
+                        slot = team.find_agent_slot(execution.agent_slot_id)
+                        if slot is not None and not slot.is_available:
+                            slot.mark_available()
+                            await team_repo.save(team)
             else:
                 card.fail_execution(execution.id, reason.strip() or "Agent execution failed")
+                # Mark the executing slot as unstable on failure so the board
+                # can surface a health warning and prompt the user to retry.
+                if execution.agent_slot_id:
+                    team_repo = TeamRepositoryImpl(db_session)
+                    team = await team_repo.find_by_id(card.team_id)
+                    if team is not None:
+                        slot = team.find_agent_slot(execution.agent_slot_id)
+                        if slot is not None:
+                            slot.mark_unstable()
+                            await team_repo.save(team)
+                            slot_availability = slot.availability.value
             await card_repo.save(card)
             await db_session.commit()
 
         latest = card.latest_execution
         await self._connection_manager.broadcast_global({
             "event": "board_card_updated",
+            "team_id": card.team_id,
             "card": {
                 "id": card.id,
                 "title": card.title,
@@ -596,9 +730,12 @@ class SessionQueryEngine:
                 "status": card.status.value,
                 "current_slot_id": card.current_slot_id,
                 "version": card.version,
+                "updated_at": card.updated_at.isoformat(),
                 "session_id": latest.session_id if latest else None,
                 "execution_id": latest.id if latest else None,
                 "failure_reason": latest.failure_reason if latest else None,
+                **({"slot_availability": slot_availability, "slot_id": execution.agent_slot_id}
+                   if slot_availability is not None else {}),
             },
         })
 
@@ -623,7 +760,7 @@ class SessionQueryEngine:
             raise BusinessException(result_error)
 
         session.complete_query()
-        await self._sync_team_card_execution(session, succeeded=True)
+        ctx.card_sync_succeeded = True
 
         if self._on_assistant_response:
             text = MessageConversionService.extract_assistant_text(session.messages)
@@ -692,7 +829,8 @@ class SessionQueryEngine:
             exc_info=True,
         )
         session.fail_query()
-        await self._sync_team_card_execution(session, succeeded=False, reason=str(e))
+        ctx.card_sync_succeeded = False
+        ctx.card_sync_reason = str(e)
 
         await self._recorder.fail_run_step(run_step, {"error": str(e)[:500]})
         await self._recorder.record_audit_event(
@@ -727,8 +865,10 @@ class SessionQueryEngine:
             async with self._queue_guard:
                 self._cancelled_sessions.discard(command.session_id)
             return
+        final_save_succeeded = False
         try:
             await self._save_session(session, commit=True)
+            final_save_succeeded = True
         except Exception:
             logger.error(
                 "[session=%s] final save failed, retrying with fresh DB session",
@@ -744,6 +884,7 @@ class SessionQueryEngine:
                     fresh_repo = SessionRepositoryImpl(fresh_db)
                     await fresh_repo.save(session)
                     await fresh_db.commit()
+                    final_save_succeeded = True
                     logger.warning(
                         "[session=%s] final save recovered with fresh DB session",
                         command.session_id,
@@ -756,6 +897,10 @@ class SessionQueryEngine:
                     exc_info=True,
                     extra={"session_id": command.session_id, "run_id": run_id},
                 )
+        if not final_save_succeeded:
+            session.fail_query()
+            ctx.card_sync_succeeded = False
+            ctx.card_sync_reason = "session final save failed"
         await self._connection_manager.broadcast(
             session.session_id,
             {
@@ -763,6 +908,19 @@ class SessionQueryEngine:
                 "session": SessionPresenter.session_to_dict(session),
             },
         )
+        if ctx.card_sync_succeeded is not None:
+            try:
+                await self._sync_team_card_execution(
+                    session,
+                    succeeded=ctx.card_sync_succeeded,
+                    reason=ctx.card_sync_reason,
+                )
+            except Exception:
+                logger.error(
+                    "[session=%s] card execution sync failed",
+                    command.session_id,
+                    exc_info=True,
+                )
 
         async with self._queue_guard:
             queued = self._queued_messages.pop(command.session_id, None)

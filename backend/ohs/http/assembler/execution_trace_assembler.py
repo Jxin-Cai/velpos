@@ -46,16 +46,18 @@ class ExecutionTraceAssembler:
 
     @staticmethod
     def _to_task_dto(task: ExecutionTask) -> ExecutionTaskDto:
+        loops = [
+            ExecutionTraceAssembler._to_loop_dto(loop, loop.sequence or sequence)
+            for sequence, loop in enumerate(task.loops, start=1)
+        ]
         return ExecutionTaskDto(
             id=task.id,
             subject=task.subject,
             description=task.description,
             status=task.status,
             explicit=task.explicit,
-            loops=[
-                ExecutionTraceAssembler._to_loop_dto(loop, loop.sequence or sequence)
-                for sequence, loop in enumerate(task.loops, start=1)
-            ],
+            loops=loops,
+            error_count=sum(loop.error_count for loop in loops),
         )
 
     @staticmethod
@@ -76,6 +78,8 @@ class ExecutionTraceAssembler:
             ended_time=loop.ended_time,
             duration_ms=loop.duration_ms,
             error_message=loop.error_message,
+            error_count=loop.error_count,
+            error_summary=loop.error_summary,
         )
 
     @staticmethod

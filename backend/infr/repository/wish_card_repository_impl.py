@@ -8,7 +8,6 @@ from domain.team.model.card_execution import CardExecution
 from domain.team.model.status import CardExecutionStatus, WishCardStatus
 from domain.team.model.wish_card import WishCard
 from domain.team.repository.wish_card_repository import WishCardRepository
-from infr.repository.repo_helpers import remove_by_pk
 from infr.repository.team_model import CardExecutionModel, WishCardModel
 
 
@@ -41,7 +40,24 @@ class WishCardRepositoryImpl(WishCardRepository):
         return [self._to_domain(model) for model in result.scalars().all()]
 
     async def remove(self, wish_card: WishCard) -> bool:
-        return await remove_by_pk(self._session, WishCardModel.id, wish_card.id)
+        # Eager-load executions before delete. WishCardModel.executions is a
+        # delete-orphan relationship, so session.delete() cascades to it; under
+        # an async session an unloaded relationship would raise MissingGreenlet
+        # when the cascade tries to lazy-load it. Callers that pre-delete the
+        # executions still hit this path, so the eager load returns an empty
+        # collection and the cascade is a no-op.
+        stmt = (
+            select(WishCardModel)
+            .options(selectinload(WishCardModel.executions))
+            .where(WishCardModel.id == wish_card.id)
+        )
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
+        if model is None:
+            return False
+        await self._session.delete(model)
+        await self._session.flush()
+        return True
 
     @staticmethod
     def _to_model(card: WishCard) -> WishCardModel:

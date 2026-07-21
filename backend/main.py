@@ -288,7 +288,22 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.error("Failed to start scheduler runner", exc_info=True)
 
+    watchdog_runner = None
+    try:
+        from ohs.scheduler_runner import ExecutionWatchdogRunner
+        watchdog_runner = ExecutionWatchdogRunner()
+        watchdog_runner.start()
+        logger.info("Execution watchdog runner started")
+    except Exception:
+        logger.error("Failed to start execution watchdog runner", exc_info=True)
+
     yield
+
+    if watchdog_runner is not None:
+        try:
+            await watchdog_runner.stop()
+        except Exception:
+            logger.error("Failed to stop execution watchdog runner", exc_info=True)
 
     if scheduler_runner is not None:
         try:

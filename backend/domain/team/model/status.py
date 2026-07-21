@@ -27,6 +27,11 @@ class CardExecutionStatus(str, Enum):
         }
 
 
+class SlotAvailability(str, Enum):
+    AVAILABLE = "available"
+    UNSTABLE = "unstable"
+
+
 class HandoffStatus(str, Enum):
     PENDING = "pending"
     ACCEPTED = "accepted"

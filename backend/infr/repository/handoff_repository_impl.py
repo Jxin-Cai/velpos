@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -41,6 +41,18 @@ class HandoffRepositoryImpl(HandoffRepository):
 
     async def remove(self, handoff: Handoff) -> bool:
         return await remove_by_pk(self._session, CardHandoffModel.id, handoff.id)
+
+    async def remove_by_card_id(self, card_id: str) -> None:
+        # Delete artifacts first so the operation succeeds regardless of whether
+        # the live DB enforces the handoff_artifacts -> card_handoffs cascade.
+        handoff_ids = select(CardHandoffModel.id).where(CardHandoffModel.card_id == card_id)
+        await self._session.execute(
+            delete(HandoffArtifactModel).where(HandoffArtifactModel.handoff_id.in_(handoff_ids))
+        )
+        await self._session.execute(
+            delete(CardHandoffModel).where(CardHandoffModel.card_id == card_id)
+        )
+        await self._session.flush()
 
     @staticmethod
     def _to_model(handoff: Handoff) -> CardHandoffModel:

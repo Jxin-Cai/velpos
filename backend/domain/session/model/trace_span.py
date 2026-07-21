@@ -24,6 +24,8 @@ class TraceSpan:
     ended_time: datetime | None = None
     duration_ms: int = 0
     created_time: datetime = field(default_factory=datetime.now)
+    sequence: int = 0
+    revision: int = 1
 
     SPAN_TYPE_LLM_TURN = "llm_turn"
     SPAN_TYPE_TOOL_CALL = "tool_call"
@@ -36,6 +38,7 @@ class TraceSpan:
     STATUS_FAILED = "failed"
     STATUS_DENIED = "denied"
     STATUS_CANCELLED = "cancelled"
+    STATUS_ABANDONED = "abandoned"
 
     @classmethod
     def create(
@@ -106,6 +109,13 @@ class TraceSpan:
         self.ended_time = datetime.now()
         self.duration_ms = max(int((self.ended_time - self.started_time).total_seconds() * 1000), 0)
 
+    def abandon(self, reason: str | None = None) -> None:
+        self.status = self.STATUS_ABANDONED
+        if reason:
+            self.metadata["abandon_reason"] = reason
+        self.ended_time = datetime.now()
+        self.duration_ms = max(int((self.ended_time - self.started_time).total_seconds() * 1000), 0)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -123,4 +133,6 @@ class TraceSpan:
             "started_time": self.started_time.isoformat() if self.started_time else None,
             "ended_time": self.ended_time.isoformat() if self.ended_time else None,
             "duration_ms": self.duration_ms,
+            "sequence": self.sequence,
+            "revision": self.revision,
         }

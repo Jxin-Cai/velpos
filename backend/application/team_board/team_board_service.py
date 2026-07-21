@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from domain.team.repository.handoff_repository import HandoffRepository
     from domain.team.repository.team_repository import TeamRepository
     from domain.team.repository.wish_card_repository import WishCardRepository
+    from domain.session.repository.session_repository import SessionRepository
     from domain.project.acl.plugin_manager import PluginManager
     from domain.session.acl.connection_manager import ConnectionManager
 
@@ -69,6 +70,7 @@ class TeamBoardApplicationService:
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         plugin_manager: PluginManager | None = None,
         connection_manager: ConnectionManager | None = None,
+        session_repo: SessionRepository | None = None,
     ) -> None:
         self._team_repo = team_repo
         self._card_repo = card_repo
@@ -80,6 +82,7 @@ class TeamBoardApplicationService:
         self._session_service_factory = session_service_factory
         self._plugin_manager = plugin_manager
         self._connection_manager = connection_manager
+        self._session_repo = session_repo
 
     async def create_team(self, cmd: CreateTeamCommand) -> Team:
         from domain.team.model.team import Team
@@ -283,6 +286,21 @@ class TeamBoardApplicationService:
         card = await self._require_team_card(cmd.team_id, cmd.card_id)
         if card.status is not WishCardStatus.ARCHIVED:
             raise TeamDomainError("only archived wish cards can be deleted")
+
+        # Explicit dependency-ordered cleanup. The DB-level FK cascade cannot be
+        # trusted: migration 0029 only creates the team tables when absent, so a
+        # database provisioned before the current ondelete rules may still carry
+        # RESTRICT/NO ACTION constraints that would make a bare card delete fail.
+        # Detach sessions (history is preserved), drop handoffs + artifacts and
+        # executions, then remove the card — all within the request's unit of
+        # work, so a failure at any step rolls the whole delete back.
+        executions = await self._execution_repo.find_by_card_id(card.id)
+        if executions and self._session_repo is not None:
+            await self._session_repo.clear_card_execution_references(
+                [execution.id for execution in executions]
+            )
+        await self._handoff_repo.remove_by_card_id(card.id)
+        await self._execution_repo.remove_by_card_id(card.id)
         await self._card_repo.remove(card)
         await self._broadcast_board_event("board_card_deleted", cmd.team_id, card.id)
 
@@ -374,7 +392,9 @@ class TeamBoardApplicationService:
 
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
-        safe_create_task(self._dispatch_execution_query(session.session_id, prompt))
+        safe_create_task(self._dispatch_execution_query_with_failsafe(
+            session.session_id, prompt, card.id, execution.id
+        ))
         await self._broadcast_board_event("board_card_updated", card.team_id, card.id)
         return execution
 
@@ -416,7 +436,9 @@ class TeamBoardApplicationService:
 
         await self._card_repo.save(card)
         await self._execution_repo.save(new_execution)
-        safe_create_task(self._dispatch_execution_query(session.session_id, prompt))
+        safe_create_task(self._dispatch_execution_query_with_failsafe(
+            session.session_id, prompt, card.id, new_execution.id
+        ))
         await self._broadcast_board_event("board_card_updated", card.team_id, card.id)
         return new_execution
 
@@ -433,6 +455,7 @@ class TeamBoardApplicationService:
 
     async def _reconcile_one(self, execution: CardExecution) -> None:
         if execution.session_id is not None:
+            await self._reconcile_stuck_execution(execution)
             return
         card = await self._card_repo.find_by_id(execution.card_id)
         team = await self._team_repo.find_by_id(card.team_id)
@@ -453,7 +476,39 @@ class TeamBoardApplicationService:
         execution.session_id = session.session_id
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
-        safe_create_task(self._dispatch_execution_query(session.session_id, prompt))
+        safe_create_task(self._dispatch_execution_query_with_failsafe(
+            session.session_id, prompt, card.id, execution.id
+        ))
+
+    async def _reconcile_stuck_execution(self, execution: CardExecution) -> None:
+        try:
+            session = await self._session_service.get_session(execution.session_id)
+        except Exception:
+            logger.warning(
+                "reconcile: session %s not found for execution %s, failing execution",
+                execution.session_id, execution.id,
+            )
+            card = await self._card_repo.find_by_id(execution.card_id)
+            if card is None:
+                return
+            card.fail_execution(execution.id, "Session not found during reconciliation")
+            await self._card_repo.save(card)
+            await self._execution_repo.save(execution)
+            return
+
+        if session.is_running:
+            return
+
+        card = await self._card_repo.find_by_id(execution.card_id)
+        if card is None:
+            return
+        card.fail_execution(execution.id, "Execution stuck: session ended without terminal card sync")
+        await self._card_repo.save(card)
+        await self._execution_repo.save(execution)
+        logger.info(
+            "reconcile: failed stuck execution %s (session=%s)",
+            execution.id, execution.session_id,
+        )
 
     async def _prepare_handoff(
         self,
@@ -528,6 +583,69 @@ class TeamBoardApplicationService:
             await service.commit()
         finally:
             await service.close()
+
+    async def _dispatch_execution_query_with_failsafe(
+        self, session_id: str, prompt: str, card_id: str, execution_id: str
+    ) -> None:
+        try:
+            await self._dispatch_execution_query(session_id, prompt)
+        except Exception:
+            logger.error(
+                "[session=%s] dispatch failed for execution %s, marking FAILED",
+                session_id,
+                execution_id,
+                exc_info=True,
+            )
+            await self._fail_execution_on_dispatch_error(card_id, execution_id, session_id)
+
+    async def _fail_execution_on_dispatch_error(
+        self, card_id: str, execution_id: str, session_id: str
+    ) -> None:
+        from infr.config.database import async_session_factory
+        from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
+        from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
+
+        try:
+            async with async_session_factory() as db_session:
+                card_repo = WishCardRepositoryImpl(db_session)
+                execution_repo = CardExecutionRepositoryImpl(db_session)
+                card = await card_repo.find_by_id(card_id)
+                execution = await execution_repo.find_by_id(execution_id)
+                if card is None or execution is None:
+                    logger.error(
+                        "[session=%s] cannot fail execution %s: card or execution not found",
+                        session_id, execution_id,
+                    )
+                    return
+                if execution.is_terminal:
+                    return
+                card.fail_execution(execution_id, "Dispatch failed: could not start session query")
+                await card_repo.save(card)
+                await db_session.commit()
+            if self._connection_manager is not None:
+                latest = card.latest_execution
+                await self._connection_manager.broadcast_global({
+                    "event": "board_card_updated",
+                    "team_id": card.team_id,
+                    "card": {
+                        "id": card.id,
+                        "title": card.title,
+                        "description": card.description,
+                        "status": card.status.value,
+                        "current_slot_id": card.current_slot_id,
+                        "version": card.version,
+                        "updated_at": card.updated_at.isoformat(),
+                        "session_id": latest.session_id if latest else None,
+                        "execution_id": latest.id if latest else None,
+                        "failure_reason": latest.failure_reason if latest else None,
+                    },
+                })
+        except Exception:
+            logger.error(
+                "[session=%s] failed to mark execution %s as FAILED after dispatch error",
+                session_id, execution_id,
+                exc_info=True,
+            )
 
     async def _find_last_completed_execution(self, card: WishCard) -> CardExecution | None:
         executions = await self._execution_repo.find_by_card_id(card.id)

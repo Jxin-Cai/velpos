@@ -68,6 +68,7 @@ class AgentSlotModel(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     workspace_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    availability: Mapped[str] = mapped_column(String(16), nullable=False, default="available", server_default="available")
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     team: Mapped[TeamModel] = relationship(back_populates="agent_slots")
 

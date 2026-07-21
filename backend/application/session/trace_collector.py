@@ -39,6 +39,7 @@ class TraceCollector:
         self._pending_broadcasts: list[tuple[str, str, dict[str, Any]]] = []
         self._lock = asyncio.Lock()
         self._flush_task: asyncio.Task[None] | None = None
+        self._sequence_counter: int = 0
 
     @property
     def enabled(self) -> bool:
@@ -83,6 +84,7 @@ class TraceCollector:
         if not self._enabled:
             return None
         self._ensure_started()
+        self._sequence_counter += 1
         span = TraceSpan.create(
             session_id=session_id,
             run_id=run_id,
@@ -95,6 +97,8 @@ class TraceCollector:
             output_preview=output_preview,
             metadata=metadata,
         )
+        span.sequence = self._sequence_counter
+        span.revision = 1
         self._buffer[span.id] = span
         self._dirty_new.add(span.id)
         self._pending_broadcasts.append((session_id, "created", span.to_dict()))
@@ -110,6 +114,9 @@ class TraceCollector:
         if span is None:
             return
         span.complete(output_preview=output_preview, metadata=metadata)
+        span.revision += 1
+        self._sequence_counter += 1
+        span.sequence = self._sequence_counter
         self._dirty_update.add(span_id)
         self._pending_broadcasts.append((span.session_id, "completed", span.to_dict()))
 
@@ -125,6 +132,9 @@ class TraceCollector:
         if span is None:
             return
         span.fail(error=sanitize_and_truncate(error, max_chars=500), metadata=metadata)
+        span.revision += 1
+        self._sequence_counter += 1
+        span.sequence = self._sequence_counter
         self._dirty_update.add(span_id)
         self._pending_broadcasts.append((span.session_id, "failed", span.to_dict()))
 
@@ -135,6 +145,9 @@ class TraceCollector:
         if span is None:
             return
         span.deny(reason=sanitize_and_truncate(reason, max_chars=500))
+        span.revision += 1
+        self._sequence_counter += 1
+        span.sequence = self._sequence_counter
         self._dirty_update.add(span_id)
         self._pending_broadcasts.append((span.session_id, "denied", span.to_dict()))
 
@@ -145,6 +158,9 @@ class TraceCollector:
         if span is None:
             return
         span.cancel(reason=sanitize_and_truncate(reason, max_chars=500))
+        span.revision += 1
+        self._sequence_counter += 1
+        span.sequence = self._sequence_counter
         self._dirty_update.add(span_id)
         self._pending_broadcasts.append((span.session_id, "cancelled", span.to_dict()))
 
@@ -314,8 +330,24 @@ class TraceCollector:
             self._mark_updated(span, "updated")
 
     def _mark_updated(self, span: TraceSpan, action: str) -> None:
+        span.revision += 1
+        self._sequence_counter += 1
+        span.sequence = self._sequence_counter
         self._dirty_update.add(span.id)
         self._pending_broadcasts.append((span.session_id, action, span.to_dict()))
+
+    def abandon_span(self, span_id: str, reason: str | None = None) -> None:
+        from application.session.trace_redaction import sanitize_and_truncate
+
+        span = self._buffer.get(span_id)
+        if span is None:
+            return
+        span.abandon(reason=sanitize_and_truncate(reason, max_chars=500))
+        span.revision += 1
+        self._sequence_counter += 1
+        span.sequence = self._sequence_counter
+        self._dirty_update.add(span_id)
+        self._pending_broadcasts.append((span.session_id, "abandoned", span.to_dict()))
 
     def finish_run(
         self,
@@ -323,6 +355,7 @@ class TraceCollector:
         run_id: str,
         error: str | None = None,
         cancelled: bool = False,
+        abandoned: bool = False,
     ) -> None:
         """Close every unfinished node so historical trees never remain spinning."""
         spans = [
@@ -341,12 +374,32 @@ class TraceCollector:
         }
         spans.sort(key=lambda span: close_order.get(span.span_type, 0))
         for span in spans:
-            if cancelled:
+            if abandoned:
+                self.abandon_span(span.id, reason="Process lost")
+            elif cancelled:
                 self.cancel_span(span.id, reason="Query cancelled")
             elif error:
                 self.fail_span(span.id, error=error[:500])
             else:
                 self.complete_span(span.id)
+
+    def abandon_all_running(self, session_id: str, reason: str | None = None) -> None:
+        """Close every running span in this session as abandoned (process lost)."""
+        spans = [
+            span for span in self._buffer.values()
+            if span.session_id == session_id
+            and span.status == TraceSpan.STATUS_RUNNING
+        ]
+        close_order = {
+            TraceSpan.SPAN_TYPE_TOOL_CALL: 0,
+            TraceSpan.SPAN_TYPE_LLM_TURN: 1,
+            TraceSpan.SPAN_TYPE_SUBAGENT: 2,
+            TraceSpan.SPAN_TYPE_AGENT: 3,
+            TraceSpan.SPAN_TYPE_RUN: 4,
+        }
+        spans.sort(key=lambda span: close_order.get(span.span_type, 0))
+        for span in spans:
+            self.abandon_span(span.id, reason=reason)
 
     def find_span_by_id(self, span_id: str) -> TraceSpan | None:
         return self._buffer.get(span_id)
@@ -419,6 +472,23 @@ class TraceCollector:
             and span.status == TraceSpan.STATUS_RUNNING
         ), None)
 
+    def find_subagent_by_tool_use_id(
+        self,
+        session_id: str,
+        tool_use_id: str | None,
+        run_id: str | None = None,
+    ) -> TraceSpan | None:
+        """Find a subagent span by tool_use_id regardless of status."""
+        if not tool_use_id:
+            return None
+        return next((
+            span for span in reversed(list(self._buffer.values()))
+            if span.session_id == session_id
+            and span.tool_use_id == tool_use_id
+            and span.span_type == TraceSpan.SPAN_TYPE_SUBAGENT
+            and (run_id is None or span.run_id == run_id)
+        ), None)
+
     def find_latest_running_llm_turn(self, session_id: str, run_id: str) -> TraceSpan | None:
         candidates = [
             s for s in self._buffer.values()
@@ -426,6 +496,18 @@ class TraceCollector:
             and s.run_id == run_id
             and s.span_type == TraceSpan.SPAN_TYPE_LLM_TURN
             and s.status == TraceSpan.STATUS_RUNNING
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda s: s.started_time)
+
+    def find_latest_llm_turn(self, session_id: str, run_id: str) -> TraceSpan | None:
+        """Find the most recent LLM turn span regardless of status."""
+        candidates = [
+            s for s in self._buffer.values()
+            if s.session_id == session_id
+            and s.run_id == run_id
+            and s.span_type == TraceSpan.SPAN_TYPE_LLM_TURN
         ]
         if not candidates:
             return None
@@ -476,14 +558,15 @@ class TraceCollector:
         new_spans = [self._buffer[sid] for sid in new_ids if sid in self._buffer]
         update_spans = [self._buffer[sid] for sid in update_ids if sid in self._buffer]
 
+        persisted = False
         try:
             if self._repository_factory is not None:
                 async with self._repository_factory() as repository:
                     await self._persist(repository, new_spans, update_spans)
             elif self._repository is not None:
                 await self._persist(self._repository, new_spans, update_spans)
+            persisted = True
         except Exception:
-            # A transient DB failure must not silently erase trace history.
             async with self._lock:
                 self._dirty_new.update(sid for sid in new_ids if sid in self._buffer)
                 self._dirty_update.update(sid for sid in update_ids if sid in self._buffer)
@@ -494,7 +577,7 @@ class TraceCollector:
                 exc_info=True,
             )
 
-        if broadcasts and self._broadcast_fn:
+        if persisted and broadcasts and self._broadcast_fn:
             for session_id, action, span_dict in broadcasts:
                 try:
                     await self._broadcast_fn(session_id, {
@@ -508,6 +591,9 @@ class TraceCollector:
                         span_dict.get("id", "?"),
                         exc_info=True,
                     )
+        elif not persisted and broadcasts:
+            async with self._lock:
+                self._pending_broadcasts = broadcasts + self._pending_broadcasts
 
         completed_ids = [
             sid for sid, s in self._buffer.items()
@@ -516,7 +602,10 @@ class TraceCollector:
                 TraceSpan.STATUS_FAILED,
                 TraceSpan.STATUS_DENIED,
                 TraceSpan.STATUS_CANCELLED,
+                TraceSpan.STATUS_ABANDONED,
             )
+            and sid not in self._dirty_new
+            and sid not in self._dirty_update
         ]
         if len(completed_ids) > 500:
             for sid in completed_ids[:len(completed_ids) - 200]:

@@ -528,13 +528,18 @@ class SessionApplicationService:
             return
         if not session.is_running:
             return
+        if self._claude_agent_gateway.is_active(session_id):
+            return
         if (
             self._claude_agent_gateway.is_connected(session_id)
             and self._claude_agent_gateway.is_process_alive(session_id)
         ):
-            if self._claude_agent_gateway.is_active(session_id):
-                return
-        session.complete_query()
+            return
+        session.fail_query()
+        if self._trace_collector and self._trace_collector.enabled:
+            self._trace_collector.abandon_all_running(
+                session_id, reason="Process lost during idle check"
+            )
         await self._save_session(session, commit=True)
 
     # ── Connection management ────────────────────────────────
