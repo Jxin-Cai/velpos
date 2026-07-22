@@ -26,14 +26,16 @@ def _project_root(claude_dir: Path, project_dir: Path) -> Path:
 
 
 def _project(project_dir: Path) -> Project:
-    return cast(Project, SimpleNamespace(dir_path=str(project_dir)))
+    return cast(Project, SimpleNamespace(id="project-1", dir_path=str(project_dir)))
 
 
 def _session(project_dir: Path, sdk_session_id: str = "session") -> Session:
     return cast(
         Session,
         SimpleNamespace(
-            project_dir=str(project_dir), sdk_session_id=sdk_session_id
+            project_id="project-1",
+            project_dir=str(project_dir),
+            sdk_session_id=sdk_session_id,
         ),
     )
 
@@ -59,6 +61,49 @@ def test_returns_records_when_main_transcript_is_valid(tmp_path: Path) -> None:
     assert page.records == ({"type": "user"}, {"type": "assistant"})
     assert page.next_cursor == transcript.stat().st_size
     assert page.has_more is False
+
+
+def test_returns_records_when_session_uses_dedicated_execution_workspace(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    project_dir = tmp_path / "project"
+    execution_dir = tmp_path / "team-agent" / "executions" / "execution-1"
+    project_dir.mkdir()
+    execution_dir.mkdir(parents=True)
+    claude_dir = tmp_path / ".claude"
+    transcript = _project_root(claude_dir, execution_dir) / "session.jsonl"
+    _write_records(transcript, [{"type": "assistant"}])
+
+    # Act
+    page = ClaudeTranscriptReader(claude_dir).read(
+        _project(project_dir),
+        _session(execution_dir),
+    )
+
+    # Assert
+    assert page.records == ({"type": "assistant"},)
+
+
+def test_rejects_session_when_project_id_does_not_match(tmp_path: Path) -> None:
+    # Arrange
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    session = cast(
+        Session,
+        SimpleNamespace(
+            project_id="another-project",
+            project_dir=str(project_dir),
+            sdk_session_id="session",
+        ),
+    )
+
+    # Act / Assert
+    with pytest.raises(TranscriptAccessError):
+        ClaudeTranscriptReader(tmp_path / ".claude").read(
+            _project(project_dir),
+            session,
+        )
 
 
 def test_returns_records_when_subagent_belongs_to_session(tmp_path: Path) -> None:

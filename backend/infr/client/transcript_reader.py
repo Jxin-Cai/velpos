@@ -62,9 +62,12 @@ class ClaudeTranscriptReader(TranscriptReader):
         session: Session,
         transcript_path: str | None,
     ) -> Path:
-        project_dir = Path(project.dir_path).expanduser().resolve()
-        if Path(session.project_dir).expanduser().resolve() != project_dir:
+        if session.project_id != project.id:
             raise TranscriptAccessError("session does not belong to the current project")
+        # Team/card executions keep the parent Project aggregate but run in a
+        # dedicated workspace. Claude keys its transcript directory from the
+        # session's actual working directory, not from the parent project root.
+        project_dir = Path(session.project_dir or project.dir_path).expanduser().resolve()
         if not session.sdk_session_id:
             raise TranscriptAccessError("session has no Claude SDK session id")
 
