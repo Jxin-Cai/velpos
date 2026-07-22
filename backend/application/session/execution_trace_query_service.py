@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from domain.project.repository.project_repository import ProjectRepository
-from domain.session.acl.transcript_reader import TranscriptReader
+from domain.session.acl.transcript_reader import TranscriptNotFoundError, TranscriptReader
 from domain.session.model.execution_trace import AgentLoop, ExecutionAgent, LoopDetailPage
 from domain.session.repository.session_repository import SessionRepository
 from domain.session.repository.trace_span_repository import TraceSpanRepository
@@ -75,8 +75,15 @@ class ExecutionTraceQueryService:
         if agent_span is not None:
             projection_spans = self._spans_owned_by_agent(agent_span, spans)
             if transcript_path:
-                records = self._read_all_records(project, session, transcript_path)
-                records = self._filter_records_to_run(records, [agent_span])
+                try:
+                    records = self._read_all_records(project, session, transcript_path)
+                    records = self._filter_records_to_run(records, [agent_span])
+                except TranscriptNotFoundError:
+                    logger.warning(
+                        "subagent transcript not found; reconstructing execution tree from spans",
+                        extra={"session_id": session_id, "run_id": run_id, "agent_id": agent_id},
+                    )
+                    records = self._records_from_agent_spans(agent_span, projection_spans)
             else:
                 # Never fall back to the main session transcript: that makes a
                 # subagent node render the main agent's steps. Persisted child
@@ -84,8 +91,21 @@ class ExecutionTraceQueryService:
                 # an agent transcript path.
                 records = self._records_from_agent_spans(agent_span, projection_spans)
         else:
-            records = self._read_all_records(project, session, None)
-            records = self._filter_records_to_run(records, spans)
+            try:
+                records = self._read_all_records(project, session, None)
+                records = self._filter_records_to_run(records, spans)
+            except TranscriptNotFoundError:
+                logger.warning(
+                    "session transcript not found; reconstructing execution tree from spans",
+                    extra={"session_id": session_id, "run_id": run_id},
+                )
+                main_agent_span = next((
+                    span for span in spans
+                    if span.span_type == span.SPAN_TYPE_AGENT
+                    and span.metadata.get("role") == "main"
+                ), None)
+                main_spans = self._spans_owned_by_agent(main_agent_span, spans)
+                records = self._records_from_agent_spans(main_agent_span, main_spans)
 
         agent = self._projector.project(records, projection_spans, agent_id)
         if agent_span is None and agent.request is None:
@@ -152,12 +172,17 @@ class ExecutionTraceQueryService:
         return all_records
 
     @staticmethod
-    def _spans_owned_by_agent(agent_span: Any, spans: list[Any]) -> list[Any]:
+    def _spans_owned_by_agent(agent_span: Any | None, spans: list[Any]) -> list[Any]:
         """Return direct work of one agent while preserving nested agent nodes."""
         by_id = {span.id: span for span in spans}
-        owned: list[Any] = [agent_span]
+        owned: list[Any] = [agent_span] if agent_span is not None else []
+        owner_id = (
+            agent_span.id
+            if agent_span is not None and agent_span.span_type == agent_span.SPAN_TYPE_SUBAGENT
+            else None
+        )
         for candidate in spans:
-            if candidate.id == agent_span.id:
+            if agent_span is not None and candidate.id == agent_span.id:
                 continue
             parent_id = candidate.parent_span_id
             nearest_agent_id = None
@@ -171,13 +196,17 @@ class ExecutionTraceQueryService:
                     nearest_agent_id = parent.id
                     break
                 parent_id = parent.parent_span_id
-            if nearest_agent_id == agent_span.id:
+            if nearest_agent_id == owner_id:
                 owned.append(candidate)
         return owned
 
     @classmethod
-    def _records_from_agent_spans(cls, agent_span: Any, spans: list[Any]) -> list[dict[str, Any]]:
-        """Reconstruct only this subagent's turns from its persisted child spans."""
+    def _records_from_agent_spans(
+        cls,
+        agent_span: Any | None,
+        spans: list[Any],
+    ) -> list[dict[str, Any]]:
+        """Reconstruct one agent's turns from its persisted spans."""
         turns = sorted(
             (span for span in spans if span.span_type == span.SPAN_TYPE_LLM_TURN),
             key=lambda span: span.started_time,
@@ -187,7 +216,7 @@ class ExecutionTraceQueryService:
             key=lambda span: span.started_time,
         )
         records: list[dict[str, Any]] = []
-        if agent_span.input_preview:
+        if agent_span is not None and agent_span.input_preview:
             records.append({
                 "type": "user",
                 "uuid": f"{agent_span.id}-request",
@@ -199,7 +228,8 @@ class ExecutionTraceQueryService:
             turn_tools = [tool for tool in tools if (
                 tool.parent_span_id == turn.id
                 or (
-                    tool.parent_span_id == agent_span.id
+                    agent_span is not None
+                    and tool.parent_span_id == agent_span.id
                     and tool.started_time >= turn.started_time
                     and (next_started is None or tool.started_time < next_started)
                 )

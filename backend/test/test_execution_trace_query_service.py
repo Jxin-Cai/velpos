@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from domain.session.acl.transcript_reader import TranscriptNotFoundError
 from domain.session.model.trace_span import TraceSpan
 from domain.session.service.execution_trace_projector import ExecutionTraceProjector
 @pytest.mark.asyncio
@@ -115,6 +116,90 @@ async def test_reconstructs_subagent_from_owned_spans_when_transcript_path_is_mi
     transcript_reader.read.assert_not_called()
     assert result.id == "agent-1"
     assert result.tasks[0].loops[0].tool_names == ("Read",)
+
+
+@pytest.mark.asyncio
+async def test_reconstructs_main_execution_tree_when_transcript_file_is_missing() -> None:
+    # Arrange
+    session = SimpleNamespace(project_id="project-1", messages=[])
+    project = SimpleNamespace(dir_path="/workspace")
+    main_agent = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_AGENT,
+        name="Main agent",
+        agent_id="main",
+        metadata={"role": "main"},
+    )
+    turn = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_LLM_TURN,
+        name="main assistant",
+        parent_span_id=main_agent.id,
+        agent_id="main",
+        input_preview="Inspect the failure",
+        output_preview="The transcript was removed",
+    )
+    transcript_reader = Mock()
+    transcript_reader.read.side_effect = TranscriptNotFoundError("transcript not found")
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(find_by_id=AsyncMock(return_value=session)),
+        project_repository=Mock(find_by_id=AsyncMock(return_value=project)),
+        trace_span_repository=Mock(find_by_run=AsyncMock(return_value=[main_agent, turn])),
+        transcript_reader=transcript_reader,
+    )
+
+    # Act
+    result = await service.get_execution_tree("session-1", "run-1")
+
+    # Assert
+    assert result.tasks[0].loops[0].assistant_content == (
+        {"type": "text", "text": "The transcript was removed"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconstructs_subagent_execution_tree_when_transcript_file_is_missing() -> None:
+    # Arrange
+    session = SimpleNamespace(project_id="project-1")
+    project = SimpleNamespace(dir_path="/workspace")
+    subagent = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_SUBAGENT,
+        name="researcher",
+        agent_id="agent-1",
+        metadata={"transcript_path": "session/subagents/agent-1.jsonl"},
+    )
+    turn = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_LLM_TURN,
+        name="subagent assistant",
+        parent_span_id=subagent.id,
+        agent_id="agent-1",
+        output_preview="Recovered from spans",
+    )
+    transcript_reader = Mock()
+    transcript_reader.read.side_effect = TranscriptNotFoundError("transcript not found")
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(find_by_id=AsyncMock(return_value=session)),
+        project_repository=Mock(find_by_id=AsyncMock(return_value=project)),
+        trace_span_repository=Mock(
+            find_by_id=AsyncMock(return_value=subagent),
+            find_by_run=AsyncMock(return_value=[subagent, turn]),
+        ),
+        transcript_reader=transcript_reader,
+    )
+
+    # Act
+    result = await service.get_execution_tree("session-1", "run-1", subagent.id)
+
+    # Assert
+    assert result.tasks[0].loops[0].assistant_content == (
+        {"type": "text", "text": "Recovered from spans"},
+    )
 
 
 @pytest.mark.asyncio
