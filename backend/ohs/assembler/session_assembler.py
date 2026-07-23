@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from application.session.session_presenter import SessionPresenter
 from domain.session.model.message import Message
 from domain.session.model.session import Session
 
 
 class SessionAssembler:
+    DEFAULT_MESSAGE_PAGE_SIZE = SessionPresenter.DEFAULT_MESSAGE_PAGE_SIZE
+
     @staticmethod
     def _recovery_to_dict(session: Session) -> dict[str, Any]:
         pending_request = session.pending_request_context
@@ -72,5 +75,18 @@ class SessionAssembler:
         }
 
     @staticmethod
-    def message_to_dict(message: Message) -> dict[str, Any]:
-        return {"type": message.message_type.value, "content": message.content}
+    def message_to_dict(message: Message, index: int | None = None) -> dict[str, Any]:
+        return SessionPresenter.message_to_dict(message, index)
+
+    @staticmethod
+    def message_page(
+        messages: list[Message],
+        *,
+        before: int | None = None,
+        limit: int = DEFAULT_MESSAGE_PAGE_SIZE,
+    ) -> dict[str, Any]:
+        return SessionPresenter.message_page(messages, before=before, limit=limit)
+
+    @staticmethod
+    def user_message_markers(messages: list[Message]) -> list[dict[str, Any]]:
+        return SessionPresenter.user_message_markers(messages)

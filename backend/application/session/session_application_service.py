@@ -808,12 +808,14 @@ class SessionApplicationService:
         finally:
             self._claude_agent_gateway.mark_idle(session_id)
             await self._save_session(session, commit=True)
-            all_messages = [{"type": msg.message_type.value, "content": msg.content} for msg in session.messages]
+            message_page = SessionPresenter.message_page(session.messages)
             await self._connection_manager.broadcast(
                 session_id,
                 {
                     "event": "connected",
                     "session": SessionPresenter.session_to_dict(session),
-                    "messages": all_messages,
+                    "messages": message_page["messages"],
+                    "message_window": message_page["message_window"],
+                    "user_message_markers": SessionPresenter.user_message_markers(session.messages),
                 },
             )

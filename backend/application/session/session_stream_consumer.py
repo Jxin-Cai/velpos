@@ -299,11 +299,12 @@ class SessionStreamConsumer:
                 elif msg_type_str == "tool_result" and self._trace_collector and self._trace_collector.enabled:
                     self._record_tool_results(session.session_id, run_id, message.content)
 
-                logger.info(
-                    "[session=%s] Claude回复 [%s]",
-                    session.session_id,
-                    msg_type_str,
-                )
+                if msg_type_str != "system":
+                    logger.info(
+                        "[session=%s] Claude回复 [%s]",
+                        session.session_id,
+                        msg_type_str,
+                    )
 
                 await self._connection_manager.broadcast(
                     session.session_id,

@@ -1,4 +1,4 @@
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, onScopeDispose, watch } from 'vue'
 import { useSession } from '@entities/session'
 import { fetchExecutionTree, fetchLoopDetail } from '../api/traceApi'
 
@@ -18,6 +18,8 @@ export function useExecutionTree() {
   const loading = ref(false)
   const error = ref('')
   let refreshTimer = null
+  let loadRequestId = 0
+  let loadedContextKey = null
 
   const expandedTasks = reactive(new Set())
   const expandedLoops = reactive(new Set())
@@ -40,32 +42,76 @@ export function useExecutionTree() {
     return agentSpanId ? `${agentSpanId}:${loopId}` : loopId
   }
 
+  function contextKey(sessionId, runId, agentSpanId = null) {
+    return `${sessionId}:${runId}:${agentSpanId || 'main'}`
+  }
+
+  function resetViewerState(result) {
+    selectedLoopId.value = null
+    loopDetails.clear()
+    loopLoadState.clear()
+    expandedSubagents.clear()
+    inlineSubagents.clear()
+    expandedTasks.clear()
+    expandedLoops.clear()
+    for (const task of result?.tasks || []) {
+      expandedTasks.add(task.id)
+    }
+  }
+
+  function reconcileViewerState(result) {
+    const tasks = result?.tasks || []
+    const taskIds = new Set(tasks.map(task => task.id))
+    const loopIds = new Set(tasks.flatMap(task => (task.loops || []).map(loop => loop.id)))
+
+    for (const taskId of expandedTasks) {
+      if (!taskIds.has(taskId)) expandedTasks.delete(taskId)
+    }
+    for (const loopId of expandedLoops) {
+      if (!loopIds.has(loopId)) expandedLoops.delete(loopId)
+    }
+
+    // Newly announced tasks default to expanded without reopening tasks that
+    // the user explicitly collapsed before the live refresh.
+    const previousTaskIds = new Set((tree.value?.tasks || []).map(task => task.id))
+    for (const task of tasks) {
+      if (!previousTaskIds.has(task.id)) expandedTasks.add(task.id)
+    }
+
+    if (selectedLoopId.value && !loopIds.has(selectedLoopId.value)) {
+      selectedLoopId.value = null
+    }
+  }
+
   async function loadTree(sessionId, runId, agentSpanId = null) {
+    const requestId = ++loadRequestId
+    const nextContextKey = contextKey(sessionId, runId, agentSpanId)
+    const isSameContext = loadedContextKey === nextContextKey
     loading.value = true
     error.value = ''
     selectedRunId.value = runId
     try {
       const result = await fetchExecutionTree(sessionId, runId, agentSpanId)
-      tree.value = result
-      // A run is scoped to one user message. Never carry the previously
-      // selected step or loaded subagent details into the new message tree.
-      selectedLoopId.value = null
-      loopDetails.clear()
-      loopLoadState.clear()
-      expandedSubagents.clear()
-      inlineSubagents.clear()
-      expandedTasks.clear()
-      expandedLoops.clear()
-      if (result?.tasks?.length) {
-        for (const task of result.tasks) {
-          expandedTasks.add(task.id)
-        }
+      if (requestId !== loadRequestId) return
+
+      if (isSameContext) {
+        reconcileViewerState(result)
+      } else {
+        resetViewerState(result)
       }
+      tree.value = result
+      loadedContextKey = nextContextKey
     } catch (err) {
-      error.value = err?.message || 'Failed to load execution tree'
-      tree.value = null
+      if (requestId !== loadRequestId) return
+      error.value = isSameContext
+        ? `Live refresh failed: ${err?.message || 'Unknown error'}`
+        : (err?.message || 'Failed to load execution tree')
+      if (!isSameContext) {
+        tree.value = null
+        loadedContextKey = null
+      }
     } finally {
-      loading.value = false
+      if (requestId === loadRequestId) loading.value = false
     }
   }
 
@@ -239,6 +285,11 @@ export function useExecutionTree() {
       }
     },
   )
+
+  onScopeDispose(() => {
+    clearTimeout(refreshTimer)
+    loadRequestId += 1
+  })
 
   return {
     tree,

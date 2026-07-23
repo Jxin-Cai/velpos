@@ -425,11 +425,12 @@ async def websocket_endpoint(
         # a query is actively streaming. The actual running state is set by
         # run_claude_query's start_query() call.
 
-        all_messages = [SessionAssembler.message_to_dict(msg) for msg in session.messages]
+        message_page = SessionAssembler.message_page(session.messages)
+        recent_messages = message_page["messages"]
         result_count = sum(1 for msg in session.messages if msg.message_type.value == "result")
         logger.info(
-            "ws connected: session=%s, messages=%d, result_messages=%d",
-            session_id, len(all_messages), result_count,
+            "ws connected: session=%s, messages=%d/%d, result_messages=%d",
+            session_id, len(recent_messages), len(session.messages), result_count,
         )
 
         git_branch = await service.get_current_git_branch(session.project_dir)
@@ -443,7 +444,9 @@ async def websocket_endpoint(
         await websocket.send_json({
             "event": "connected",
             "session": session_summary,
-            "messages": all_messages,
+            "messages": recent_messages,
+            "message_window": message_page["message_window"],
+            "user_message_markers": SessionAssembler.user_message_markers(session.messages),
         })
 
         async def _with_background_service(

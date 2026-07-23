@@ -17,6 +17,13 @@ function _ensureState(sessionId) {
     _stateMap.set(sessionId, {
       session: null,
       messages: [],
+      messageWindow: {
+        start_index: 0,
+        end_index: 0,
+        total_count: 0,
+        has_more: false,
+      },
+      userMessageMarkers: [],
       status: 'disconnected',
       error: null,
       queryHistory: [],
@@ -35,7 +42,10 @@ function _ensureState(sessionId) {
 
 function _assignIdFor(state, msg) {
   if (msg._id == null) {
-    msg._id = state._nextMsgId++
+    msg._id = msg._index ?? state._nextMsgId++
+  }
+  if (Number.isInteger(msg._index)) {
+    state._nextMsgId = Math.max(state._nextMsgId, msg._index + 1)
   }
   return msg
 }
@@ -50,6 +60,21 @@ const session = computed(() => {
 const messages = computed(() => {
   const state = _stateMap.get(currentSessionId.value)
   return state ? state.messages : []
+})
+
+const messageWindow = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state?.messageWindow || {
+    start_index: 0,
+    end_index: 0,
+    total_count: 0,
+    has_more: false,
+  }
+})
+
+const userMessageMarkers = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state?.userMessageMarkers || []
 })
 
 const status = computed(() => {
@@ -109,8 +134,25 @@ function addMessageTo(sessionId, msg) {
   const state = _ensureState(sessionId)
   if (!state) return
   if (!msg.timestamp) msg.timestamp = Date.now()
+  if (!Number.isInteger(msg._index)) {
+    msg._index = state.messageWindow.end_index
+  }
   _assignIdFor(state, msg)
   state.messages.push(msg)
+  state.messageWindow.end_index = Math.max(state.messageWindow.end_index, msg._index + 1)
+  state.messageWindow.total_count = Math.max(
+    state.messageWindow.total_count,
+    state.messageWindow.end_index,
+  )
+  state.messageWindow.has_more = state.messageWindow.start_index > 0
+  if (msg.type === 'user') {
+    const preview = String(msg.content?.text || '').replace(/\s+/g, ' ').trim()
+    state.userMessageMarkers.push({
+      index: msg._index,
+      message_id: msg.content?.message_id || '',
+      preview: preview || 'User message',
+    })
+  }
   // Collect result messages into queryHistory
   if (msg.type === 'result' && msg.content) {
     state.queryHistory.push({
@@ -131,7 +173,13 @@ function removeMessageByClientIdFor(sessionId, messageId) {
   const index = state.messages.findIndex(message => (
     message.type === 'user' && message.content?.message_id === messageId
   ))
-  if (index >= 0) state.messages.splice(index, 1)
+  if (index >= 0) {
+    state.messages.splice(index, 1)
+    const markerIndex = state.userMessageMarkers.findIndex(marker => (
+      marker.message_id === messageId
+    ))
+    if (markerIndex >= 0) state.userMessageMarkers.splice(markerIndex, 1)
+  }
 }
 
 function setMessagesFor(sessionId, msgs, sessionData) {
@@ -145,9 +193,29 @@ function setMessagesFor(sessionId, msgs, sessionData) {
       return
     }
   }
-  state._nextMsgId = msgs.length
+  const windowData = sessionData?.message_window || {}
+  const inferredStart = Number.isInteger(msgs[0]?._index) ? msgs[0]._index : 0
+  const inferredEnd = inferredStart + msgs.length
+  state.messageWindow = {
+    start_index: windowData.start_index ?? inferredStart,
+    end_index: windowData.end_index ?? inferredEnd,
+    total_count: windowData.total_count ?? inferredEnd,
+    has_more: windowData.has_more ?? inferredStart > 0,
+  }
+  state.userMessageMarkers = Array.isArray(sessionData?.user_message_markers)
+    ? sessionData.user_message_markers
+    : msgs
+      .filter(message => message.type === 'user')
+      .map(message => ({
+        index: message._index ?? 0,
+        message_id: message.content?.message_id || '',
+        preview: String(message.content?.text || '').replace(/\s+/g, ' ').trim() || 'User message',
+      }))
+  state._nextMsgId = state.messageWindow.end_index
   state.messages.length = 0
-  state.messages.push(...msgs.map(m => _assignIdFor(state, m)))
+  for (const message of msgs) {
+    state.messages.push(_assignIdFor(state, message))
+  }
   _linkTraceRunsToUserMessages(state)
   // Rebuild queryHistory from existing result messages
   const resultMsgs = msgs.filter(m => m.type === 'result' && m.content)
@@ -182,6 +250,35 @@ function setMessagesFor(sessionId, msgs, sessionData) {
   console.debug(
     `[VP] setMessagesFor(${sessionId}): total=${msgs.length}, results=${resultMsgs.length}, queryHistory=${state.queryHistory.length}`
   )
+}
+
+function prependMessagesFor(sessionId, msgs, messageWindowData, markers = []) {
+  const state = _ensureState(sessionId)
+  if (!state || !Array.isArray(msgs) || msgs.length === 0) return
+  const currentStart = state.messageWindow.start_index
+  const pageEnd = messageWindowData?.end_index ?? currentStart
+  if (pageEnd !== currentStart) return
+
+  const incoming = msgs.map(message => _assignIdFor(state, message))
+  state.messages.splice(0, 0, ...incoming)
+  state.messageWindow = {
+    start_index: messageWindowData?.start_index ?? incoming[0]?._index ?? 0,
+    end_index: state.messageWindow.end_index,
+    total_count: messageWindowData?.total_count ?? state.messageWindow.total_count,
+    has_more: messageWindowData?.has_more ?? false,
+  }
+  if (Array.isArray(markers) && markers.length > 0) {
+    state.userMessageMarkers = markers
+  }
+  _linkTraceRunsToUserMessages(state)
+}
+
+function getMessageWindowFor(sessionId) {
+  return _stateMap.get(sessionId)?.messageWindow || null
+}
+
+function getUserMessageMarkersFor(sessionId) {
+  return _stateMap.get(sessionId)?.userMessageMarkers || []
 }
 
 function setRunStepsFor(sessionId, steps = []) {
@@ -458,6 +555,8 @@ export function useSession() {
     // Computed proxies (read current session)
     session,
     messages,
+    messageWindow,
+    userMessageMarkers,
     status,
     error,
     queued,
@@ -491,6 +590,9 @@ export function useSession() {
     addMessageTo,
     removeMessageByClientIdFor,
     setMessagesFor,
+    prependMessagesFor,
+    getMessageWindowFor,
+    getUserMessageMarkersFor,
     setRunStepsFor,
     upsertRunStepFor,
     setTimelineEventsFor,

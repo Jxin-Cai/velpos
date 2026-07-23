@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -10,15 +9,13 @@ from domain.session.model.session_summary import SessionSummary
 from domain.session.model.session_audit_event import SessionAuditEvent
 from ohs.assembler.session_assembler import SessionAssembler
 
-_DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "default")
-
 
 class CreateSessionRequest(BaseModel):
     model: str = Field(
-        default=_DEFAULT_MODEL,
-        min_length=1,
+        default="",
+        min_length=0,
         max_length=100,
-        description="Claude model identifier",
+        description="Claude model identifier (empty means use settings.json default)",
     )
     project_id: str = Field(
         default="",
@@ -193,10 +190,13 @@ class SessionDetailResponse(BaseModel):
     updated_time: str | None
     git_branch: str = ""
     messages: list[dict[str, Any]]
+    message_window: dict[str, int | bool]
+    user_message_markers: list[dict[str, Any]]
 
     @classmethod
     def from_domain(cls, session: Session, git_branch: str = "") -> SessionDetailResponse:
         summary = SessionAssembler.to_summary(session, git_branch=git_branch)
+        page = SessionAssembler.message_page(session.messages)
         return cls(
             session_id=summary["session_id"],
             project_id=summary["project_id"],
@@ -210,7 +210,9 @@ class SessionDetailResponse(BaseModel):
             sdk_session_id=summary.get("sdk_session_id", ""),
             updated_time=summary["updated_time"],
             git_branch=summary.get("git_branch", ""),
-            messages=[SessionAssembler.message_to_dict(msg) for msg in session.messages],
+            messages=page["messages"],
+            message_window=page["message_window"],
+            user_message_markers=SessionAssembler.user_message_markers(session.messages),
         )
 
 

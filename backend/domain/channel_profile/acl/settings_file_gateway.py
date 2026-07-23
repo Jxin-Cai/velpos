@@ -30,3 +30,11 @@ class SettingsFileGateway(ABC):
         (preserving other keys already present in env), then writes back the file.
         """
         ...
+
+    @abstractmethod
+    async def remove_env_keys(self, keys: list[str]) -> None:
+        """Remove specified keys from the 'env' section of settings.json.
+
+        Keys not present are silently ignored.
+        """
+        ...

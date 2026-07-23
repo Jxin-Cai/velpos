@@ -18,6 +18,7 @@ from ohs.dependencies import (
     get_session_branch_application_service,
 )
 from ohs.http.api_response import ApiResponse
+from ohs.assembler.session_assembler import SessionAssembler
 from ohs.http.dto.session_dto import (
     ApplyVbRequest,
     ApplyVbResponse,
@@ -60,8 +61,14 @@ async def create_session(
     request: CreateSessionRequest,
     service: ServiceDep,
 ) -> ApiResponse[SessionResponse]:
+    model = request.model
+    if not model:
+        from infr.client.claude_settings_env import load_claude_settings_env
+        env = load_claude_settings_env()
+        model = env.get("ANTHROPIC_MODEL", "default")
+
     command = CreateSessionCommand(
-        model=request.model,
+        model=model,
         project_id=request.project_id,
         project_dir=request.project_dir,
         name=request.name,
@@ -130,6 +137,25 @@ async def get_session(
     session = await service.get_session(session_id)
     git_branch = await service.get_current_git_branch(session.project_dir)
     return ApiResponse.success(SessionDetailResponse.from_domain(session, git_branch=git_branch))
+
+
+@router.get("/{session_id}/messages", summary="Get a page of session messages")
+async def get_session_messages(
+    session_id: str,
+    service: ServiceDep,
+    before: Annotated[int | None, Query(ge=0)] = None,
+    limit: Annotated[int, Query(ge=1, le=SessionAssembler.DEFAULT_MESSAGE_PAGE_SIZE)] = (
+        SessionAssembler.DEFAULT_MESSAGE_PAGE_SIZE
+    ),
+) -> ApiResponse[dict]:
+    session = await service.get_session(session_id)
+    page = SessionAssembler.message_page(
+        session.messages,
+        before=before,
+        limit=limit,
+    )
+    page["user_message_markers"] = SessionAssembler.user_message_markers(session.messages)
+    return ApiResponse.success(page)
 
 
 def _branch_to_dict(branch) -> dict:

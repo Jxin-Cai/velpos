@@ -298,6 +298,7 @@ async def get_channel_profile_application_service(
     return ChannelProfileApplicationService(
         profile_repository=profile_repository,
         settings_file_gateway=_settings_file_service,
+        claude_agent_gateway=_claude_agent_gateway,
     )
 
 

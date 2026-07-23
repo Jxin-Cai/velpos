@@ -12,6 +12,7 @@ import SystemBlock from './SystemBlock.vue'
 import UserChoiceBlock from './UserChoiceBlock.vue'
 import PermissionRequestBlock from './PermissionRequestBlock.vue'
 import TodoProgressBlock from './TodoProgressBlock.vue'
+import ArtifactBlock from './ArtifactBlock.vue'
 import TraceButton from '@features/trace-viewer/ui/TraceButton.vue'
 
 const props = defineProps({
@@ -113,7 +114,7 @@ watch(
 
     if (msg.type === 'result') {
       renderedBlocks.value = [{
-        type: 'result',
+        type: content.is_error ? 'result' : 'text',
         html: content.text ? cachedParse(content.text) : '',
         meta: {
           duration: content.duration_ms,
@@ -121,6 +122,23 @@ watch(
           usage: content.usage,
           is_error: content.is_error,
         },
+      }]
+      return
+    }
+
+    if (msg.type === 'error') {
+      renderedBlocks.value = [{
+        type: 'result',
+        html: cachedParse(content.text || content.message || 'Unknown error'),
+        meta: { is_error: true },
+      }]
+      return
+    }
+
+    if (msg.type === 'artifact') {
+      renderedBlocks.value = [{
+        type: 'artifact',
+        ...content,
       }]
       return
     }
@@ -136,6 +154,14 @@ watch(
     }
 
     if (msg.type === 'system') {
+      if (content.is_error || content.error) {
+        renderedBlocks.value = [{
+          type: 'result',
+          html: cachedParse(content.message || content.error || 'Unknown error'),
+          meta: { is_error: true },
+        }]
+        return
+      }
       const subtype = content.subtype || ''
       let text = subtype
       if (subtype === 'auto_continue') {
@@ -289,6 +315,10 @@ function handleDelegatedClick(e) {
       <ResultBlock
         v-else-if="block.type === 'result'"
         :result="block"
+      />
+      <ArtifactBlock
+        v-else-if="['artifact', 'attachment', 'file', 'image', 'output_file'].includes(block.type)"
+        :block="block"
       />
       <SystemBlock
         v-else-if="block.type === 'system'"

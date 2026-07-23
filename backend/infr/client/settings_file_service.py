@@ -79,6 +79,16 @@ class SettingsFileService:
             settings["env"] = existing_env
             await self.write_settings(settings)
 
+    async def remove_env_keys(self, keys: list[str]) -> None:
+        """Remove specified keys from the env section."""
+        async with self._lock:
+            settings = await self.read_settings()
+            env: dict = settings.get("env", {})
+            for key in keys:
+                env.pop(key, None)
+            settings["env"] = env
+            await self.write_settings(settings)
+
     def _read_sync(self) -> dict:
         """Synchronous file read, intended to be called via asyncio.to_thread."""
         text = self._settings_path.read_text(encoding="utf-8")

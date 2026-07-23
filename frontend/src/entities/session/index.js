@@ -8,6 +8,7 @@ export {
   renameSession,
   importClaudeSession,
   listModels,
+  fetchSessionMessages,
   fetchSessionTimelineEvents,
   compactSession,
   createSessionBranch,

@@ -8,13 +8,33 @@ const props = defineProps({
     type: Array,
     required: true,
   },
+  allMessages: {
+    type: Array,
+    default: null,
+  },
+  userMessageMarkers: {
+    type: Array,
+    default: null,
+  },
+  loadMore: {
+    type: Function,
+    default: null,
+  },
+  ensureMessageLoaded: {
+    type: Function,
+    default: null,
+  },
+  loadError: {
+    type: String,
+    default: '',
+  },
   hasMore: {
     type: Boolean,
     default: false,
   },
 })
 
-const emit = defineEmits(['load-more', 'open-trace'])
+const emit = defineEmits(['load-more', 'load-through', 'open-trace'])
 
 const { currentSessionId, getTraceSpansFor } = useSession()
 
@@ -71,15 +91,31 @@ const isNearBottom = ref(true)
 const showScrollBtn = ref(false)
 const loadingMore = ref(false)
 const activeUserMessageIndex = ref(-1)
+const jumpingToMessageIndex = ref(null)
+const conversationRail = ref(null)
+let historyPagingEnabled = false
 
-const userMessageMarkers = computed(() => props.messages
-  .map((message, index) => ({ message, index }))
-  .filter(({ message }) => message?.type === 'user')
-  .map(({ message, index }) => ({
-    index,
-    key: message._id ?? message.id ?? `user-${index}`,
-    preview: userMessagePreview(message),
-  })))
+const markerSourceMessages = computed(() => props.allMessages || props.messages)
+const firstVisibleMessageIndex = computed(() => (
+  Math.max(0, markerSourceMessages.value.length - props.messages.length)
+))
+
+const resolvedUserMessageMarkers = computed(() => {
+  if (props.userMessageMarkers) {
+    return props.userMessageMarkers.map(marker => ({
+      ...marker,
+      key: marker.message_id || `user-${marker.index}`,
+    }))
+  }
+  return markerSourceMessages.value
+    .map((message, index) => ({ message, index: message?._index ?? index }))
+    .filter(({ message }) => message?.type === 'user')
+    .map(({ message, index }) => ({
+      index,
+      key: message._id ?? message.id ?? `user-${index}`,
+      preview: userMessagePreview(message),
+    }))
+})
 
 const BOTTOM_THRESHOLD = 150
 
@@ -106,29 +142,72 @@ function userMessagePreview(message) {
 
 function updateActiveUserMessage() {
   const container = messagesContainer.value
-  if (!container || !userMessageMarkers.value.length) {
+  if (!container || !resolvedUserMessageMarkers.value.length) {
     activeUserMessageIndex.value = -1
     return
   }
   const readingLine = container.scrollTop + 32
-  let active = userMessageMarkers.value[0].index
-  for (const marker of userMessageMarkers.value) {
+  let active = resolvedUserMessageMarkers.value[0].index
+  const firstVisibleIndex = props.messages[0]?._index ?? firstVisibleMessageIndex.value
+  for (let index = resolvedUserMessageMarkers.value.length - 1; index >= 0; index -= 1) {
+    if (resolvedUserMessageMarkers.value[index].index <= firstVisibleIndex) {
+      active = resolvedUserMessageMarkers.value[index].index
+      break
+    }
+  }
+  for (const marker of resolvedUserMessageMarkers.value) {
     const anchor = container.querySelector(`[data-message-index="${marker.index}"]`)
     if (anchor && anchor.offsetTop <= readingLine) active = marker.index
   }
   activeUserMessageIndex.value = active
 }
 
-function scrollToUserMessage(index) {
+watch(activeUserMessageIndex, async (index) => {
+  if (index < 0) return
+  await nextTick()
+  const rail = conversationRail.value
+  const marker = rail?.querySelector(`[data-marker-index="${index}"]`)
+  if (!rail || !marker) return
+
+  const markerTop = marker.offsetTop
+  const markerBottom = markerTop + marker.offsetHeight
+  if (markerTop < rail.scrollTop) {
+    rail.scrollTop = markerTop
+  } else if (markerBottom > rail.scrollTop + rail.clientHeight) {
+    rail.scrollTop = markerBottom - rail.clientHeight
+  }
+})
+
+async function scrollToUserMessage(index) {
   const container = messagesContainer.value
-  const anchor = container?.querySelector(`[data-message-index="${index}"]`)
-  if (!container || !anchor) return
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  container.scrollTo({
-    top: Math.max(0, anchor.offsetTop - 20),
-    behavior: reducedMotion ? 'auto' : 'smooth',
-  })
-  activeUserMessageIndex.value = index
+  if (!container || jumpingToMessageIndex.value !== null) return
+
+  isNearBottom.value = false
+  let anchor = container.querySelector(`[data-message-index="${index}"]`)
+  const requiresHistoryLoad = !anchor
+  if (requiresHistoryLoad) jumpingToMessageIndex.value = index
+  try {
+    if (!anchor) {
+      if (props.ensureMessageLoaded) {
+        await props.ensureMessageLoaded(index)
+      } else {
+        emit('load-through', index)
+      }
+      await nextTick()
+      await nextTick()
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      anchor = container.querySelector(`[data-message-index="${index}"]`)
+    }
+    if (!anchor) return
+
+    container.scrollTo({
+      top: Math.max(0, anchor.offsetTop - 20),
+      behavior: 'auto',
+    })
+    activeUserMessageIndex.value = index
+  } finally {
+    if (requiresHistoryLoad) jumpingToMessageIndex.value = null
+  }
 }
 
 function scrollToBottom() {
@@ -139,8 +218,12 @@ function scrollToBottom() {
   showScrollBtn.value = false
 }
 
-function handleScroll() {
+function handleScroll(event) {
   checkNearBottom()
+  if (event?.isTrusted && !historyPagingEnabled) {
+    historyPagingEnabled = true
+    setupSentinel()
+  }
 }
 
 // Sentinel IntersectionObserver for loading more
@@ -152,7 +235,12 @@ function setupSentinel() {
   if (sentinelObserver) sentinelObserver.disconnect()
   sentinelObserver = new IntersectionObserver(
     (entries) => {
-      if (entries[0].isIntersecting && props.hasMore && !loadingMore.value) {
+      if (
+        entries[0].isIntersecting
+        && historyPagingEnabled
+        && props.hasMore
+        && !loadingMore.value
+      ) {
         triggerLoadMore()
       }
     },
@@ -167,17 +255,30 @@ async function triggerLoadMore() {
   loadingMore.value = true
   if (sentinelObserver) sentinelObserver.disconnect()
   const prevScrollHeight = el.scrollHeight
-  emit('load-more')
-  await nextTick()
-  await nextTick()
-  await new Promise(resolve => requestAnimationFrame(resolve))
-  const newScrollHeight = el.scrollHeight
-  if (newScrollHeight !== prevScrollHeight) {
-    el.scrollTop += newScrollHeight - prevScrollHeight
+  try {
+    if (props.loadMore) {
+      await props.loadMore()
+    } else {
+      emit('load-more')
+    }
+    await nextTick()
+    await nextTick()
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const newScrollHeight = el.scrollHeight
+    if (newScrollHeight !== prevScrollHeight) {
+      el.scrollTop += newScrollHeight - prevScrollHeight
+    }
+  } finally {
+    loadingMore.value = false
+    historyPagingEnabled = false
+    await nextTick()
+    setupSentinel()
   }
-  loadingMore.value = false
-  await nextTick()
-  setupSentinel()
+}
+
+async function requestEarlierMessages() {
+  historyPagingEnabled = true
+  await triggerLoadMore()
 }
 
 // Auto-scroll when new messages arrive and user is near bottom
@@ -209,6 +310,11 @@ onMounted(() => {
   nextTick(updateActiveUserMessage)
 })
 
+watch(currentSessionId, () => {
+  historyPagingEnabled = false
+  jumpingToMessageIndex.value = null
+})
+
 onBeforeUnmount(() => {
   if (observer) {
     observer.disconnect()
@@ -227,25 +333,68 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="messages-shell">
-    <nav v-if="userMessageMarkers.length" class="conversation-rail" aria-label="User prompts in this conversation">
+    <nav
+      v-if="resolvedUserMessageMarkers.length"
+      ref="conversationRail"
+      class="conversation-rail"
+      aria-label="User prompts in this conversation"
+    >
       <button
-        v-for="marker in userMessageMarkers"
+        v-for="marker in resolvedUserMessageMarkers"
         :key="marker.key"
         class="conversation-marker"
-        :class="{ active: activeUserMessageIndex === marker.index }"
-        :aria-label="`Jump to prompt: ${marker.preview}`"
+        :class="{
+          active: activeUserMessageIndex === marker.index,
+          loading: jumpingToMessageIndex === marker.index,
+        }"
+        :disabled="jumpingToMessageIndex !== null"
+        :data-marker-index="marker.index"
+        :aria-busy="jumpingToMessageIndex === marker.index"
+        :aria-label="jumpingToMessageIndex === marker.index
+          ? `Loading prompt: ${marker.preview}`
+          : `Jump to prompt: ${marker.preview}`"
+        :title="marker.preview"
         @click="scrollToUserMessage(marker.index)"
       >
-        <span class="marker-dash" aria-hidden="true"></span>
+        <span
+          v-if="jumpingToMessageIndex === marker.index"
+          class="marker-loading-spinner"
+          aria-hidden="true"
+        ></span>
+        <span v-else class="marker-dash" aria-hidden="true"></span>
         <span class="marker-tooltip" role="tooltip">
-          <span>{{ marker.preview }}</span>
+          <span>
+            {{ jumpingToMessageIndex === marker.index ? 'Loading earlier messages…' : marker.preview }}
+          </span>
         </span>
       </button>
     </nav>
+    <div
+      v-if="jumpingToMessageIndex !== null"
+      class="jump-loading-status"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="jump-loading-spinner" aria-hidden="true"></span>
+      <span>Loading earlier messages…</span>
+    </div>
     <div ref="messagesContainer" class="messages-area" @scroll="handleScroll">
       <div class="messages-content">
-        <div ref="sentinelEl" class="load-more-sentinel">
+        <div
+          ref="sentinelEl"
+          class="load-more-sentinel"
+          :class="{ 'load-more-sentinel--active': loadingMore || loadError || (hasMore && !historyPagingEnabled) }"
+        >
           <div v-if="loadingMore" class="load-more-indicator">Loading...</div>
+          <div v-else-if="loadError" class="load-more-error" role="status">{{ loadError }}</div>
+          <button
+            v-else-if="hasMore && !historyPagingEnabled"
+            type="button"
+            class="load-more-button"
+            @click="requestEarlierMessages"
+          >
+            Load earlier messages
+          </button>
         </div>
         <div v-if="messages.length === 0" class="empty-state">
           <div class="empty-icon">
@@ -262,7 +411,7 @@ onBeforeUnmount(() => {
           v-for="(msg, index) in messages"
           :key="msg._id ?? msg.id ?? index"
           class="message-anchor"
-          :data-message-index="index"
+          :data-message-index="msg._index ?? firstVisibleMessageIndex + index"
         >
           <MessageItem
             :message="msg"
@@ -298,7 +447,8 @@ onBeforeUnmount(() => {
 
 .conversation-rail {
   position: absolute;
-  top: calc(50% - clamp(150px, 17vh, 190px));
+  top: clamp(44px, 8vh, 72px);
+  bottom: clamp(88px, 15vh, 144px);
   left: 8px;
   z-index: 32;
   display: flex;
@@ -307,6 +457,15 @@ onBeforeUnmount(() => {
   gap: 3px;
   width: 22px;
   padding: 4px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, black 10px, black calc(100% - 10px), transparent);
+}
+
+.conversation-rail::-webkit-scrollbar {
+  display: none;
 }
 
 .conversation-marker {
@@ -321,6 +480,16 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.conversation-marker:disabled {
+  cursor: wait;
+  opacity: 0.42;
+}
+
+.conversation-marker.loading {
+  color: var(--accent);
+  opacity: 1;
+}
+
 .marker-dash {
   position: absolute;
   top: 3px;
@@ -331,6 +500,18 @@ onBeforeUnmount(() => {
   background: currentColor;
   opacity: 0.56;
   transition: width var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.marker-loading-spinner {
+  position: absolute;
+  top: -1px;
+  left: 7px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: jump-loading-spin 700ms linear infinite;
 }
 
 .conversation-marker:hover,
@@ -387,6 +568,52 @@ onBeforeUnmount(() => {
   transform: translate(0, -50%);
 }
 
+.jump-loading-status {
+  position: absolute;
+  top: 14px;
+  left: 38px;
+  z-index: 34;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-bg-strong);
+  box-shadow: var(--shadow-glass);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: none;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  animation: jump-loading-enter 180ms ease-out both;
+}
+
+.jump-loading-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: jump-loading-spin 700ms linear infinite;
+}
+
+@keyframes jump-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes jump-loading-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .message-anchor {
   scroll-margin-top: 20px;
 }
@@ -396,11 +623,47 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+.load-more-sentinel--active {
+  min-height: 40px;
+}
+
 .load-more-indicator {
   text-align: center;
   padding: 12px 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.load-more-error {
+  padding: 12px 0;
+  color: var(--color-error, #ef4444);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.load-more-button {
+  display: block;
+  margin: 4px auto 12px;
+  border: 0;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.load-more-button:hover,
+.load-more-button:focus-visible {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.load-more-button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .messages-area {
@@ -500,5 +763,13 @@ onBeforeUnmount(() => {
   border-color: var(--accent);
   box-shadow: var(--shadow-active);
   transform: translateX(-50%) translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marker-loading-spinner,
+  .jump-loading-spinner,
+  .jump-loading-status {
+    animation: none;
+  }
 }
 </style>

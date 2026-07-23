@@ -304,7 +304,13 @@ function setupUnifiedHandler(connection, sessionId) {
           resultCount: data.messages?.filter(m => m.type === 'result').length || 0,
         })
         updateSessionFor(sessionId, data.session)
-        if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
+        if (data.messages) {
+          setMessagesFor(sessionId, data.messages, {
+            ...data.session,
+            message_window: data.message_window,
+            user_message_markers: data.user_message_markers,
+          })
+        }
         setStatusFor(sessionId, data.session.status || 'idle')
         syncRecoveryState(sessionId, data.session)
         updateSessionInList(sessionId, data.session)
@@ -574,7 +580,13 @@ function setupUnifiedHandler(connection, sessionId) {
         setCancelingFor(sessionId, false)
         showCancelledHintFor(sessionId)
         updateSessionFor(sessionId, data.session)
-        if (data.messages) setMessagesFor(sessionId, data.messages, data.session)
+        if (data.messages) {
+          setMessagesFor(sessionId, data.messages, {
+            ...data.session,
+            message_window: data.message_window,
+            user_message_markers: data.user_message_markers,
+          })
+        }
         setStatusFor(sessionId, data.session.status || 'idle')
         updateSessionFor(sessionId, { waiting_for_slot: false })
         setQueuedFor(sessionId, false)

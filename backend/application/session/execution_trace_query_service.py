@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -15,6 +16,17 @@ from domain.session.service.execution_trace_projector import ExecutionTraceProje
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
+
+_CONTINUATION_REQUEST_PATTERN = re.compile(
+    r"^\s*(?:"
+    r"继续(?:执行|处理|完成|往下|上次的任务|刚才的任务)?"
+    r"|接着(?:执行|处理|完成|做|来)?"
+    r"|从(?:刚才|上次)?中断处继续"
+    r"|continue(?:\s+(?:where\s+you\s+left\s+off|the\s+(?:task|plan)))?"
+    r"|resume(?:\s+(?:the\s+)?(?:task|plan|execution))?"
+    r")\s*[。.!！]?\s*$",
+    re.IGNORECASE,
+)
 
 
 class ExecutionTraceQueryService:
@@ -92,8 +104,25 @@ class ExecutionTraceQueryService:
                 records = self._records_from_agent_spans(agent_span, projection_spans)
         else:
             try:
-                records = self._read_all_records(project, session, None)
-                records = self._filter_records_to_run(records, spans)
+                all_records = self._read_all_records(project, session, None)
+                records = self._filter_records_to_run(all_records, spans)
+                continuation_spans = await self._continuation_spans(
+                    session_id,
+                    run_id,
+                    session,
+                    spans,
+                )
+                if (
+                    len(continuation_spans) > len(spans)
+                    and not self._contains_task_create(records)
+                ):
+                    continuation_records = self._filter_records_to_run(
+                        all_records,
+                        continuation_spans,
+                    )
+                    if self._contains_task_create(continuation_records):
+                        records = continuation_records
+                        projection_spans = continuation_spans
             except TranscriptNotFoundError:
                 logger.warning(
                     "session transcript not found; reconstructing execution tree from spans",
@@ -118,11 +147,103 @@ class ExecutionTraceQueryService:
             agent_id,
             default_model=default_model,
         )
-        if agent_span is None and agent.request is None:
+        if agent_span is None:
             request = self._request_for_run(session, spans)
             if request is not None:
                 agent = replace(agent, request=request)
         return agent
+
+    async def _continuation_spans(
+        self,
+        session_id: str,
+        run_id: str,
+        session: Any,
+        current_spans: list[Any],
+    ) -> list[Any]:
+        """Return adjacent interrupted runs that the selected run continues.
+
+        A resumed SDK conversation still creates a new Velpos run. The
+        transcript therefore retains the task state, while a run-only time
+        slice loses the TaskCreate records that define its plan. Link only an
+        explicit continuation request to the immediately preceding interrupted
+        run so unrelated messages remain isolated.
+        """
+        request = self._request_for_run(session, current_spans)
+        if not self._is_continuation_request(request):
+            return current_spans
+
+        session_spans = await self._trace_span_repository.find_by_session(session_id)
+        run_spans = sorted(
+            (
+                span
+                for span in session_spans
+                if span.span_type == span.SPAN_TYPE_RUN
+            ),
+            key=lambda span: span.started_time,
+        )
+        current_index = next(
+            (index for index, span in enumerate(run_spans) if span.run_id == run_id),
+            None,
+        )
+        if current_index is None:
+            return current_spans
+
+        included_run_ids = {run_id}
+        cursor = current_index
+        while cursor > 0:
+            child = run_spans[cursor]
+            child_spans = [
+                span for span in session_spans if span.run_id == child.run_id
+            ]
+            if not self._is_continuation_request(
+                self._request_for_run(session, child_spans)
+            ):
+                break
+            previous = run_spans[cursor - 1]
+            if previous.status not in {
+                previous.STATUS_CANCELLED,
+                previous.STATUS_ABANDONED,
+            }:
+                break
+            included_run_ids.add(previous.run_id)
+            cursor -= 1
+
+        if len(included_run_ids) == 1:
+            return current_spans
+        return [
+            span for span in session_spans if span.run_id in included_run_ids
+        ]
+
+    @staticmethod
+    def _is_continuation_request(request: Any) -> bool:
+        if not isinstance(request, str):
+            return False
+        return _CONTINUATION_REQUEST_PATTERN.fullmatch(request) is not None
+
+    @staticmethod
+    def _contains_task_create(records: list[dict[str, Any]]) -> bool:
+        for record in records:
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            blocks = content if isinstance(content, list) else ()
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name = block.get("name")
+                value = block.get("input")
+                if name == "TaskCreate":
+                    return True
+                if (
+                    name == "Task"
+                    and isinstance(value, dict)
+                    and (value.get("subject") is not None or value.get("activeForm") is not None)
+                    and value.get("taskId") is None
+                    and value.get("task_id") is None
+                ):
+                    return True
+        return False
 
     @staticmethod
     def _resolve_subagent_span(span: Any, spans: list[Any]) -> Any | None:

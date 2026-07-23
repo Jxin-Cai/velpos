@@ -3,10 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from domain.session.model.message import Message
 from domain.session.model.session import Session
 
 
 class SessionPresenter:
+    DEFAULT_MESSAGE_PAGE_SIZE = 5000
 
     @staticmethod
     def public_sdk_session_id(sdk_session_id: str) -> str:
@@ -68,6 +70,58 @@ class SessionPresenter:
             "git_branch": "",
             "recovery": SessionPresenter.recovery_to_dict(session),
         }
+
+    @staticmethod
+    def message_to_dict(message: Message, index: int | None = None) -> dict[str, Any]:
+        payload = {"type": message.message_type.value, "content": message.content}
+        if index is not None:
+            payload["_index"] = index
+        return payload
+
+    @staticmethod
+    def message_page(
+        messages: list[Message],
+        *,
+        before: int | None = None,
+        limit: int = DEFAULT_MESSAGE_PAGE_SIZE,
+    ) -> dict[str, Any]:
+        total_count = len(messages)
+        end_index = total_count if before is None else min(max(before, 0), total_count)
+        start_index = max(0, end_index - limit)
+        return {
+            "messages": [
+                SessionPresenter.message_to_dict(messages[index], index)
+                for index in range(start_index, end_index)
+            ],
+            "message_window": {
+                "start_index": start_index,
+                "end_index": end_index,
+                "total_count": total_count,
+                "has_more": start_index > 0,
+            },
+        }
+
+    @staticmethod
+    def user_message_markers(messages: list[Message]) -> list[dict[str, Any]]:
+        markers: list[dict[str, Any]] = []
+        for index, message in enumerate(messages):
+            if message.message_type.value != "user":
+                continue
+            content = message.content if isinstance(message.content, dict) else {}
+            text = " ".join(str(content.get("text") or "").split())
+            if not text:
+                attachments = content.get("attachments") or []
+                text = ", ".join(
+                    str(item.get("filename") or item.get("name") or "attachment")
+                    for item in attachments
+                    if isinstance(item, dict)
+                )
+            markers.append({
+                "index": index,
+                "message_id": str(content.get("message_id") or ""),
+                "preview": (text or "User message")[:160],
+            })
+        return markers
 
     @staticmethod
     def artifact_candidates_from_value(value: Any) -> list[str]:

@@ -11,18 +11,38 @@ from domain.channel_profile.model.channel_profile import ChannelProfile
 from domain.channel_profile.repository.channel_profile_repository import (
     ChannelProfileRepository,
 )
+from domain.session.acl.claude_agent_gateway import ClaudeAgentGateway
 from domain.shared.business_exception import BusinessException
 
 
 class ChannelProfileApplicationService:
 
+    _CHANNEL_ENV_KEYS = [
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "ANTHROPIC_REASONING_MODEL",
+    ]
+
     def __init__(
         self,
         profile_repository: ChannelProfileRepository,
         settings_file_gateway: SettingsFileGateway,
+        claude_agent_gateway: ClaudeAgentGateway,
     ) -> None:
         self._profile_repository = profile_repository
         self._settings_file_gateway = settings_file_gateway
+        self._claude_agent_gateway = claude_agent_gateway
 
     async def create_profile(
         self, command: CreateChannelProfileCommand
@@ -63,9 +83,7 @@ class ChannelProfileApplicationService:
         await self._profile_repository.save(profile)
 
         if profile.is_active:
-            await self._settings_file_gateway.update_env_section(
-                self._profile_to_env_vars(profile)
-            )
+            await self._sync_env_and_disconnect(profile)
 
         return profile
 
@@ -83,7 +101,8 @@ class ChannelProfileApplicationService:
         """Activate the specified channel profile.
 
         Deactivates any currently active profile, activates the target,
-        and writes the target's env vars into settings.json.
+        writes the target's env vars into settings.json, and disconnects
+        all SDK subprocesses so they reconnect with the new env.
         """
         profile = await self._profile_repository.find_by_id(profile_id)
         if profile is None:
@@ -97,11 +116,16 @@ class ChannelProfileApplicationService:
         profile.activate()
         await self._profile_repository.save(profile)
 
+        await self._sync_env_and_disconnect(profile)
+
+        return profile
+
+    async def _sync_env_and_disconnect(self, profile: ChannelProfile) -> None:
+        await self._settings_file_gateway.remove_env_keys(self._CHANNEL_ENV_KEYS)
         await self._settings_file_gateway.update_env_section(
             self._profile_to_env_vars(profile)
         )
-
-        return profile
+        await self._claude_agent_gateway.disconnect_all()
 
     @staticmethod
     def _profile_to_env_vars(profile: ChannelProfile) -> dict[str, str]:

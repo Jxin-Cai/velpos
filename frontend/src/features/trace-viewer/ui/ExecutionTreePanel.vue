@@ -90,7 +90,7 @@ watch(selectedLoopId, async (loopId) => {
       <span>Loading execution tree...</span>
     </div>
 
-    <div v-else-if="error" class="exec-error">
+    <div v-else-if="error && !tree" class="exec-error">
       <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
         <circle cx="10" cy="10" r="7.25"/><path d="M10 6.5v4.25M10 13.5h.01"/>
       </svg>
@@ -107,6 +107,9 @@ watch(selectedLoopId, async (loopId) => {
     </div>
 
     <template v-else>
+      <div v-if="error" class="exec-refresh-warning" role="status">
+        {{ error }}. Showing the last available data.
+      </div>
       <div class="exec-tree-body" :class="{ 'has-detail': selectedLoopId }">
         <div class="exec-tree-section">
           <section class="message-scope" aria-label="Current user message execution summary">
@@ -225,6 +228,16 @@ watch(selectedLoopId, async (loopId) => {
   font-size: 12px;
 }
 .exec-error { color: var(--color-error, #ef4444); }
+.exec-refresh-warning {
+  flex: 0 0 auto;
+  margin: 8px 14px 0;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 32%, var(--border-subtle));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 7%, var(--bg-primary));
+  color: var(--text-secondary);
+  font-size: 11px;
+}
 .exec-empty p { margin: 0; color: var(--text-secondary); font-size: 13px; }
 .subagent-inline-state { padding: 10px 14px 10px 60px; color: var(--text-tertiary); font-size: 11px; }
 .subagent-inline-state--error { color: var(--color-error, #ef4444); }

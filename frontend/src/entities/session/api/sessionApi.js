@@ -44,6 +44,13 @@ export function fetchSessionTimelineEvents(sessionId, limit = 500, eventTypes = 
   return get(`/sessions/${sessionId}/timeline-events?${query.toString()}`)
 }
 
+export function fetchSessionMessages(sessionId, { before, limit = 5000 } = {}) {
+  const query = new URLSearchParams()
+  if (Number.isInteger(before)) query.set('before', String(before))
+  query.set('limit', String(limit))
+  return get(`/sessions/${sessionId}/messages?${query.toString()}`)
+}
+
 export function compactSession(sessionId) {
   return post(`/sessions/${sessionId}/compact`)
 }

@@ -3,11 +3,20 @@ import { ref, computed, inject, onMounted, onBeforeUnmount, watch, nextTick } fr
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { formatDuration } from '@features/message-display'
 import { useDialogManager } from '@shared/lib/useDialogManager'
-import { useSession, listModels, createSessionBranch, listSessionBranches, compareSessions, convergeSessionBranches } from '@entities/session'
+import {
+  useSession,
+  listModels,
+  fetchSessionMessages,
+  createSessionBranch,
+  listSessionBranches,
+  compareSessions,
+  convergeSessionBranches,
+} from '@entities/session'
 import { useProject, getGitBranches, checkoutGitBranch } from '@entities/project'
 import { MessageInput, QueuedMessageCard, useSendMessage } from '@features/send-message'
 import { useCancelQuery } from '@features/cancel-query'
 import { MessageList, ThinkingIndicator } from '@features/message-display'
+import { filterConversationMessages } from '@features/message-display/lib/conversationVisibility'
 import { ClearContextButton, useClearContext } from '@features/clear-context'
 import { CommandPaletteButton, CommandPalettePopover, useCommandPalette } from '@features/command-palette'
 import { PluginManagerDialog } from '@features/plugin-manager'
@@ -31,6 +40,7 @@ const {
   session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
   queryHistory, setCurrentSessionId, updateSession, setError, setCanceling, addSession,
   restoredPrompt, setRestoredPrompt, setQueuedCommand, steeringQueued, setSteeringQueued,
+  messageWindow, userMessageMarkers, prependMessagesFor,
 } = useSession()
 const { currentProject, updateProjectInList } = useProject()
 
@@ -96,11 +106,6 @@ function openMessageTrace(runId) {
   tracePanelVisible.value = true
 }
 
-function toggleTracePanel() {
-  if (!tracePanelVisible.value) selectedTraceRunId.value = null
-  tracePanelVisible.value = !tracePanelVisible.value
-}
-
 function handleTeamNavigate({ sessionId }) {
   if (sessionId) setCurrentSessionId(sessionId)
 }
@@ -115,52 +120,88 @@ function toggleRuntimePanel() {
   localStorage.setItem('pf_runtime_panel', runtimePanelVisible.value)
 }
 
-function isTodoWriteBlock(block) {
-  return block?.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos
-}
-
-const latestTodoWriteBlock = computed(() => {
-  for (let i = messages.value.length - 1; i >= 0; i--) {
-    const blocks = messages.value[i]?.content?.blocks || []
-    for (let j = blocks.length - 1; j >= 0; j--) {
-      if (isTodoWriteBlock(blocks[j])) return blocks[j]
-    }
-  }
-  return null
-})
-
 const isSessionLoading = computed(() =>
   Boolean(currentSessionId.value) && status.value === 'disconnected' && messages.value.length === 0
 )
 
 const MESSAGE_PAGE_SIZE = 25
+const HISTORY_PAGE_SIZE = 5000
 
-const allFilteredMessages = computed(() => {
-  if (debugMode.value) return messages.value
-  const currentPlanBlock = latestTodoWriteBlock.value
-  return messages.value
-    .filter(msg => msg.type !== 'tool_result' && (msg.type !== 'system' || msg.content?.marker === 'compact'))
-    .map(msg => {
-      if (msg.type === 'assistant' && msg.content?.blocks) {
-        const filtered = msg.content.blocks.filter(
-          b => b.type !== 'tool_result'
-            && b.type !== 'thinking'
-            && (b.type !== 'tool_use' || b === currentPlanBlock)
-        )
-        if (filtered.length === 0) return null
-        return { ...msg, content: { ...msg.content, blocks: filtered } }
-      }
-      return msg
-    })
-    .filter(Boolean)
-})
+const allFilteredMessages = computed(() => filterConversationMessages(
+  messages.value,
+  { debug: debugMode.value },
+))
 
 const visibleCount = ref(MESSAGE_PAGE_SIZE)
 const displayMessages = computed(() => allFilteredMessages.value.slice(-visibleCount.value))
-const hasMoreMessages = computed(() => visibleCount.value < allFilteredMessages.value.length)
+const hasMoreMessages = computed(() => (
+  visibleCount.value < allFilteredMessages.value.length || messageWindow.value.has_more
+))
+const historyLoadError = ref('')
+let historyLoadPromise = null
 
-function loadMoreMessages() {
-  visibleCount.value = Math.min(visibleCount.value + MESSAGE_PAGE_SIZE, allFilteredMessages.value.length)
+async function loadOlderMessagePage() {
+  if (!messageWindow.value.has_more || historyLoadPromise) {
+    return historyLoadPromise || true
+  }
+  const sessionId = currentSessionId.value
+  const before = messageWindow.value.start_index
+  historyLoadError.value = ''
+  historyLoadPromise = (async () => {
+    try {
+      const data = await fetchSessionMessages(sessionId, {
+        before,
+        limit: HISTORY_PAGE_SIZE,
+      })
+      prependMessagesFor(
+        sessionId,
+        data.messages || [],
+        data.message_window,
+        data.user_message_markers || [],
+      )
+      return true
+    } catch (error) {
+      historyLoadError.value = error.message || 'Failed to load earlier messages'
+      return false
+    } finally {
+      historyLoadPromise = null
+    }
+  })()
+  return historyLoadPromise
+}
+
+async function loadMoreMessages() {
+  if (visibleCount.value < allFilteredMessages.value.length) {
+    visibleCount.value = Math.min(
+      visibleCount.value + MESSAGE_PAGE_SIZE,
+      allFilteredMessages.value.length,
+    )
+    return
+  }
+  const loaded = await loadOlderMessagePage()
+  if (loaded) {
+    visibleCount.value = Math.min(
+      visibleCount.value + MESSAGE_PAGE_SIZE,
+      allFilteredMessages.value.length,
+    )
+  }
+}
+
+async function loadThroughMessage(index) {
+  const sessionId = currentSessionId.value
+  while (
+    sessionId === currentSessionId.value
+    && index < messageWindow.value.start_index
+    && messageWindow.value.has_more
+  ) {
+    const loaded = await loadOlderMessagePage()
+    if (!loaded) return
+  }
+  if (sessionId !== currentSessionId.value) return
+  const targetPosition = allFilteredMessages.value.findIndex(message => message._index === index)
+  if (targetPosition < 0) return
+  const requiredCount = allFilteredMessages.value.length - targetPosition
+  visibleCount.value = Math.max(visibleCount.value, requiredCount)
 }
 const projectDir = computed(() => session.value?.project_dir || '')
 const projectDirName = computed(() => {
@@ -277,6 +318,8 @@ function handleCompact() {
 watch(currentSessionId, (newId) => {
   if (canceling.value) setCanceling(false)
   visibleCount.value = MESSAGE_PAGE_SIZE
+  historyLoadError.value = ''
+  historyLoadPromise = null
   messageInputRef.value?.clearAttachments()
   if (newId) {
     fetchImStatus(newId)
@@ -1111,8 +1154,12 @@ function formatMaxTokens(n) {
     <MessageList
       v-else
       :messages="displayMessages"
+      :all-messages="allFilteredMessages"
+      :user-message-markers="userMessageMarkers"
       :has-more="hasMoreMessages"
-      @load-more="loadMoreMessages"
+      :load-more="loadMoreMessages"
+      :ensure-message-loaded="loadThroughMessage"
+      :load-error="historyLoadError"
       @open-trace="openMessageTrace"
     >
       <template #footer>
@@ -1266,30 +1313,16 @@ function formatMaxTokens(n) {
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': runtimePanelVisible }"
           :aria-pressed="runtimePanelVisible"
-          aria-label="Toggle runtime activity"
+          aria-label="Toggle current Claude Code activity"
           @click="toggleRuntimePanel"
           data-tooltip="Runtime"
-          title="Runtime — show current activity"
+          title="Runtime — show what Claude Code is doing"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
             <line x1="8" y1="21" x2="16" y2="21"/>
             <line x1="12" y1="17" x2="12" y2="21"/>
             <polyline points="7 10 10 13 17 8"/>
-          </svg>
-        </button>
-        <button
-          v-if="debugMode"
-          class="toolbar-btn"
-          :class="{ 'toolbar-btn--active': tracePanelVisible }"
-          :aria-pressed="tracePanelVisible"
-          aria-label="Toggle trace tree"
-          @click="toggleTracePanel"
-          data-tooltip="Trace"
-          title="Trace tree — show execution spans"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
           </svg>
         </button>
         </div>

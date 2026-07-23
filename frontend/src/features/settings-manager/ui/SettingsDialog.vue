@@ -23,13 +23,23 @@ const AUTH_ENV_OPTIONS = [
   { value: 'ANTHROPIC_AUTH_TOKEN', label: 'ANTHROPIC_AUTH_TOKEN' },
 ]
 
-const MODEL_ENV_KEYS = [
-  { key: 'ANTHROPIC_MODEL', label: 'Default Model' },
-  { key: 'ANTHROPIC_REASONING_MODEL', label: 'Think Model' },
-  { key: 'ANTHROPIC_DEFAULT_OPUS_MODEL', label: 'Opus Model' },
-  { key: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', label: 'Haiku Model' },
-  { key: 'ANTHROPIC_DEFAULT_SONNET_MODEL', label: 'Sonnet Model' },
+const MODEL_ROLES = [
+  { role: 'Sonnet', modelKey: 'ANTHROPIC_DEFAULT_SONNET_MODEL', nameKey: 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME' },
+  { role: 'Opus', modelKey: 'ANTHROPIC_DEFAULT_OPUS_MODEL', nameKey: 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME' },
+  { role: 'Fable', modelKey: 'ANTHROPIC_DEFAULT_FABLE_MODEL', nameKey: 'ANTHROPIC_DEFAULT_FABLE_MODEL_NAME' },
+  { role: 'Haiku', modelKey: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', nameKey: 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME' },
+  { role: 'Subagent', modelKey: 'CLAUDE_CODE_SUBAGENT_MODEL', nameKey: null },
 ]
+const FALLBACK_MODEL_KEY = 'ANTHROPIC_MODEL'
+
+function onModelIdChange(form, role, newValue) {
+  if (!role.nameKey) return
+  const currentName = form.model_config[role.nameKey] || ''
+  if (!currentName || currentName === form.model_config[role.modelKey]) {
+    form.model_config[role.nameKey] = newValue
+  }
+  form.model_config[role.modelKey] = newValue
+}
 
 useEscapeToClose(() => props.visible, () => emit('close'))
 
@@ -312,28 +322,52 @@ async function copyJsonPreview() {
                   {{ fetchedModels['_add'].length }} available
                 </span>
               </div>
-              <div class="model-grid">
-                <div v-for="m in MODEL_ENV_KEYS" :key="m.key" class="model-field-row">
-                  <label class="model-field-label">{{ m.label }}</label>
+              <div class="model-grid model-grid--3col">
+                <div class="model-grid-header">Role</div>
+                <div class="model-grid-header">Display Name</div>
+                <div class="model-grid-header">Model ID</div>
+
+                <div class="model-field-label">Fallback</div>
+                <div class="model-field-cell model-field-cell--disabled">
+                  <span class="model-field-hint">overrides all roles</span>
+                </div>
+                <div class="model-field-cell">
                   <select
                     v-if="(fetchedModels['_add'] || []).length"
                     class="form-select"
-                    v-model="addForm.model_config[m.key]"
+                    v-model="addForm.model_config[FALLBACK_MODEL_KEY]"
                   >
                     <option value="">-- None --</option>
-                    <option
-                      v-for="opt in getModelOptions('_add')"
-                      :key="opt.value"
-                      :value="opt.value"
-                    >{{ opt.label }}</option>
+                    <option v-for="opt in getModelOptions('_add')" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
-                  <input
-                    v-else
-                    class="form-input"
-                    v-model="addForm.model_config[m.key]"
-                    :placeholder="m.key"
-                  />
+                  <input v-else class="form-input" v-model="addForm.model_config[FALLBACK_MODEL_KEY]" placeholder="ANTHROPIC_MODEL" />
                 </div>
+
+                <template v-for="r in MODEL_ROLES" :key="r.modelKey">
+                  <div class="model-field-label">{{ r.role }}</div>
+                  <div class="model-field-cell" :class="{ 'model-field-cell--disabled': !r.nameKey }">
+                    <input v-if="r.nameKey" class="form-input" v-model="addForm.model_config[r.nameKey]" placeholder="Display name" />
+                    <span v-else class="model-field-hint">not in /model menu</span>
+                  </div>
+                  <div class="model-field-cell">
+                    <select
+                      v-if="(fetchedModels['_add'] || []).length"
+                      class="form-select"
+                      :value="addForm.model_config[r.modelKey] || ''"
+                      @change="onModelIdChange(addForm, r, $event.target.value)"
+                    >
+                      <option value="">-- None --</option>
+                      <option v-for="opt in getModelOptions('_add')" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </select>
+                    <input
+                      v-else
+                      class="form-input"
+                      :value="addForm.model_config[r.modelKey] || ''"
+                      @input="onModelIdChange(addForm, r, $event.target.value)"
+                      :placeholder="r.modelKey"
+                    />
+                  </div>
+                </template>
               </div>
 
               <div class="form-actions">
@@ -413,28 +447,52 @@ async function copyJsonPreview() {
                         {{ fetchedModels[p.profile_id].length }} available
                       </span>
                     </div>
-                    <div class="model-grid">
-                      <div v-for="m in MODEL_ENV_KEYS" :key="m.key" class="model-field-row">
-                        <label class="model-field-label">{{ m.label }}</label>
+                    <div class="model-grid model-grid--3col">
+                      <div class="model-grid-header">Role</div>
+                      <div class="model-grid-header">Display Name</div>
+                      <div class="model-grid-header">Model ID</div>
+
+                      <div class="model-field-label">Fallback</div>
+                      <div class="model-field-cell model-field-cell--disabled">
+                        <span class="model-field-hint">overrides all roles</span>
+                      </div>
+                      <div class="model-field-cell">
                         <select
                           v-if="(fetchedModels[p.profile_id] || []).length"
                           class="form-select"
-                          v-model="editForm.model_config[m.key]"
+                          v-model="editForm.model_config[FALLBACK_MODEL_KEY]"
                         >
                           <option value="">-- None --</option>
-                          <option
-                            v-for="opt in getModelOptions(p.profile_id)"
-                            :key="opt.value"
-                            :value="opt.value"
-                          >{{ opt.label }}</option>
+                          <option v-for="opt in getModelOptions(p.profile_id)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                         </select>
-                        <input
-                          v-else
-                          class="form-input"
-                          v-model="editForm.model_config[m.key]"
-                          :placeholder="m.key"
-                        />
+                        <input v-else class="form-input" v-model="editForm.model_config[FALLBACK_MODEL_KEY]" placeholder="ANTHROPIC_MODEL" />
                       </div>
+
+                      <template v-for="r in MODEL_ROLES" :key="r.modelKey">
+                        <div class="model-field-label">{{ r.role }}</div>
+                        <div class="model-field-cell" :class="{ 'model-field-cell--disabled': !r.nameKey }">
+                          <input v-if="r.nameKey" class="form-input" v-model="editForm.model_config[r.nameKey]" placeholder="Display name" />
+                          <span v-else class="model-field-hint">not in /model menu</span>
+                        </div>
+                        <div class="model-field-cell">
+                          <select
+                            v-if="(fetchedModels[p.profile_id] || []).length"
+                            class="form-select"
+                            :value="editForm.model_config[r.modelKey] || ''"
+                            @change="onModelIdChange(editForm, r, $event.target.value)"
+                          >
+                            <option value="">-- None --</option>
+                            <option v-for="opt in getModelOptions(p.profile_id)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                          </select>
+                          <input
+                            v-else
+                            class="form-input"
+                            :value="editForm.model_config[r.modelKey] || ''"
+                            @input="onModelIdChange(editForm, r, $event.target.value)"
+                            :placeholder="r.modelKey"
+                          />
+                        </div>
+                      </template>
                     </div>
 
                     <div class="form-actions">
@@ -869,6 +927,39 @@ async function copyJsonPreview() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.model-grid--3col {
+  grid-template-columns: 80px 1fr 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.model-grid-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.model-field-cell {
+  min-width: 0;
+}
+
+.model-field-cell .form-input,
+.model-field-cell .form-select {
+  width: 100%;
+}
+
+.model-field-cell--disabled {
+  opacity: 0.5;
+}
+
+.model-field-hint {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .form-input {

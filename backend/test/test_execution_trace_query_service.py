@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -294,3 +294,146 @@ def test_keeps_all_planned_tasks_for_current_run_while_excluding_other_messages(
 
     # Assert
     assert [task.subject for task in projection.tasks] == ["Inspect", "Implement", "Verify"]
+
+
+@pytest.mark.asyncio
+async def test_restores_plan_and_appends_steps_when_continuing_interrupted_run() -> None:
+    # Arrange
+    first_started = datetime(2026, 7, 20, 9, 0, 0, tzinfo=timezone.utc)
+    continued_started = first_started.replace(minute=3)
+    first_run = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_RUN,
+        name="Agent run",
+        metadata={"source_message_id": "message-1"},
+    )
+    first_run.started_time = first_started
+    first_run.ended_time = first_started.replace(minute=2)
+    first_run.status = TraceSpan.STATUS_CANCELLED
+    continued_run = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-2",
+        span_type=TraceSpan.SPAN_TYPE_RUN,
+        name="Agent run",
+        metadata={"source_message_id": "message-2"},
+    )
+    continued_run.started_time = continued_started
+    continued_run.ended_time = continued_started + timedelta(minutes=1)
+    continued_run.status = TraceSpan.STATUS_COMPLETED
+    session = SimpleNamespace(
+        project_id="project-1",
+        model="claude-sonnet",
+        messages=[
+            SimpleNamespace(content={"message_id": "message-1", "text": "Implement the feature"}),
+            SimpleNamespace(content={"message_id": "message-2", "text": "继续"}),
+        ],
+    )
+    records = [
+        {
+            "timestamp": "2026-07-20T09:00:00Z",
+            "type": "user",
+            "uuid": "user-1",
+            "message": {"role": "user", "content": "Implement the feature"},
+        },
+        {
+            "timestamp": "2026-07-20T09:00:01Z",
+            "type": "assistant",
+            "uuid": "plan",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "create-1",
+                        "name": "TaskCreate",
+                        "input": {
+                            "taskId": "1",
+                            "subject": "Inspect",
+                            "description": "Inspect the current implementation",
+                        },
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "create-2",
+                        "name": "TaskCreate",
+                        "input": {
+                            "taskId": "2",
+                            "subject": "Implement",
+                            "description": "Implement the feature",
+                            "blockedBy": ["1"],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-07-20T09:00:02Z",
+            "type": "assistant",
+            "uuid": "start-task",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "update-1",
+                    "name": "TaskUpdate",
+                    "input": {"taskId": "1", "status": "completed"},
+                }, {
+                    "type": "tool_use",
+                    "id": "update-2",
+                    "name": "TaskUpdate",
+                    "input": {"taskId": "2", "status": "in_progress"},
+                }],
+            },
+        },
+        {
+            "timestamp": "2026-07-20T09:03:00Z",
+            "type": "user",
+            "uuid": "user-2",
+            "message": {"role": "user", "content": "继续"},
+        },
+        {
+            "timestamp": "2026-07-20T09:03:01Z",
+            "type": "assistant",
+            "uuid": "continued-step",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "bash-1",
+                    "name": "Bash",
+                    "input": {"command": "pytest"},
+                }],
+            },
+        },
+    ]
+    transcript_reader = Mock()
+    transcript_reader.read.return_value = SimpleNamespace(
+        records=records,
+        has_more=False,
+        next_cursor=0,
+    )
+    trace_repository = Mock(
+        find_by_run=AsyncMock(return_value=[continued_run]),
+        find_by_session=AsyncMock(return_value=[first_run, continued_run]),
+    )
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(find_by_id=AsyncMock(return_value=session)),
+        project_repository=Mock(
+            find_by_id=AsyncMock(return_value=SimpleNamespace(dir_path="/workspace"))
+        ),
+        trace_span_repository=trace_repository,
+        transcript_reader=transcript_reader,
+    )
+
+    # Act
+    result = await service.get_execution_tree("session-1", "run-2")
+
+    # Assert
+    assert result.request == "继续"
+    assert [task.subject for task in result.tasks] == ["Inspect", "Implement"]
+    assert [(edge.task_id, edge.depends_on_task_id) for edge in result.dependencies] == [
+        ("2", "1")
+    ]
+    assert result.tasks[1].loops[-1].id == "loop-continued-step"
+    assert result.tasks[1].loops[-1].task_id == "2"
