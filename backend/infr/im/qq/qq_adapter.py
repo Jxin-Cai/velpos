@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -165,7 +166,8 @@ class QqAdapter(ImChannelAdapter):
     async def send_message(
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
-    ) -> None:
+        idempotency_key: str = "",
+    ) -> str:
         ctx = reply_context or {}
         msg_id = ctx.get("msg_id", "")
         group_id = ctx.get("group_id", "")
@@ -184,15 +186,17 @@ class QqAdapter(ImChannelAdapter):
         try:
             if group_id:
                 logger.info("[QQ-adapter] Sending group message to %s", group_id)
-                await self._api.send_group_message(
+                result = await self._api.send_group_message(
                     group_id, content, msg_id,
                     app_id=app_id or None, app_secret=app_secret or None,
+                    msg_seq=self._message_sequence(idempotency_key),
                 )
             elif sender_id:
                 logger.info("[QQ-adapter] Sending C2C message to %s", sender_id)
-                await self._api.send_c2c_message(
+                result = await self._api.send_c2c_message(
                     sender_id, content, msg_id,
                     app_id=app_id or None, app_secret=app_secret or None,
+                    msg_seq=self._message_sequence(idempotency_key),
                 )
             else:
                 raise RuntimeError(
@@ -205,3 +209,11 @@ class QqAdapter(ImChannelAdapter):
                 exc_info=True,
             )
             raise
+        return str(result.get("id") or result.get("message_id") or "")
+
+    @staticmethod
+    def _message_sequence(idempotency_key: str) -> int | None:
+        if not idempotency_key:
+            return None
+        digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        return int(digest[:8], 16) % 2_000_000_000 + 1

@@ -6,7 +6,7 @@ import os
 from application.git_helpers import get_current_git_branch as _get_current_git_branch
 from domain.shared.async_utils import safe_create_task
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, AsyncContextManager
 
 from application.session.command.clear_context_command import ClearContextCommand
 from application.session.command.create_session_command import CreateSessionCommand
@@ -46,8 +46,8 @@ class SessionApplicationService:
         claude_agent_gateway: ClaudeAgentGateway,
         connection_manager: ConnectionManager,
         claude_session_manager: ClaudeSessionManager | None = None,
-        on_assistant_response: Callable[[str, str], Awaitable[None]] | None = None,
-        on_user_message: Callable[[str, str], Awaitable[None]] | None = None,
+        on_assistant_response: Callable[..., Awaitable[None]] | None = None,
+        on_user_message: Callable[..., Awaitable[None]] | None = None,
         project_repository: ProjectRepository | None = None,
         im_unbind_fn: Callable[[str], Awaitable[None]] | None = None,
         audit_event_repository: SessionAuditEventRepository | None = None,
@@ -57,6 +57,7 @@ class SessionApplicationService:
         timeline_event_service: SessionTimelineEventService | None = None,
         trace_collector: Any | None = None,
         session_service_factory: Callable[[], Awaitable["SessionApplicationService"]] | None = None,
+        execution_lock_factory: Callable[[str], AsyncContextManager[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -69,6 +70,7 @@ class SessionApplicationService:
         self._audit_event_repository = audit_event_repository
         self._trace_collector = trace_collector
         self._session_service_factory = session_service_factory
+        self._execution_lock_factory = execution_lock_factory
         self._recorder = SessionObservabilityRecorder(
             audit_event_repository=audit_event_repository,
             audit_event_recorder=audit_event_recorder,
@@ -100,6 +102,7 @@ class SessionApplicationService:
             on_assistant_response=on_assistant_response,
             on_user_message=on_user_message,
             session_service_factory=session_service_factory,
+            execution_lock_factory=execution_lock_factory,
         )
 
     # ── Query delegation ─────────────────────────────────────
@@ -111,7 +114,7 @@ class SessionApplicationService:
         await self._query_engine.submit_query(command)
 
     async def run_claude_query(self, command: RunQueryCommand) -> None:
-        await self._query_engine.run_claude_query(command)
+        await self._query_engine.submit_query(command)
 
     async def cancel_query(self, session_id: str) -> None:
         await self._query_engine.cancel_query(session_id)
@@ -585,6 +588,17 @@ class SessionApplicationService:
             logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
 
     async def refresh_context_usage(self, session_id: str) -> Session:
+        session_lock = await SessionQueryEngine._session_lock_pool.acquire(session_id)
+        try:
+            async with session_lock:
+                if self._execution_lock_factory is None:
+                    return await self._refresh_context_usage_locked(session_id)
+                async with self._execution_lock_factory(session_id):
+                    return await self._refresh_context_usage_locked(session_id)
+        finally:
+            await SessionQueryEngine._session_lock_pool.unref(session_id)
+
+    async def _refresh_context_usage_locked(self, session_id: str) -> Session:
         session = await self.get_session(session_id)
         if not self._claude_agent_gateway.is_connected(session_id) and session.sdk_session_id:
             await self.prewarm_connection(session_id)

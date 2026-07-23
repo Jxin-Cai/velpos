@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 
 import httpx
 
@@ -182,6 +183,7 @@ class LarkApiClient:
         msg_type: str = "text",
         receive_id_type: str = "chat_id",
         brand: str = "feishu",
+        idempotency_key: str = "",
     ) -> dict:
         """Send a message to a chat or user.
 
@@ -192,6 +194,9 @@ class LarkApiClient:
             _ep(brand, "open")
             + f"/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
         )
+        if idempotency_key:
+            request_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
+            endpoint += f"&uuid={request_uuid}"
         if msg_type == "text":
             content_body = json.dumps({"text": content})
         else:
@@ -225,12 +230,16 @@ class LarkApiClient:
         content: str,
         msg_type: str = "text",
         brand: str = "feishu",
+        idempotency_key: str = "",
     ) -> dict:
         """Reply to a specific message."""
         endpoint = (
             _ep(brand, "open")
             + f"/open-apis/im/v1/messages/{message_id}/reply"
         )
+        if idempotency_key:
+            request_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
+            endpoint += f"?uuid={request_uuid}"
         if msg_type == "text":
             content_body = json.dumps({"text": content})
         else:

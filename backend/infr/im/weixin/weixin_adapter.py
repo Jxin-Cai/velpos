@@ -279,8 +279,6 @@ class WeixinAdapter(ImChannelAdapter):
             try:
                 data = await api.get_updates(bot_token, cursor)
                 new_cursor = data.get("get_updates_buf", "")
-                if new_cursor:
-                    cursor = new_cursor
 
                 msgs = data.get("msgs", [])
                 for msg in msgs:
@@ -315,6 +313,8 @@ class WeixinAdapter(ImChannelAdapter):
                         await on_message(
                             message_id, text.strip(), from_user_id, "",
                         )
+                if new_cursor:
+                    cursor = new_cursor
 
             except asyncio.CancelledError:
                 logger.info("[WeChat-adapter] Poll loop cancelled channel=%s", channel_id)
@@ -345,32 +345,36 @@ class WeixinAdapter(ImChannelAdapter):
     async def send_message(
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
-    ) -> None:
+        idempotency_key: str = "",
+    ) -> str:
         bot_token = binding.config.get("bot_token", "")
         if not bot_token:
-            logger.warning("[WeChat-adapter] No bot_token for send_message")
-            return
+            raise RuntimeError("WeChat bot token is unavailable")
 
         ctx = reply_context or {}
         to_user_id = ctx.get("sender_id", "")
         context_token = ctx.get("context_token", "")
 
         if not to_user_id:
-            logger.warning("[WeChat-adapter] No target user for send_message")
-            return
+            raise RuntimeError("WeChat routing target is unavailable")
 
         base_url = binding.config.get("base_url", "")
         api = WeixinApiClient(base_url) if base_url else self._api
 
-        try:
-            logger.info(
-                "[WeChat-adapter] Sending message: to=%s content=%.100s",
-                to_user_id, content,
-            )
-            await api.send_text_message(bot_token, to_user_id, content, context_token)
-            logger.info("[WeChat-adapter] Message sent successfully")
-        except Exception:
-            logger.error("[WeChat-adapter] send_message failed", exc_info=True)
+        logger.info(
+            "[WeChat-adapter] Sending message: to=%s content=%.100s",
+            to_user_id,
+            content,
+        )
+        response = await api.send_text_message(
+            bot_token,
+            to_user_id,
+            content,
+            context_token,
+            idempotency_key=idempotency_key,
+        )
+        logger.info("[WeChat-adapter] Message sent successfully")
+        return str(response.get("message_id") or response.get("msg_id") or "")
 
     async def close(self) -> None:
         """Shutdown adapter — stop all poll loops across all channels."""

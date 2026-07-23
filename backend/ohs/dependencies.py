@@ -69,6 +69,7 @@ from infr.repository.session_branch_repository_impl import SessionBranchReposito
 from infr.repository.session_repository_impl import SessionRepositoryImpl
 from infr.repository.session_run_step_repository_impl import SessionRunStepRepositoryImpl
 from infr.repository.session_timeline_event_repository_impl import SessionTimelineEventRepositoryImpl
+from infr.repository.session_execution_lock import acquire_session_execution_lock
 from infr.repository.session_snapshot_repository_impl import SessionSnapshotRepositoryImpl
 from infr.repository.team_repository_impl import TeamRepositoryImpl
 from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
@@ -76,6 +77,7 @@ from infr.repository.usage_governance_repository_impl import UsageGovernanceRepo
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 from domain.im_binding.model.channel_registry import ImChannelRegistry
 from ohs.session_event_coordinator import SessionEventCoordinator
+from ohs.im_delivery_coordinator import ImDeliveryCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +125,13 @@ _im_channel_registry.register(
 _weixin_adapter = WeixinAdapter()
 _im_channel_registry.register(WEIXIN_CHANNEL_SPEC, lambda: _weixin_adapter)
 
+_im_delivery_coordinator = ImDeliveryCoordinator(_im_channel_registry)
 
 # ── Session Event Coordinator (broadcast, IM sync, audit, timeline, usage) ──
 _session_coordinator = SessionEventCoordinator(
     connection_manager=_connection_manager,
     im_channel_registry=_im_channel_registry,
+    enqueue_im_fn=_im_delivery_coordinator.enqueue_outbound,
 )
 _claude_agent_gateway.set_broadcast_fn(_session_coordinator.broadcast_with_im)
 _claude_agent_gateway.set_is_im_bound_fn(_session_coordinator.is_session_im_bound)
@@ -167,6 +171,8 @@ async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
             init_repo=ChannelInitRepositoryImpl(db_session),
             session_service_factory=_create_session_service,
             connection_manager=_connection_manager,
+            accept_inbound_fn=_im_delivery_coordinator.accept_inbound,
+            enqueue_outbound_fn=_im_delivery_coordinator.enqueue_outbound,
         )
         result = await svc.bind(session_id, channel_id, {})
         await db_session.commit()
@@ -322,6 +328,10 @@ def get_im_channel_registry() -> ImChannelRegistry:
     return _im_channel_registry
 
 
+def get_im_delivery_coordinator() -> ImDeliveryCoordinator:
+    return _im_delivery_coordinator
+
+
 def get_session_event_coordinator() -> SessionEventCoordinator:
     return _session_coordinator
 
@@ -363,6 +373,8 @@ async def get_im_channel_application_service(
         connection_manager=_connection_manager,
         get_pending_request_context_fn=_claude_agent_gateway.get_pending_request_context,
         resolve_user_response_fn=_claude_agent_gateway.resolve_user_response,
+        accept_inbound_fn=_im_delivery_coordinator.accept_inbound,
+        enqueue_outbound_fn=_im_delivery_coordinator.enqueue_outbound,
     )
 
 
@@ -402,6 +414,7 @@ async def _create_session_service(
         ),
         trace_collector=_trace_collector,
         session_service_factory=_create_session_service,
+        execution_lock_factory=acquire_session_execution_lock,
     )
 
 

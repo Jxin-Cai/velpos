@@ -55,8 +55,13 @@ class ImChannelAdapter(ABC):
     async def send_message(
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
-    ) -> None:
-        """向 IM 渠道发送消息. reply_context 携带回复路由信息."""
+        idempotency_key: str = "",
+    ) -> str:
+        """向 IM 渠道发送消息.
+
+        reply_context 携带回复路由信息；支持的平台应使用 idempotency_key
+        抑制网络超时后的重复投递。返回渠道侧消息标识，不提供时返回空串。
+        """
         ...
 
     # -- Channel initialization --

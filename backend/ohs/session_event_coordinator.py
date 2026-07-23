@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_registry import ImChannelRegistry
@@ -33,9 +34,11 @@ class SessionEventCoordinator:
         self,
         connection_manager: ConnectionManager,
         im_channel_registry: ImChannelRegistry,
+        enqueue_im_fn: Callable[..., Awaitable[int | None]] | None = None,
     ) -> None:
         self._connection_manager = connection_manager
         self._im_channel_registry = im_channel_registry
+        self._enqueue_im = enqueue_im_fn
 
     # ── WS + IM broadcast ─────────────────────────────────────────
 
@@ -79,8 +82,21 @@ class SessionEventCoordinator:
 
     # ── IM sync ───────────────────────────────────────────────────
 
-    async def _sync_to_im(self, session_id: str, content: str, log_label: str = "Outbound") -> None:
+    async def _sync_to_im(
+        self,
+        session_id: str,
+        content: str,
+        log_label: str = "Outbound",
+        deduplication_key: str | None = None,
+    ) -> None:
         """Forward a message to the bound IM channel with 3-attempt retry."""
+        if self._enqueue_im is not None:
+            await self._enqueue_im(
+                session_id,
+                content,
+                deduplication_key=deduplication_key,
+            )
+            return
         last_err = None
         for attempt in range(3):
             try:
@@ -107,11 +123,33 @@ class SessionEventCoordinator:
             "message": "IM message sync failed, the message may not have been delivered to the IM channel.",
         })
 
-    async def on_assistant_response(self, session_id: str, content: str) -> None:
-        await self._sync_to_im(session_id, content, "Outbound")
+    async def on_assistant_response(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        deduplication_key: str | None = None,
+    ) -> None:
+        await self._sync_to_im(
+            session_id,
+            content,
+            "Outbound",
+            deduplication_key,
+        )
 
-    async def on_user_message(self, session_id: str, content: str) -> None:
-        await self._sync_to_im(session_id, f"[Web User]\n{content}", "User message")
+    async def on_user_message(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        deduplication_key: str | None = None,
+    ) -> None:
+        await self._sync_to_im(
+            session_id,
+            f"[Web User]\n{content}",
+            "User message",
+            deduplication_key,
+        )
 
     # ── IM binding check ──────────────────────────────────────────
 

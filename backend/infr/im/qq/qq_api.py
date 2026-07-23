@@ -110,6 +110,7 @@ class QqApiClient:
     async def send_c2c_message(
         self, user_openid: str, content: str, msg_id: str = "",
         app_id: str | None = None, app_secret: str | None = None,
+        msg_seq: int | None = None,
     ) -> dict:
         """Send a text reply to a C2C (private) conversation."""
         logger.info(
@@ -120,6 +121,8 @@ class QqApiClient:
         body: dict = {"content": content, "msg_type": 0}
         if msg_id:
             body["msg_id"] = msg_id
+        if msg_seq is not None:
+            body["msg_seq"] = msg_seq
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
             resp = await client.post(
                 f"{API_BASE}/v2/users/{user_openid}/messages",
@@ -133,6 +136,7 @@ class QqApiClient:
     async def send_group_message(
         self, group_openid: str, content: str, msg_id: str = "",
         app_id: str | None = None, app_secret: str | None = None,
+        msg_seq: int | None = None,
     ) -> dict:
         """Send a text reply to a group conversation."""
         logger.info(
@@ -143,6 +147,8 @@ class QqApiClient:
         body: dict = {"content": content, "msg_type": 0}
         if msg_id:
             body["msg_id"] = msg_id
+        if msg_seq is not None:
+            body["msg_seq"] = msg_seq
         async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
             resp = await client.post(
                 f"{API_BASE}/v2/groups/{group_openid}/messages",

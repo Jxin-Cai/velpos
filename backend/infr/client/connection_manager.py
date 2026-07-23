@@ -12,6 +12,7 @@ from domain.session.acl.connection_manager import (
 )
 
 logger = logging.getLogger(__name__)
+_SEND_TIMEOUT_SECONDS = 5.0
 
 
 class ConnectionManager(ConnectionManagerPort):
@@ -56,9 +57,23 @@ class ConnectionManager(ConnectionManagerPort):
     @staticmethod
     async def _safe_send(ws: WebSocket, data: dict[str, Any]) -> WebSocket | None:
         try:
-            await ws.send_json(data)
+            await asyncio.wait_for(
+                ws.send_json(data),
+                timeout=_SEND_TIMEOUT_SECONDS,
+            )
             return None
+        except TimeoutError:
+            logger.warning(
+                "websocket_send_timeout",
+                extra={"event": data.get("event", "")},
+            )
+            return ws
         except Exception:
+            logger.warning(
+                "websocket_send_failed",
+                extra={"event": data.get("event", "")},
+                exc_info=True,
+            )
             return ws
 
     async def broadcast_global(self, data: dict[str, Any]) -> None:

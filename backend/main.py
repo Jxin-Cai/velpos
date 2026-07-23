@@ -116,6 +116,7 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.project_memory_entry_model  # noqa: F401
     import infr.repository.claude_md_revision_model  # noqa: F401
     import infr.repository.trace_span_model  # noqa: F401
+    import infr.repository.im_delivery_model  # noqa: F401
 
     connectable = async_engine_from_config(
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
@@ -163,6 +164,11 @@ async def _run_alembic_upgrade() -> None:
 
     async with connectable.connect() as connection:
         await connection.run_sync(_do_upgrade)
+        # MySQL auto-commits the DDL statements, but Alembic's version-table
+        # update is still transactional. Without this commit the schema is
+        # upgraded while alembic_version remains stale, so every restart tries
+        # to run the same migration again.
+        await connection.commit()
     await connectable.dispose()
 
 
@@ -175,6 +181,7 @@ async def _resume_im_listeners() -> None:
         get_im_channel_registry,
         get_connection_manager,
         get_create_session_service_factory,
+        get_im_delivery_coordinator,
     )
     from application.im_binding.im_channel_application_service import ImChannelApplicationService
 
@@ -187,6 +194,8 @@ async def _resume_im_listeners() -> None:
             init_repo=init_repo,
             session_service_factory=get_create_session_service_factory(),
             connection_manager=get_connection_manager(),
+            accept_inbound_fn=get_im_delivery_coordinator().accept_inbound,
+            enqueue_outbound_fn=get_im_delivery_coordinator().enqueue_outbound,
         )
         bindings = await binding_repo.find_all_bound()
         for binding in bindings:
@@ -238,7 +247,11 @@ async def _restore_channel_profile_settings() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from ohs.dependencies import get_im_config, get_im_channel_registry
+    from ohs.dependencies import (
+        get_im_config,
+        get_im_channel_registry,
+        get_im_delivery_coordinator,
+    )
 
     im_config = get_im_config()
     im_channel_registry = get_im_channel_registry()
@@ -261,6 +274,10 @@ async def lifespan(app: FastAPI):
 
     registered = [ct.value for ct in im_channel_registry.registered_types]
     logger.info("IM channels registered: %s", registered)
+
+    im_delivery = get_im_delivery_coordinator()
+    im_delivery.start()
+    logger.info("Durable IM inbox/outbox workers started")
 
     # Restore active channel profile settings after rebuild
     try:
@@ -298,6 +315,11 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to start execution watchdog runner", exc_info=True)
 
     yield
+
+    try:
+        await im_delivery.close()
+    except Exception:
+        logger.error("Failed to stop durable IM delivery workers", exc_info=True)
 
     if watchdog_runner is not None:
         try:

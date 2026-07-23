@@ -4,7 +4,7 @@ export function useSendMessage(wsConnection) {
   const { setError, addMessage } = useSession()
 
   function sendPrompt(promptOrData, options = {}) {
-    if (!wsConnection || wsConnection.getReadyState() !== WebSocket.OPEN) {
+    if (!wsConnection) {
       setError('Not connected')
       return null
     }
@@ -39,7 +39,7 @@ export function useSendMessage(wsConnection) {
     }
     const sent = wsConnection.send(payload)
     if (!sent) {
-      setError('Connection lost, message not sent')
+      setError('Unable to queue message')
       return null
     }
 

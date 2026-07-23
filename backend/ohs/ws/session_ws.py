@@ -74,6 +74,8 @@ class _WsContext:
 
 async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
     prompt = data.get("prompt", "")
+    effective_prompt = prompt or "Please review the attached files."
+    client_message_id = str(data.get("message_id", ""))[:64] or uuid.uuid4().hex
     images = data.get("images", [])
     incoming_attachments = list(data.get("attachments") or [])
     for img in images:
@@ -83,6 +85,15 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
             "data": img.get("data", ""),
         })
     current_session = await ctx.service.get_session(ctx.session_id)
+    existing_index = next(
+        (
+            index
+            for index, message in enumerate(current_session.messages)
+            if message.message_type.value == "user"
+            and message.content.get("message_id") == client_message_id
+        ),
+        None,
+    )
 
     # Protect listener sessions from manual input
     if current_session.name.startswith("[SYSTEM] Lark Agent Listener"):
@@ -90,6 +101,63 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
             "event": "error",
             "message": "Cannot send prompts to listener session",
         })
+    elif existing_index is not None:
+        existing_message = current_session.messages[existing_index]
+        existing_prompt = existing_message.content.get(
+            "raw_prompt",
+            existing_message.content.get("text", ""),
+        )
+        if (
+            existing_prompt != effective_prompt
+            and not str(existing_prompt).startswith(f"{effective_prompt}\n\n[")
+        ):
+            await ctx.websocket.send_json({
+                "event": "error",
+                "message": "message_id was already used for a different prompt",
+                "message_id": client_message_id,
+                "code": "CLIENT_MESSAGE_ID_CONFLICT",
+            })
+            return
+
+        completed = False
+        for message in current_session.messages[existing_index + 1:]:
+            if message.message_type.value == "user":
+                break
+            if message.message_type.value == "result":
+                completed = True
+                break
+        await ctx.websocket.send_json({
+            "event": "prompt_started",
+            "message_id": client_message_id,
+            "duplicate": True,
+            "completed": completed,
+        })
+        if completed or (
+            current_session.is_running
+            and ctx.service.is_agent_connected(ctx.session_id)
+        ):
+            return
+
+        if current_session.is_running:
+            await ctx.service.ensure_session_idle(ctx.session_id)
+        saved_attachments = list(existing_message.content.get("attachments", []))
+        image_paths = [
+            item.get("path", "")
+            for item in saved_attachments
+            if str(item.get("mime_type", "")).startswith("image/")
+            and item.get("path")
+        ]
+        command = RunQueryCommand(
+            session_id=ctx.session_id,
+            prompt=effective_prompt,
+            client_message_id=client_message_id,
+            image_paths=image_paths,
+            attachments=saved_attachments,
+        )
+        safe_create_task(
+            ctx.submit_query_background(command),
+            name=f"resume_claude_query_{ctx.session_id}",
+        )
     elif prompt or incoming_attachments:
         saved_attachments = []
         image_paths = []
@@ -111,13 +179,23 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
                 saved_attachments.append(ref)
                 if mime_type.startswith("image/"):
                     image_paths.append(ref["path"])
-            except Exception as attachment_err:
-                logger.warning("Failed to save attachment: %s", attachment_err)
+            except Exception:
+                logger.error(
+                    "Failed to save attachment for session=%s",
+                    ctx.session_id,
+                    exc_info=True,
+                )
+                await ctx.websocket.send_json({
+                    "event": "error",
+                    "message": "Failed to save attachment; the prompt was not submitted",
+                    "message_id": client_message_id,
+                })
+                return
 
         command = RunQueryCommand(
             session_id=ctx.session_id,
-            prompt=prompt or "Please review the attached files.",
-            client_message_id=str(data.get("message_id", ""))[:64],
+            prompt=effective_prompt,
+            client_message_id=client_message_id,
             image_paths=image_paths,
             attachments=saved_attachments,
         )
@@ -291,6 +369,12 @@ async def _handle_user_response(ctx: _WsContext, data: dict) -> None:
             "message": "No pending request to respond to",
         })
 
+async def _handle_ping(ctx: _WsContext, data: dict) -> None:
+    await ctx.websocket.send_json({
+        "event": "pong",
+        "timestamp": data.get("timestamp"),
+    })
+
 
 _ACTION_HANDLERS: dict[str, Callable[[_WsContext, dict], Awaitable[None]]] = {
     "send_prompt": _handle_send_prompt,
@@ -302,6 +386,7 @@ _ACTION_HANDLERS: dict[str, Callable[[_WsContext, dict], Awaitable[None]]] = {
     "set_model": _handle_set_model,
     "set_permission_mode": _handle_set_permission_mode,
     "user_response": _handle_user_response,
+    "ping": _handle_ping,
 }
 
 
@@ -462,12 +547,9 @@ async def websocket_endpoint(
             try:
                 async def _refresh(bg_service: SessionApplicationService) -> None:
                     refreshed = await bg_service.refresh_context_usage(session_id)
-                    refreshed_summary = await _build_session_summary(
-                        bg_service, refreshed, include_agent_state=True,
-                    )
                     await manager.broadcast(session_id, {
-                        "event": "status",
-                        "session": refreshed_summary,
+                        "event": "context_usage",
+                        "last_input_tokens": refreshed.last_input_tokens,
                     })
 
                 await _with_background_service(_refresh)
@@ -530,6 +612,11 @@ async def websocket_endpoint(
             handler = _ACTION_HANDLERS.get(action)
             if handler:
                 await handler(ctx, data)
+            else:
+                await websocket.send_json({
+                    "event": "protocol_error",
+                    "message": f"Unsupported action: {action}",
+                })
 
     except WebSocketDisconnect:
         logger.info("websocket_disconnected", extra={"session_id": session_id})

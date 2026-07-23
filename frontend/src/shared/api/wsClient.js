@@ -64,13 +64,18 @@ export function createGlobalEventConnection() {
 export function createWsConnection(sessionId) {
   let ws = null
   let reconnectTimer = null
+  let heartbeatTimer = null
   let eventHandler = null
   let reconnectAttempt = 0
   let destroyed = false
+  let lastServerEventAt = 0
+  const pendingPrompts = new Map()
 
   const BACKOFF_BASE = 1000
   const BACKOFF_MAX = 30000
   const JITTER_MAX = 500
+  const HEARTBEAT_INTERVAL = 25000
+  const HEARTBEAT_TIMEOUT = 75000
 
   function getReconnectDelay() {
     const delay = Math.min(BACKOFF_BASE * Math.pow(2, reconnectAttempt), BACKOFF_MAX)
@@ -88,26 +93,53 @@ export function createWsConnection(sessionId) {
 
     ws.onopen = () => {
       reconnectAttempt = 0
+      lastServerEventAt = Date.now()
+      for (const payload of pendingPrompts.values()) {
+        ws.send(JSON.stringify(payload))
+      }
+      heartbeatTimer = setInterval(() => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          if (Date.now() - lastServerEventAt > HEARTBEAT_TIMEOUT) {
+            ws.close()
+            return
+          }
+          ws.send(JSON.stringify({ action: 'ping', timestamp: Date.now() }))
+        }
+      }, HEARTBEAT_INTERVAL)
     }
 
     ws.onmessage = (event) => {
       if (eventHandler) {
         try {
           const data = JSON.parse(event.data)
+          lastServerEventAt = Date.now()
+          if (
+            data.message_id
+            && ['prompt_started', 'message_queued', 'status_change', 'error'].includes(data.event)
+          ) {
+            pendingPrompts.delete(data.message_id)
+          }
           eventHandler(data)
-        } catch {
-          // Ignore malformed messages
+        } catch (error) {
+          eventHandler({
+            event: 'protocol_error',
+            message: `Malformed WebSocket event: ${error.message}`,
+          })
         }
       }
     }
 
     ws.onclose = (event) => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
       if (destroyed) return
       // Notify handler that the connection dropped — lets UI clear stale status
       if (eventHandler) {
         eventHandler({ event: 'ws_disconnected', code: event.code })
       }
-      if (event.code !== WS_CLOSE_NORMAL && event.code !== WS_CLOSE_NOT_FOUND) {
+      if (event.code !== WS_CLOSE_NOT_FOUND) {
         const delay = getReconnectDelay()
         reconnectAttempt++
         reconnectTimer = setTimeout(() => {
@@ -124,11 +156,15 @@ export function createWsConnection(sessionId) {
   }
 
   function send(data) {
+    const isPrompt = data?.action === 'send_prompt' && data.message_id
+    if (isPrompt) {
+      pendingPrompts.set(data.message_id, data)
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data))
       return true
     }
-    return false
+    return Boolean(isPrompt)
   }
 
   function onEvent(handler) {
@@ -141,6 +177,11 @@ export function createWsConnection(sessionId) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+    pendingPrompts.clear()
     if (ws) {
       ws.close(WS_CLOSE_NORMAL)
       ws = null

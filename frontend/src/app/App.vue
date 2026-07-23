@@ -378,6 +378,7 @@ function setupUnifiedHandler(connection, sessionId) {
         break
 
       case 'error':
+      case 'protocol_error':
         if (!getCancelingFor(sessionId)) {
           setErrorFor(sessionId, data.message)
           addNotification({
@@ -414,6 +415,9 @@ function setupUnifiedHandler(connection, sessionId) {
       case 'queue_started':
         setSteeringQueuedFor(sessionId, false)
         setQueuedCommandFor(sessionId, null)
+        if (data.duplicate) {
+          break
+        }
         removeMessageByClientIdFor(sessionId, data.message_id)
         addMessageTo(sessionId, {
           type: 'user',
@@ -468,6 +472,12 @@ function setupUnifiedHandler(connection, sessionId) {
           waiting_reason: null,
           slot_queue_position: null,
           slot_capacity: data.capacity || null,
+        })
+        break
+
+      case 'context_usage':
+        updateSessionFor(sessionId, {
+          last_input_tokens: data.last_input_tokens || 0,
         })
         break
 

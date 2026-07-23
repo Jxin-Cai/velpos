@@ -9,7 +9,7 @@ from pathlib import Path
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncContextManager
 
 from domain.shared.async_utils import KeyedLockPool, safe_create_task
 from application.session.command.run_query_command import RunQueryCommand
@@ -86,9 +86,10 @@ class SessionQueryEngine:
         accept_or_reject_sdk_session_id_fn: Callable[..., Awaitable[bool]],
         resolve_resume_sdk_session_id_fn: Callable[..., Awaitable[str]],
         refresh_context_usage_fn: Callable[..., Awaitable[bool]],
-        on_assistant_response: Callable[[str, str], Awaitable[None]] | None = None,
-        on_user_message: Callable[[str, str], Awaitable[None]] | None = None,
+        on_assistant_response: Callable[..., Awaitable[None]] | None = None,
+        on_user_message: Callable[..., Awaitable[None]] | None = None,
         session_service_factory: Callable | None = None,
+        execution_lock_factory: Callable[[str], AsyncContextManager[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -103,6 +104,7 @@ class SessionQueryEngine:
         self._on_assistant_response = on_assistant_response
         self._on_user_message = on_user_message
         self._session_service_factory = session_service_factory
+        self._execution_lock_factory = execution_lock_factory
 
     async def cleanup_session_state(self, session_id: str) -> None:
         async with self._queue_guard:
@@ -133,40 +135,11 @@ class SessionQueryEngine:
                     payload={"reason": "session_runner_busy"},
                 )
             async with session_lock:
-                if query_semaphore.locked():
-                    async with self._queue_guard:
-                        self._waiting_for_slot.add(command.session_id)
-                        self._slot_wait_started_at[command.session_id] = time.monotonic()
-                        queue_position = len(self._waiting_for_slot)
-                    await self._connection_manager.broadcast(
-                        command.session_id,
-                        {
-                            "event": "resource_waiting",
-                            "status": "waiting_slot",
-                            "queue_position": queue_position,
-                            "capacity": self._configured_query_capacity(),
-                        },
-                    )
-                    await self._recorder.record_audit_event(
-                        command.session_id,
-                        "resource_waiting",
-                        payload={"reason": "concurrency_limit"},
-                    )
-                async with query_semaphore:
-                    async with self._queue_guard:
-                        wait_started_at = self._slot_wait_started_at.pop(command.session_id, None)
-                        self._waiting_for_slot.discard(command.session_id)
-                    if wait_started_at is not None:
-                        await self._connection_manager.broadcast(
-                            command.session_id,
-                            {
-                                "event": "resource_acquired",
-                                "status": "slot_acquired",
-                                "waited_ms": int((time.monotonic() - wait_started_at) * 1000),
-                                "capacity": self._configured_query_capacity(),
-                            },
-                        )
-                    await self.run_claude_query(command)
+                if self._execution_lock_factory is None:
+                    await self._run_with_capacity(command, query_semaphore)
+                else:
+                    async with self._execution_lock_factory(command.session_id):
+                        await self._run_with_capacity(command, query_semaphore)
         except asyncio.CancelledError:
             async with self._queue_guard:
                 self._waiting_for_slot.discard(command.session_id)
@@ -182,6 +155,46 @@ class SessionQueryEngine:
         finally:
             await self._session_lock_pool.unref(command.session_id)
 
+    async def _run_with_capacity(
+        self,
+        command: RunQueryCommand,
+        query_semaphore: asyncio.Semaphore,
+    ) -> None:
+        if query_semaphore.locked():
+            async with self._queue_guard:
+                self._waiting_for_slot.add(command.session_id)
+                self._slot_wait_started_at[command.session_id] = time.monotonic()
+                queue_position = len(self._waiting_for_slot)
+            await self._connection_manager.broadcast(
+                command.session_id,
+                {
+                    "event": "resource_waiting",
+                    "status": "waiting_slot",
+                    "queue_position": queue_position,
+                    "capacity": self._configured_query_capacity(),
+                },
+            )
+            await self._recorder.record_audit_event(
+                command.session_id,
+                "resource_waiting",
+                payload={"reason": "concurrency_limit"},
+            )
+        async with query_semaphore:
+            async with self._queue_guard:
+                wait_started_at = self._slot_wait_started_at.pop(command.session_id, None)
+                self._waiting_for_slot.discard(command.session_id)
+            if wait_started_at is not None:
+                await self._connection_manager.broadcast(
+                    command.session_id,
+                    {
+                        "event": "resource_acquired",
+                        "status": "slot_acquired",
+                        "waited_ms": int((time.monotonic() - wait_started_at) * 1000),
+                        "capacity": self._configured_query_capacity(),
+                    },
+                )
+            await self.run_claude_query(command)
+
     @staticmethod
     def _configured_query_capacity() -> int:
         raw_capacity = os.getenv("SESSION_MAX_CONCURRENT_QUERIES", "8")
@@ -195,6 +208,8 @@ class SessionQueryEngine:
             return 8
 
     async def run_claude_query(self, command: RunQueryCommand) -> None:
+        if await self._acknowledge_terminal_duplicate(command):
+            return
         ctx = await self._prepare_query(command)
         async with self._queue_guard:
             self._active_contexts[command.session_id] = ctx
@@ -244,6 +259,79 @@ class SessionQueryEngine:
     # ------------------------------------------------------------------
     # Phase 1: Prepare query context
     # ------------------------------------------------------------------
+
+    async def _acknowledge_terminal_duplicate(
+        self,
+        command: RunQueryCommand,
+    ) -> bool:
+        """Return completed client requests without executing them a second time."""
+        if not command.client_message_id:
+            return False
+        session = await self._session_repository.find_by_id(command.session_id)
+        if session is None:
+            raise BusinessException("Session not found")
+
+        matching_index = self._find_user_message_index(
+            session.messages,
+            command.client_message_id,
+        )
+        if matching_index is None:
+            return False
+        self._validate_duplicate_payload(session.messages[matching_index], command)
+
+        for message in session.messages[matching_index + 1:]:
+            if message.message_type == MessageType.USER:
+                break
+            if message.message_type == MessageType.RESULT:
+                await self._connection_manager.broadcast(
+                    command.session_id,
+                    {
+                        "event": "prompt_started",
+                        "message_id": command.client_message_id,
+                        "duplicate": True,
+                        "completed": True,
+                    },
+                )
+                logger.info(
+                    "[session=%s] ignored completed duplicate request: message_id=%s",
+                    command.session_id,
+                    command.client_message_id,
+                )
+                return True
+        return False
+
+    @staticmethod
+    def _find_user_message_index(messages: list[Message], message_id: str) -> int | None:
+        return next(
+            (
+                index
+                for index, message in enumerate(messages)
+                if message.message_type == MessageType.USER
+                and message.content.get("message_id") == message_id
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _validate_duplicate_payload(
+        existing_message: Message,
+        command: RunQueryCommand,
+    ) -> None:
+        existing_text = str(existing_message.content.get("text", ""))
+        existing_raw_prompt = str(
+            existing_message.content.get("raw_prompt", existing_text)
+        )
+        same_prompt = (
+            existing_raw_prompt == command.prompt
+            or existing_text == command.prompt
+            or existing_text.startswith(f"{command.prompt}\n\n[")
+        )
+        existing_attachments = existing_message.content.get("attachments", [])
+        if not same_prompt or existing_attachments != command.attachments:
+            raise BusinessException(
+                "client_message_id was already used for a different request",
+                "CLIENT_MESSAGE_ID_CONFLICT",
+            )
 
     async def _prepare_query(self, command: RunQueryCommand) -> _QueryContext:
         session = await self._session_repository.find_by_id(command.session_id)
@@ -321,16 +409,26 @@ class SessionQueryEngine:
         self._claude_agent_gateway.mark_active(command.session_id)
 
         message_id = command.client_message_id or uuid.uuid4().hex[:12]
-        user_message = Message.create(
-            message_type=MessageType.USER,
-            content={
-                "message_id": message_id,
-                "run_id": run_id,
-                "text": actual_prompt,
-                "attachments": command.attachments,
-            },
-        )
-        session.add_message(user_message)
+        existing_index = self._find_user_message_index(session.messages, message_id)
+        if existing_index is None:
+            user_message = Message.create(
+                message_type=MessageType.USER,
+                content={
+                    "message_id": message_id,
+                    "run_id": run_id,
+                    "text": actual_prompt,
+                    "raw_prompt": command.prompt,
+                    "attachments": command.attachments,
+                },
+            )
+            session.add_message(user_message)
+        else:
+            self._validate_duplicate_payload(session.messages[existing_index], command)
+            logger.info(
+                "[session=%s] resuming incomplete request: message_id=%s",
+                command.session_id,
+                message_id,
+            )
 
         return _QueryContext(
             session=session,
@@ -372,8 +470,10 @@ class SessionQueryEngine:
                 },
             )
             if self._on_user_message:
-                safe_create_task(
-                    self._fire_user_outbound(session.session_id, actual_prompt),
+                await self._fire_user_outbound(
+                    session.session_id,
+                    actual_prompt,
+                    f"session:{session.session_id}:user:{ctx.message_id}",
                 )
 
         async def _prepare_sdk_connection():
@@ -640,16 +740,32 @@ class SessionQueryEngine:
 
     @staticmethod
     def _build_stream_end_result(session: Session, auto_continue_count: int) -> Message:
+        assistant_output = MessageConversionService.extract_assistant_text(
+            session.messages
+        ).strip()
+        has_assistant_output = bool(assistant_output)
         return Message.create(
             message_type=MessageType.RESULT,
             content={
-                "text": "Agent stream ended without a successful result.",
+                "text": (
+                    assistant_output
+                    if has_assistant_output
+                    else "Agent stream ended without a successful result."
+                ),
                 "duration_ms": 0,
                 "duration_api_ms": 0,
                 "num_turns": 0,
-                "is_error": True,
+                "is_error": not has_assistant_output,
                 "total_cost_usd": 0,
-                "stop_reason": "auto_continue_exhausted" if auto_continue_count > 0 else "stream_ended",
+                "stop_reason": (
+                    "stream_ended_after_output"
+                    if has_assistant_output
+                    else (
+                        "auto_continue_exhausted"
+                        if auto_continue_count > 0
+                        else "stream_ended"
+                    )
+                ),
                 "usage": {
                     "input_tokens": session.usage.input_tokens,
                     "output_tokens": session.usage.output_tokens,
@@ -765,8 +881,10 @@ class SessionQueryEngine:
         if self._on_assistant_response:
             text = MessageConversionService.extract_assistant_text(session.messages)
             if text:
-                safe_create_task(
-                    self._fire_outbound(session.session_id, text),
+                await self._fire_outbound(
+                    session.session_id,
+                    text,
+                    f"session:{session.session_id}:assistant:{ctx.message_id}",
                 )
 
         logger.info(
@@ -961,17 +1079,35 @@ class SessionQueryEngine:
             else:
                 safe_create_task(self.submit_query(queued))
 
-    async def _fire_outbound(self, session_id: str, text: str) -> None:
+    async def _fire_outbound(
+        self,
+        session_id: str,
+        text: str,
+        deduplication_key: str,
+    ) -> None:
         try:
-            await self._on_assistant_response(session_id, text)
+            await self._on_assistant_response(
+                session_id,
+                text,
+                deduplication_key=deduplication_key,
+            )
         except Exception:
             logger.warning(
                 "[session=%s] outbound IM sync failed", session_id, exc_info=True,
             )
 
-    async def _fire_user_outbound(self, session_id: str, text: str) -> None:
+    async def _fire_user_outbound(
+        self,
+        session_id: str,
+        text: str,
+        deduplication_key: str,
+    ) -> None:
         try:
-            await self._on_user_message(session_id, text)
+            await self._on_user_message(
+                session_id,
+                text,
+                deduplication_key=deduplication_key,
+            )
         except Exception:
             logger.warning(
                 "[session=%s] user message IM sync failed", session_id, exc_info=True,

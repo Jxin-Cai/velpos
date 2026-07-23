@@ -119,10 +119,17 @@ class OpenImAdapter(ImChannelAdapter):
                 "Failed to disconnect WS for %s", binding.im_user_id,
             )
 
-    async def send_message(self, binding: ImBinding, content: str, _reply_context: dict | None = None) -> None:
+    async def send_message(
+        self,
+        binding: ImBinding,
+        content: str,
+        reply_context: dict | None = None,
+        idempotency_key: str = "",
+    ) -> str:
         await self._im_gateway.send_message(
             binding.im_user_id, binding.friend_user_id, content,
         )
+        return ""
 
     # ── Message lifecycle ──
 
@@ -172,5 +179,11 @@ class OpenImStubAdapter(ImChannelAdapter):
     async def unbind(self, _binding: ImBinding) -> None:
         pass
 
-    async def send_message(self, _binding: ImBinding, _content: str, _reply_context: dict | None = None) -> None:
-        pass
+    async def send_message(
+        self,
+        binding: ImBinding,
+        content: str,
+        reply_context: dict | None = None,
+        idempotency_key: str = "",
+    ) -> str:
+        raise RuntimeError("OpenIM infrastructure is not configured")

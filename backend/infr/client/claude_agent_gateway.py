@@ -231,7 +231,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         attempted resume but had to fall back to a fresh session.
         """
         stderr_lines, stderr_cb = self._create_stderr_collector()
-        extra_args = {}
+        # The UI can switch an existing connection to bypassPermissions.
+        # Claude CLI rejects that control request unless bypass mode was
+        # explicitly enabled when the process started.  This flag only makes
+        # the mode available; it does not bypass permissions by default.
+        extra_args = {"allow-dangerously-skip-permissions": None}
         if enable_file_checkpointing:
             extra_args["replay-user-messages"] = None
         common_kwargs = dict(

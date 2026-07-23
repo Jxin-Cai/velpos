@@ -20,7 +20,7 @@ test('test_keeps_only_public_conversation_content_when_debug_is_disabled', () =>
   assert.deepEqual(filtered.map(message => message.type), ['user', 'interactive', 'result'])
 })
 
-test('test_keeps_error_and_artifact_blocks_when_assistant_contains_internal_blocks', () => {
+test('test_keeps_only_artifact_blocks_when_assistant_contains_internal_blocks', () => {
   // Arrange
   const messages = [{
     type: 'assistant',
@@ -40,7 +40,7 @@ test('test_keeps_error_and_artifact_blocks_when_assistant_contains_internal_bloc
   // Assert
   assert.deepEqual(
     filtered.content.blocks.map(block => block.type),
-    ['tool_result', 'artifact'],
+    ['artifact'],
   )
 })
 
@@ -55,21 +55,21 @@ test('test_returns_original_messages_when_debug_is_enabled', () => {
   assert.equal(filtered, messages)
 })
 
-test('test_keeps_only_failed_results_when_tool_results_are_mixed', () => {
+test('test_hides_errors_when_debug_is_disabled', () => {
   // Arrange
-  const messages = [{
-    type: 'tool_result',
-    content: {
-      results: [
-        { tool_use_id: 'success', content: 'ok', is_error: false },
-        { tool_use_id: 'failure', content: 'denied', is_error: true },
-      ],
+  const messages = [
+    { type: 'error', content: { message: 'connection failed' } },
+    { type: 'result', content: { text: 'request failed', is_error: true } },
+    {
+      type: 'tool_result',
+      content: { results: [{ content: 'denied', is_error: true }] },
     },
-  }]
+    { type: 'system', content: { error: 'stream failed' } },
+  ]
 
   // Act
-  const [filtered] = filterConversationMessages(messages)
+  const filtered = filterConversationMessages(messages)
 
   // Assert
-  assert.equal(filtered.content.results[0].tool_use_id, 'failure')
+  assert.deepEqual(filtered, [])
 })

@@ -48,6 +48,7 @@ import infr.repository.project_command_policy_model  # noqa: F401
 import infr.repository.project_memory_entry_model  # noqa: F401
 import infr.repository.claude_md_revision_model  # noqa: F401
 import infr.repository.channel_init_model  # noqa: F401
+import infr.repository.im_delivery_model  # noqa: F401
 # ------------------------------------------------
 
 config = context.config

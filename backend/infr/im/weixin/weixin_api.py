@@ -5,6 +5,7 @@ Ported from Claude-to-IM-skill/src/adapters/weixin/weixin-api.ts.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import secrets
 from base64 import b64encode
@@ -81,9 +82,14 @@ class WeixinApiClient:
         to_user_id: str,
         text: str,
         context_token: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         """POST /ilink/bot/sendmessage — send text message."""
-        client_id = f"vp-weixin-{secrets.token_hex(4)}"
+        client_id = (
+            f"vp-{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:48]}"
+            if idempotency_key
+            else f"vp-weixin-{secrets.token_hex(4)}"
+        )
         return await self._post(
             bot_token,
             "sendmessage",

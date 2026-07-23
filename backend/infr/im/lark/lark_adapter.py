@@ -654,11 +654,11 @@ class LarkAdapter(ImChannelAdapter):
     async def send_message(
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
-    ) -> None:
+        idempotency_key: str = "",
+    ) -> str:
         creds = self._get_credentials(binding)
         if not creds:
-            logger.warning("[Lark-adapter] No credentials for send_message")
-            return
+            raise RuntimeError("Lark credentials are unavailable")
         app_id, app_secret, brand = creds
 
         ctx = reply_context or {}
@@ -674,34 +674,46 @@ class LarkAdapter(ImChannelAdapter):
             receive_id_type = "open_id"
 
         if not receive_id:
-            logger.warning("[Lark-adapter] send_message: no chat_id or open_id in reply_context")
-            return
+            raise RuntimeError("Lark routing target is unavailable")
 
-        try:
-            token = await self._api.get_tenant_token(app_id, app_secret, brand)
+        token = await self._api.get_tenant_token(app_id, app_secret, brand)
 
-            sent = False
-            # Try reply first if we have a message ID
-            if reply_msg_id:
-                try:
-                    await self._api.reply_message(token, reply_msg_id, content, brand=brand)
-                    sent = True
-                except Exception:
-                    logger.warning(
-                        "[Lark-adapter] reply_message failed, falling back to send_message: channel=%s",
-                        binding.channel_id, exc_info=True,
-                    )
-
-            # Fallback: send as new message
-            if not sent:
-                await self._api.send_message(
-                    token, receive_id, content,
-                    receive_id_type=receive_id_type, brand=brand,
+        sent = False
+        response: dict = {}
+        if reply_msg_id:
+            try:
+                response = await self._api.reply_message(
+                    token,
+                    reply_msg_id,
+                    content,
+                    brand=brand,
+                    idempotency_key=idempotency_key,
+                )
+                sent = True
+            except LarkApiError:
+                logger.warning(
+                    "[Lark-adapter] reply_message failed, falling back to send_message: channel=%s",
+                    binding.channel_id,
+                    exc_info=True,
                 )
 
-            logger.info("[Lark-adapter] Message sent: channel=%s target=%s reply=%s", binding.channel_id, receive_id[:8], bool(reply_msg_id and sent))
-        except Exception:
-            logger.error("[Lark-adapter] send_message error channel=%s", binding.channel_id, exc_info=True)
+        if not sent:
+            response = await self._api.send_message(
+                token,
+                receive_id,
+                content,
+                receive_id_type=receive_id_type,
+                brand=brand,
+                idempotency_key=idempotency_key,
+            )
+
+        logger.info(
+            "[Lark-adapter] Message sent: channel=%s target=%s reply=%s",
+            binding.channel_id,
+            receive_id[:8],
+            bool(reply_msg_id and sent),
+        )
+        return str(response.get("message_id") or "")
 
     async def close(self) -> None:
         """Shutdown adapter — stop all WS listeners."""
