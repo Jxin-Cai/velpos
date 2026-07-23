@@ -107,7 +107,17 @@ class ExecutionTraceQueryService:
                 main_spans = self._spans_owned_by_agent(main_agent_span, spans)
                 records = self._records_from_agent_spans(main_agent_span, main_spans)
 
-        agent = self._projector.project(records, projection_spans, agent_id)
+        default_model = (
+            agent_span.metadata.get("model")
+            if agent_span is not None
+            else getattr(session, "model", None)
+        )
+        agent = self._projector.project(
+            records,
+            projection_spans,
+            agent_id,
+            default_model=default_model,
+        )
         if agent_span is None and agent.request is None:
             request = self._request_for_run(session, spans)
             if request is not None:

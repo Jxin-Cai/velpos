@@ -117,7 +117,7 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
       ...base,
       kind: 'model',
       label: 'Model turn',
-      title: 'Input and output',
+      title: props.loop?.model || 'Input and output',
       input: event.content,
       output: output?.content,
       endedTime: output?.timestamp,
@@ -127,7 +127,13 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
   if (event.type === 'model_output' || event.type === 'assistant_message') {
     if (event.source_uuid && modelInputSources.value.has(event.source_uuid)) return []
     if (!event.source_uuid && pairedModelOutputIndices.value.has(sourceIndex)) return []
-    return [{ ...base, kind: 'output', label: 'Model output', title: 'Assistant response', output: event.content }]
+    return [{
+      ...base,
+      kind: 'output',
+      label: 'Model output',
+      title: props.loop?.model || 'Assistant response',
+      output: event.content,
+    }]
   }
 
   if (event.type === 'thinking') {

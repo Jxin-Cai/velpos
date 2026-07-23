@@ -41,6 +41,7 @@ class ExecutionTraceProjector:
         records: Iterable[Mapping[str, Any]],
         spans: Iterable[TraceSpan] = (),
         agent_id: str = "main",
+        default_model: str | None = None,
     ) -> ExecutionAgent:
         normalized_records = self._coalesce_assistant_turns(records)
         projection_spans = list(spans)
@@ -154,7 +155,12 @@ class ExecutionTraceProjector:
                 loop = AgentLoop(
                     id=f"loop-{source_uuid or loop_index}", task_id=task_id,
                     model_input=input_content, assistant_content=tuple(blocks), events=tuple(events),
-                    model=self._text(message.get("model")), stop_reason=self._text(message.get("stop_reason")),
+                    model=(
+                        self._text(message.get("model"))
+                        or self._text(record.get("model"))
+                        or self._text(default_model)
+                    ),
+                    stop_reason=self._text(message.get("stop_reason")),
                     usage=dict(message.get("usage") or {}), provenance=self._provenance(warnings),
                     started_time=started_time,
                     ended_time=record_timestamp,

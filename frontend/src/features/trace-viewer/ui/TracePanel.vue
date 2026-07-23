@@ -248,6 +248,14 @@ function exportTrace() {
   outline: none;
   background: var(--dialog-surface);
   box-shadow: var(--dialog-shadow);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.trace-panel button,
+.trace-panel select,
+.run-picker {
+  user-select: none;
+  -webkit-user-select: none;
 }
 .trace-header {
   display: flex;

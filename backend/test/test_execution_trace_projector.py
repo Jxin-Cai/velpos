@@ -32,6 +32,46 @@ def test_creates_implicit_task_and_loop_when_transcript_has_no_explicit_task() -
     assert projection.tasks[0].loops[0].provenance.reconstructed_from_transcript is True
 
 
+def test_uses_default_model_when_transcript_omits_model() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "message": {"role": "assistant", "content": "Done"},
+    }]
+
+    # Act
+    projection = ExecutionTraceProjector().project(
+        records,
+        default_model="claude-sonnet-4-6",
+    )
+
+    # Assert
+    assert projection.tasks[0].loops[0].model == "claude-sonnet-4-6"
+
+
+def test_prefers_transcript_model_over_default_model() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": "Done",
+        },
+    }]
+
+    # Act
+    projection = ExecutionTraceProjector().project(
+        records,
+        default_model="claude-sonnet-4-6",
+    )
+
+    # Assert
+    assert projection.tasks[0].loops[0].model == "claude-opus-4-6"
+
+
 def test_uses_direct_parent_message_as_input_for_each_agent_loop() -> None:
     # Arrange
     records = [
