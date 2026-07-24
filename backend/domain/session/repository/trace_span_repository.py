@@ -29,6 +29,9 @@ class TraceSpanRepository(ABC):
     async def find_by_session(self, session_id: str, limit: int = 1000) -> list[TraceSpan]: ...
 
     @abstractmethod
+    async def find_running(self) -> list[TraceSpan]: ...
+
+    @abstractmethod
     async def find_running_by_tool_use_id(self, session_id: str, tool_use_id: str) -> TraceSpan | None: ...
 
     @abstractmethod

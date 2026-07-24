@@ -5,6 +5,7 @@ import logging
 import os
 import time
 import uuid
+from enum import Enum
 from pathlib import Path
 
 from collections.abc import Awaitable, Callable
@@ -24,8 +25,14 @@ from domain.session.model.session import Session
 from domain.session.service.message_conversion_service import MessageConversionService
 from domain.session.repository.session_repository import SessionRepository
 from domain.shared.business_exception import BusinessException
+from domain.team.model.status import CardExecutionStatus
 
 logger = logging.getLogger(__name__)
+
+
+class QueueMessageOutcome(str, Enum):
+    QUEUED = "queued"
+    RUN_IMMEDIATELY = "run_immediately"
 
 
 @dataclass
@@ -809,6 +816,26 @@ class SessionQueryEngine:
                     execution.id,
                 )
                 return
+            expected_status = (
+                CardExecutionStatus.COMPLETED
+                if succeeded
+                else CardExecutionStatus.FAILED
+            )
+            if execution.is_terminal:
+                log = (
+                    logger.info
+                    if execution.status is expected_status
+                    else logger.warning
+                )
+                log(
+                    "[session=%s] skipping card execution sync because execution %s "
+                    "is already terminal with status=%s, expected=%s",
+                    session.session_id,
+                    execution.id,
+                    execution.status.value,
+                    expected_status.value,
+                )
+                return
             if succeeded:
                 card.complete_execution(execution.id)
                 if execution.agent_slot_id:
@@ -1288,8 +1315,19 @@ class SessionQueryEngine:
             },
         )
 
-    async def queue_message(self, session_id: str, command: RunQueryCommand) -> None:
+    async def queue_message(
+        self,
+        session_id: str,
+        command: RunQueryCommand,
+    ) -> QueueMessageOutcome:
         async with self._queue_guard:
+            # The WebSocket may still see a persisted RUNNING status after the
+            # active turn has entered finalization. Queueing at that point
+            # strands the message because the finalizer may already have
+            # drained the queue. Make the decision under the same guard used by
+            # active-context removal and queue draining.
+            if self._active_contexts.get(session_id) is None:
+                return QueueMessageOutcome.RUN_IMMEDIATELY
             previous = self._queued_messages.get(session_id)
             self._queued_messages[session_id] = command
         await self._set_queued_command(session_id, command)
@@ -1310,6 +1348,7 @@ class SessionQueryEngine:
             },
         )
         logger.info("[session=%s] 消息已排队 (latest-wins)", session_id)
+        return QueueMessageOutcome.QUEUED
 
     async def clear_queued_message(self, session_id: str) -> None:
         async with self._queue_guard:

@@ -9,6 +9,7 @@ import pytest
 
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
+from application.session.session_query_engine import QueueMessageOutcome
 
 os.environ.setdefault("CLAUDE_CLI_PATH", "/usr/bin/true")
 
@@ -23,7 +24,7 @@ def _context(session) -> SimpleNamespace:
             get_session=AsyncMock(return_value=session),
             is_agent_connected=lambda _session_id: True,
             ensure_session_idle=AsyncMock(),
-            queue_message=AsyncMock(),
+            queue_message=AsyncMock(return_value=QueueMessageOutcome.QUEUED),
         ),
         attachment_service=SimpleNamespace(
             save_base64_attachment=AsyncMock(),
@@ -151,3 +152,32 @@ async def test_resumes_incomplete_prompt_when_session_is_idle():
     submitted = ctx.submit_query_background.await_args.args[0]
     assert submitted.attachments == attachments
     assert submitted.image_paths == ["/tmp/image.png"]
+
+
+@pytest.mark.asyncio
+async def test_starts_prompt_when_running_status_is_stale_during_finalization():
+    # Arrange
+    ctx = _context(_session([], is_running=True))
+    ctx.service.queue_message.return_value = QueueMessageOutcome.RUN_IMMEDIATELY
+
+    # Act
+    await _handle_send_prompt(
+        ctx,
+        {
+            "action": "send_prompt",
+            "message_id": "message-after-finish",
+            "prompt": "next request",
+        },
+    )
+    await asyncio.sleep(0)
+
+    # Assert
+    submitted = ctx.submit_query_background.await_args.args[0]
+    assert submitted.client_message_id == "message-after-finish"
+    ctx.websocket.send_json.assert_awaited_with({
+        "event": "prompt_started",
+        "message_id": "message-after-finish",
+        "prompt": "next request",
+        "image_count": 0,
+        "attachments": [],
+    })

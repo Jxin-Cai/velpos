@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
@@ -168,6 +169,7 @@ class SchedulerApplicationService:
             created_new_session = task.execution_mode == "new_session"
             if created_new_session:
                 session = await service.create_session(CreateSessionCommand(
+                    model=os.getenv("DEFAULT_MODEL", "default"),
                     project_id=task.project_id,
                     project_dir=project_dir,
                     name=f"[Scheduled] {task.name}",

@@ -50,6 +50,18 @@ class SessionRunStepRepositoryImpl(SessionRunStepRepository):
             raise
         return result.scalar_one_or_none() or ""
 
+    async def find_running(self) -> list[SessionRunStep]:
+        stmt = (
+            select(SessionRunStepModel)
+            .where(SessionRunStepModel.status == "running")
+            .order_by(
+                SessionRunStepModel.started_time.asc(),
+                SessionRunStepModel.id.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(model) for model in result.scalars().all()]
+
     async def commit(self) -> None:
         try:
             await self._session.commit()

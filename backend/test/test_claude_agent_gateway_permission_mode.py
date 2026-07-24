@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 import infr.client.claude_agent_gateway as claude_agent_gateway_module
@@ -39,3 +41,28 @@ async def test_enables_runtime_bypass_when_sdk_client_starts(monkeypatch) -> Non
     assert captured_options["extra_args"] == {
         "allow-dangerously-skip-permissions": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_propagates_cancellation_when_pending_permission_is_cancelled() -> None:
+    # Arrange
+    gateway = ClaudeAgentGateway(
+        cli_path="/usr/local/bin/claude",
+        permission_mode="acceptEdits",
+    )
+
+    async def broadcast(_session_id: str, _event: dict) -> None:
+        return None
+
+    gateway._broadcast_fn = broadcast
+    callback = gateway._create_can_use_tool_callback("session-1")
+    permission_task = asyncio.create_task(callback("Bash", {"command": "pwd"}, None))
+    await asyncio.sleep(0)
+
+    # Act
+    cancelled = await gateway.cancel_pending_response("session-1")
+
+    # Assert
+    assert cancelled is True
+    with pytest.raises(asyncio.CancelledError):
+        await permission_task

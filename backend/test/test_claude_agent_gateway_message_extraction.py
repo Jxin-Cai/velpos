@@ -1,4 +1,4 @@
-from claude_agent_sdk.types import ResultMessage
+from claude_agent_sdk.types import ResultMessage, SystemMessage
 
 from infr.client.claude_agent_gateway import ClaudeAgentGateway
 
@@ -61,3 +61,32 @@ def test_extracts_synthetic_task_timeout_notification_as_system_message() -> Non
             "summary": "Background task timed out before reporting completion.",
         },
     }
+
+
+def test_ignores_thinking_tokens_when_sdk_returns_typed_system_message() -> None:
+    # Arrange
+    message = SystemMessage(
+        subtype="thinking_tokens",
+        data={"thinking_tokens": 42},
+    )
+
+    # Act
+    extracted = ClaudeAgentGateway._extract_message_info(message)
+
+    # Assert
+    assert extracted is None
+
+
+def test_ignores_thinking_tokens_when_adapter_returns_mapping() -> None:
+    # Arrange
+    message = {
+        "type": "system",
+        "subtype": "thinking_tokens",
+        "thinking_tokens": 42,
+    }
+
+    # Act
+    extracted = ClaudeAgentGateway._extract_message_info(message)
+
+    # Assert
+    assert extracted is None

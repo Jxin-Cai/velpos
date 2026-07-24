@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from domain.team.acl.workspace_gateway import WorkspaceUnavailableError
 from infr.workspace.filesystem_workspace_gateway import FilesystemWorkspaceGateway
 
 
@@ -277,3 +278,15 @@ def test_detects_collision_when_distinct_refs_normalize_to_same_slug(
         gateway.create_independent_workspace(
             str(team_root), "team-a", "slot", str(project)
         )
+
+
+def test_reports_workspace_unavailable_when_persisted_directory_was_removed(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    gateway = FilesystemWorkspaceGateway()
+    missing_workspace = tmp_path / "removed-team-workspace"
+
+    # Act / Assert
+    with pytest.raises(WorkspaceUnavailableError, match="missing or invalid"):
+        gateway.create_execution_workspace(str(missing_workspace), "execution-1")

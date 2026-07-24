@@ -3,9 +3,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import infr.config.database as database_module
+import infr.repository.card_execution_repository_impl as execution_repository_module
+import infr.repository.wish_card_repository_impl as card_repository_module
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 from domain.session.model.session import Session
+from domain.team.model.status import CardExecutionStatus
 from application.session.session_query_engine import SessionQueryEngine
 
 
@@ -66,6 +70,55 @@ def test_transient_result_error_not_detected_when_model_is_not_allowed() -> None
 
     # Assert
     assert is_transient is False
+
+
+@pytest.mark.asyncio
+async def test_skips_card_sync_when_execution_is_already_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    execution = SimpleNamespace(
+        id="execution-1",
+        card_id="card-1",
+        status=CardExecutionStatus.COMPLETED,
+        is_terminal=True,
+    )
+    card = SimpleNamespace(complete_execution=Mock(), fail_execution=Mock())
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return SimpleNamespace()
+
+        async def __aexit__(self, _exc_type, _exc, _traceback):
+            return False
+
+    monkeypatch.setattr(
+        database_module,
+        "async_session_factory",
+        lambda: _SessionContext(),
+    )
+    monkeypatch.setattr(
+        execution_repository_module,
+        "CardExecutionRepositoryImpl",
+        lambda _db: SimpleNamespace(find_by_id=AsyncMock(return_value=execution)),
+    )
+    monkeypatch.setattr(
+        card_repository_module,
+        "WishCardRepositoryImpl",
+        lambda _db: SimpleNamespace(find_by_id=AsyncMock(return_value=card)),
+    )
+    engine = object.__new__(SessionQueryEngine)
+    session = SimpleNamespace(
+        session_id="session-1",
+        card_execution_id="execution-1",
+    )
+
+    # Act
+    await engine._sync_team_card_execution(session, succeeded=True)
+
+    # Assert
+    card.complete_execution.assert_not_called()
+    card.fail_execution.assert_not_called()
 
 
 @pytest.mark.asyncio

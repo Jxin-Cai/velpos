@@ -713,7 +713,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 return PermissionResultDeny(message="User response timeout")
             except asyncio.CancelledError:
                 logger.info("can_use_tool cancelled: session=%s, tool=%s", session_id, tool_name)
-                return PermissionResultDeny(message="Cancelled by user")
+                # Connection shutdown and query cancellation both cancel this
+                # Future. Propagate cancellation so Claude does not receive a
+                # fabricated user denial and continue from a false premise.
+                raise
             finally:
                 async with self._lock:
                     self._pending_user_responses.pop(session_id, None)
@@ -1095,7 +1098,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         return models
 
     # System subtypes that carry no useful information for the user
-    _IGNORED_SYSTEM_SUBTYPES: set[str] = {"init", "greeting"}
+    _IGNORED_SYSTEM_SUBTYPES: frozenset[str] = frozenset({
+        "init",
+        "greeting",
+        "thinking_tokens",
+    })
 
     # Known actual context window sizes for Claude models.
     _ANTHROPIC_DEFAULT_CONTEXT_WINDOW = 200_000
@@ -1189,6 +1196,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                     "output_tokens": usage.get("output_tokens", 0),
                 }
             if message_type in {"system", "SystemMessage"}:
+                subtype = str(msg.get("subtype") or "")
+                if subtype in ClaudeAgentGateway._IGNORED_SYSTEM_SUBTYPES:
+                    logger.debug("忽略无信息价值的 system 消息: subtype=%s", subtype)
+                    return None
                 return {
                     "message_type": "system",
                     "content": {

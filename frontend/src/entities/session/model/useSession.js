@@ -1,4 +1,8 @@
 import { ref, computed, reactive } from 'vue'
+import {
+  markInteractiveMessageAnswered,
+  preserveInteractiveAnswerState,
+} from './interactiveMessageState'
 
 // ── Per-session state map ──
 // key: sessionId → { session, messages, status, error, queryHistory, runSteps, timelineEvents, queued, steeringQueued, _nextMsgId }
@@ -193,9 +197,10 @@ function setMessagesFor(sessionId, msgs, sessionData) {
       return
     }
   }
+  const mergedMessages = preserveInteractiveAnswerState(state.messages, msgs)
   const windowData = sessionData?.message_window || {}
-  const inferredStart = Number.isInteger(msgs[0]?._index) ? msgs[0]._index : 0
-  const inferredEnd = inferredStart + msgs.length
+  const inferredStart = Number.isInteger(mergedMessages[0]?._index) ? mergedMessages[0]._index : 0
+  const inferredEnd = inferredStart + mergedMessages.length
   state.messageWindow = {
     start_index: windowData.start_index ?? inferredStart,
     end_index: windowData.end_index ?? inferredEnd,
@@ -204,7 +209,7 @@ function setMessagesFor(sessionId, msgs, sessionData) {
   }
   state.userMessageMarkers = Array.isArray(sessionData?.user_message_markers)
     ? sessionData.user_message_markers
-    : msgs
+    : mergedMessages
       .filter(message => message.type === 'user')
       .map(message => ({
         index: message._index ?? 0,
@@ -213,12 +218,12 @@ function setMessagesFor(sessionId, msgs, sessionData) {
       }))
   state._nextMsgId = state.messageWindow.end_index
   state.messages.length = 0
-  for (const message of msgs) {
+  for (const message of mergedMessages) {
     state.messages.push(_assignIdFor(state, message))
   }
   _linkTraceRunsToUserMessages(state)
   // Rebuild queryHistory from existing result messages
-  const resultMsgs = msgs.filter(m => m.type === 'result' && m.content)
+  const resultMsgs = mergedMessages.filter(m => m.type === 'result' && m.content)
   if (resultMsgs.length > 0) {
     state.queryHistory.length = 0
     state.queryHistory.push(...resultMsgs.map(m => ({
@@ -250,6 +255,12 @@ function setMessagesFor(sessionId, msgs, sessionData) {
   console.debug(
     `[VP] setMessagesFor(${sessionId}): total=${msgs.length}, results=${resultMsgs.length}, queryHistory=${state.queryHistory.length}`
   )
+}
+
+function markInteractiveAnsweredFor(sessionId, message) {
+  const state = _stateMap.get(sessionId)
+  if (!state) return false
+  return markInteractiveMessageAnswered(state.messages, message)
 }
 
 function prependMessagesFor(sessionId, msgs, messageWindowData, markers = []) {
@@ -590,6 +601,7 @@ export function useSession() {
     addMessageTo,
     removeMessageByClientIdFor,
     setMessagesFor,
+    markInteractiveAnsweredFor,
     prependMessagesFor,
     getMessageWindowFor,
     getUserMessageMarkersFor,

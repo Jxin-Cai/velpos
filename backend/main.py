@@ -272,6 +272,40 @@ async def lifespan(app: FastAPI):
     # Re-apply logging config — Alembic fileConfig resets root logger to WARN
     _configure_logging(force=True)
 
+    try:
+        from application.session.interrupted_run_recovery_service import (
+            InterruptedRunRecoveryService,
+        )
+        from infr.config.database import async_session_factory
+        from infr.repository.session_repository_impl import SessionRepositoryImpl
+        from infr.repository.session_run_step_repository_impl import (
+            SessionRunStepRepositoryImpl,
+        )
+        from infr.repository.trace_span_repository_impl import TraceSpanRepositoryImpl
+
+        async with async_session_factory() as recovery_session:
+            recovery = InterruptedRunRecoveryService(
+                session_repository=SessionRepositoryImpl(recovery_session),
+                run_step_repository=SessionRunStepRepositoryImpl(recovery_session),
+                trace_span_repository=TraceSpanRepositoryImpl(recovery_session),
+            )
+            recovery_result = await recovery.recover()
+            await recovery_session.commit()
+        if (
+            recovery_result.session_count
+            or recovery_result.step_count
+            or recovery_result.span_count
+        ):
+            logger.warning(
+                "Recovered interrupted Agent work after backend restart: "
+                "sessions=%d steps=%d spans=%d",
+                recovery_result.session_count,
+                recovery_result.step_count,
+                recovery_result.span_count,
+            )
+    except Exception:
+        logger.error("Failed to recover interrupted Agent work", exc_info=True)
+
     registered = [ct.value for ct in im_channel_registry.registered_types]
     logger.info("IM channels registered: %s", registered)
 
@@ -474,6 +508,6 @@ if __name__ == "__main__":
         "main:app",
         host=os.getenv("SERVER_HOST", "0.0.0.0"),
         port=int(os.getenv("SERVER_PORT", "8083")),
-        reload=True,
+        reload=os.getenv("BACKEND_RELOAD", "false").lower() in ("1", "true", "yes"),
         log_level="info",
     )

@@ -62,6 +62,16 @@ class TraceCollector:
                 await self._flush_task
             except asyncio.CancelledError:
                 pass
+        running_session_ids = {
+            span.session_id
+            for span in self._buffer.values()
+            if span.status == TraceSpan.STATUS_RUNNING
+        }
+        for session_id in running_session_ids:
+            self.abandon_all_running(
+                session_id,
+                reason="Backend process stopped before the run completed",
+            )
         await self._flush()
 
     def _ensure_started(self) -> None:

@@ -55,6 +55,20 @@ test('test_returns_original_messages_when_debug_is_enabled', () => {
   assert.equal(filtered, messages)
 })
 
+test('test_hides_thinking_tokens_system_message_when_debug_is_enabled', () => {
+  // Arrange
+  const messages = [
+    { type: 'system', content: { subtype: 'thinking_tokens' } },
+    { type: 'system', content: { subtype: 'task_progress' } },
+  ]
+
+  // Act
+  const filtered = filterConversationMessages(messages, { debug: true })
+
+  // Assert
+  assert.deepEqual(filtered, [messages[1]])
+})
+
 test('test_hides_errors_when_debug_is_disabled', () => {
   // Arrange
   const messages = [

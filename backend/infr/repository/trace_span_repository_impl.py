@@ -71,6 +71,18 @@ class TraceSpanRepositoryImpl(TraceSpanRepository):
         models.reverse()
         return [self._to_domain(m) for m in models]
 
+    async def find_running(self) -> list[TraceSpan]:
+        stmt = (
+            select(TraceSpanModel)
+            .where(TraceSpanModel.status == TraceSpan.STATUS_RUNNING)
+            .order_by(
+                TraceSpanModel.started_time.asc(),
+                TraceSpanModel.sequence.asc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(model) for model in result.scalars().all()]
+
     async def find_running_by_tool_use_id(self, session_id: str, tool_use_id: str) -> TraceSpan | None:
         stmt = (
             select(TraceSpanModel)

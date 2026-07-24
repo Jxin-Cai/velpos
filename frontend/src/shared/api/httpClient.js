@@ -15,8 +15,12 @@ async function request(url, options = {}) {
       let errorMsg = `HTTP error: ${res.status} ${res.statusText}`
       try {
         const body = await res.json()
-        if (body && body.message) {
+        if (typeof body?.message === 'string' && body.message) {
           errorMsg = body.message
+        } else if (typeof body?.detail === 'string' && body.detail) {
+          // FastAPI's HTTPException serializes its business message as
+          // {"detail": "..."}, rather than the ApiResponse shape.
+          errorMsg = body.detail
         }
       } catch {
         // response body is not JSON, use default error message

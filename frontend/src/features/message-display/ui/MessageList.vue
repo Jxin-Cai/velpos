@@ -36,7 +36,11 @@ const props = defineProps({
 
 const emit = defineEmits(['load-more', 'load-through', 'open-trace'])
 
-const { currentSessionId, getTraceSpansFor } = useSession()
+const {
+  currentSessionId,
+  getTraceSpansFor,
+  markInteractiveAnsweredFor,
+} = useSession()
 
 const traceSummaryByRun = computed(() => {
   const summaries = new Map()
@@ -417,7 +421,9 @@ onBeforeUnmount(() => {
             :message="msg"
             :trace-run-id="traceRunIdFor(msg)"
             :trace-summary="traceSummaryFor(msg)"
+            :interactive-answered="Boolean(msg.content?.interaction_answered)"
             @open-trace="emit('open-trace', $event)"
+            @interactive-answered="markInteractiveAnsweredFor(currentSessionId, msg)"
           />
         </div>
         <slot name="footer"></slot>

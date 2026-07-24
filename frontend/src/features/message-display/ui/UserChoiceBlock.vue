@@ -12,6 +12,7 @@ const selections = ref({})
 const otherTexts = ref({})
 const activeQuestionIndex = ref(0)
 const questionTabs = ref([])
+const submitting = ref(false)
 const componentId = useId()
 const OTHER_LABEL = '__other__'
 
@@ -40,7 +41,7 @@ function toggleOption(qIdx, optLabel, multiSelect) {
   }
 
   if (!multiSelect && optLabel !== OTHER_LABEL) {
-    nextTick(() => completeQuestion(qIdx))
+    completeQuestion(qIdx)
   }
 }
 
@@ -99,7 +100,7 @@ function nextUnansweredQuestion(afterIndex) {
 }
 
 function completeQuestion(questionIndex) {
-  if (!hasAnswered(questionIndex) || props.answered) return
+  if (!hasAnswered(questionIndex) || props.answered || submitting.value) return
 
   const nextIndex = nextUnansweredQuestion(questionIndex)
   if (nextIndex >= 0) {
@@ -111,7 +112,7 @@ function completeQuestion(questionIndex) {
 }
 
 function submitAnswers() {
-  if (!allAnswered.value || props.answered) return
+  if (!allAnswered.value || props.answered || submitting.value) return
 
   const answers = {}
   questions.value.forEach((q, i) => {
@@ -126,12 +127,16 @@ function submitAnswers() {
       answers[q.question] = val || ''
     }
   })
+  submitting.value = true
   emit('answer', { answers })
+  nextTick(() => {
+    if (!props.answered) submitting.value = false
+  })
 }
 </script>
 
 <template>
-  <div class="user-choice-block" :class="{ 'choice-answered': answered }">
+  <div class="user-choice-block" :class="{ 'choice-answered': answered || submitting }">
     <div class="choice-header">
       <div class="choice-title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -208,7 +213,7 @@ function submitAnswers() {
               'option-selected': isSelected(activeQuestionIndex, opt.label, activeQuestion.multiSelect),
               'option-multi': activeQuestion.multiSelect,
             }"
-            :disabled="answered"
+            :disabled="answered || submitting"
             @click="toggleOption(activeQuestionIndex, opt.label, activeQuestion.multiSelect)"
           >
             <span class="option-indicator">
@@ -232,7 +237,7 @@ function submitAnswers() {
             type="button"
             class="option-btn option-other"
             :class="{ 'option-selected': isOtherSelected(activeQuestionIndex, activeQuestion.multiSelect) }"
-            :disabled="answered"
+            :disabled="answered || submitting"
             @click="toggleOption(activeQuestionIndex, OTHER_LABEL, activeQuestion.multiSelect)"
           >
             <span class="option-indicator">
@@ -257,7 +262,7 @@ function submitAnswers() {
           type="button"
           class="option-btn option-other"
           :class="{ 'option-selected': isOtherSelected(activeQuestionIndex, activeQuestion.multiSelect) }"
-          :disabled="answered"
+          :disabled="answered || submitting"
           @click="toggleOption(activeQuestionIndex, OTHER_LABEL, activeQuestion.multiSelect)"
         >
           <span class="option-indicator">
@@ -277,31 +282,33 @@ function submitAnswers() {
         </button>
       </div>
 
-      <div v-if="isOtherSelected(activeQuestionIndex, activeQuestion.multiSelect) && !answered" class="other-input-wrap">
+      <div v-if="isOtherSelected(activeQuestionIndex, activeQuestion.multiSelect) && !answered && !submitting" class="other-input-wrap">
         <textarea
           class="other-input"
           :value="otherTexts[`q${activeQuestionIndex}`] || ''"
           @input="otherTexts[`q${activeQuestionIndex}`] = $event.target.value"
+          @blur="!activeQuestion.multiSelect && completeQuestion(activeQuestionIndex)"
           placeholder="Type your answer here..."
           rows="2"
         />
       </div>
     </div>
 
-    <div v-if="!answered && activeQuestion" class="choice-footer">
+    <div v-if="!answered && !submitting && activeQuestion" class="choice-footer">
       <span class="progress-label">
         {{ activeQuestionIndex + 1 }} of {{ questions.length }}
-        <span v-if="!activeQuestion.multiSelect && !isOtherSelected(activeQuestionIndex, false)">· Select to continue</span>
-        <span v-else>· Confirm when ready</span>
+        <span v-if="activeQuestion.multiSelect">· Select all that apply</span>
+        <span v-else-if="isOtherSelected(activeQuestionIndex, false)">· Continues when you finish typing</span>
+        <span v-else>· Select to {{ allAnswered ? 'submit' : 'continue' }}</span>
       </span>
       <button
-        v-if="activeQuestion.multiSelect || isOtherSelected(activeQuestionIndex, activeQuestion.multiSelect)"
+        v-if="activeQuestion.multiSelect"
         type="button"
         class="continue-btn"
         :disabled="!hasAnswered(activeQuestionIndex)"
         @click="completeQuestion(activeQuestionIndex)"
       >
-        {{ allAnswered ? 'Submit' : 'Next' }}
+        {{ allAnswered ? 'Submit selections' : 'Done' }}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="m9 18 6-6-6-6"/>
         </svg>

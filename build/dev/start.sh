@@ -7,6 +7,7 @@
 #   ./start.sh start    # 启动 MySQL + 后端 + 前端，tail 后端日志
 #   ./start.sh stop     # 关闭全部
 #   ./start.sh restart  # 重启全部
+#   ./start.sh restart-backend  # 仅重启后端
 #   ./start.sh status   # 查看状态
 #   ./start.sh logs     # 查看后端日志
 
@@ -233,10 +234,28 @@ start_backend() {
     info "Syncing backend dependencies..."
     uv sync --frozen 2>&1 | tail -3 || true
 
+    if [ -z "${CLAUDE_CLI_PATH:-}" ]; then
+        CLAUDE_CLI_PATH="$(command -v claude || true)"
+        if [ -z "$CLAUDE_CLI_PATH" ]; then
+            error "Claude CLI not found; set CLAUDE_CLI_PATH in $SCRIPT_DIR/.env"
+            return 1
+        fi
+        export CLAUDE_CLI_PATH
+        info "Detected Claude CLI: $CLAUDE_CLI_PATH"
+    fi
+
+    local reload_args=()
+    case "${BACKEND_RELOAD:-false}" in
+        1|true|TRUE|yes|YES)
+            reload_args=(--reload)
+            warn "Backend auto-reload is enabled; active Agent runs will be interrupted by source changes"
+            ;;
+    esac
+
     nohup uv run uvicorn main:app \
         --host 0.0.0.0 \
         --port "$BACKEND_PORT" \
-        --reload \
+        "${reload_args[@]}" \
         --log-level info \
         > "$BACKEND_LOG" 2>&1 &
 
@@ -368,6 +387,13 @@ do_restart() {
     do_start
 }
 
+do_restart_backend() {
+    ensure_dirs
+    stop_process "Backend" "$BACKEND_PID_FILE"
+    lsof -ti:"$BACKEND_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    start_backend
+}
+
 do_status() {
     ensure_dirs
     echo -e "${BOLD}Service Status:${NC}"
@@ -408,15 +434,17 @@ case "${1:-}" in
     start)   do_start   ;;
     stop)    do_stop    ;;
     restart) do_restart ;;
+    restart-backend) do_restart_backend ;;
     status)  do_status  ;;
     logs)    do_logs    ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|logs}"
+        echo "Usage: $0 {start|stop|restart|restart-backend|status|logs}"
         echo ""
         echo "Commands:"
         echo "  start    Start MySQL + backend + frontend, tail backend logs"
         echo "  stop     Stop all services (including MySQL)"
         echo "  restart  Restart all services"
+        echo "  restart-backend  Restart only the backend"
         echo "  status   Show service status"
         echo "  logs     Tail backend logs"
         exit 1

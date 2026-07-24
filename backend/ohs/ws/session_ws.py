@@ -7,11 +7,12 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from typing import Annotated, Awaitable, Callable
+from typing import Annotated, Any, Awaitable, Callable
 
 from application.message.attachment_application_service import AttachmentApplicationService
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_application_service import SessionApplicationService
+from application.session.session_query_engine import QueueMessageOutcome
 from application.terminal.terminal_application_service import TerminalApplicationService
 from domain.shared.async_utils import safe_create_task
 from domain.shared.business_exception import BusinessException
@@ -70,6 +71,26 @@ class _WsContext:
     team_service: TeamBoardApplicationService
     build_session_summary: Callable[..., Awaitable[dict]]
     submit_query_background: Callable[[RunQueryCommand], Awaitable[None]]
+
+
+def _prompt_started_event(
+    command: RunQueryCommand,
+    prompt: str,
+) -> dict[str, Any]:
+    return {
+        "event": "prompt_started",
+        "message_id": command.client_message_id,
+        "prompt": prompt,
+        "image_count": len(command.image_paths),
+        "attachments": [
+            {
+                "filename": item.get("filename", "attachment"),
+                "mime_type": item.get("mime_type", "application/octet-stream"),
+                "size_bytes": item.get("size_bytes", 0),
+            }
+            for item in command.attachments
+        ],
+    }
 
 
 async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
@@ -207,34 +228,28 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
             )
         elif not ctx.service.is_agent_connected(ctx.session_id):
             await ctx.service.ensure_session_idle(ctx.session_id)
-            await ctx.websocket.send_json({
-                "event": "prompt_started",
-                "message_id": command.client_message_id,
-                "prompt": prompt,
-                "image_count": len(image_paths),
-                "attachments": [
-                    {
-                        "filename": item.get("filename", "attachment"),
-                        "mime_type": item.get("mime_type", "application/octet-stream"),
-                        "size_bytes": item.get("size_bytes", 0),
-                    }
-                    for item in saved_attachments
-                ],
-            })
+            await ctx.websocket.send_json(_prompt_started_event(command, prompt))
             safe_create_task(
                 ctx.submit_query_background(command),
                 name=f"run_claude_query_{ctx.session_id}",
             )
         else:
             # Queue for after current query completes (latest-wins)
-            await ctx.service.queue_message(ctx.session_id, command)
-            await ctx.websocket.send_json({
-                "event": "message_queued",
-                "message_id": command.client_message_id,
-                "prompt": prompt,
-                "image_count": len(image_paths),
-                "attachment_count": len(saved_attachments),
-            })
+            queue_outcome = await ctx.service.queue_message(ctx.session_id, command)
+            if queue_outcome is QueueMessageOutcome.QUEUED:
+                await ctx.websocket.send_json({
+                    "event": "message_queued",
+                    "message_id": command.client_message_id,
+                    "prompt": prompt,
+                    "image_count": len(image_paths),
+                    "attachment_count": len(saved_attachments),
+                })
+            else:
+                await ctx.websocket.send_json(_prompt_started_event(command, prompt))
+                safe_create_task(
+                    ctx.submit_query_background(command),
+                    name=f"run_claude_query_{ctx.session_id}",
+                )
 
 
 async def _handle_clear_queue(ctx: _WsContext, data: dict) -> None:

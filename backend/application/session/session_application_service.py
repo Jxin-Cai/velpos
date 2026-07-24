@@ -25,7 +25,7 @@ from domain.session.service.message_conversion_service import MessageConversionS
 from application.session.session_presenter import SessionPresenter
 from application.session.session_observability_recorder import SessionObservabilityRecorder
 from application.session.session_stream_consumer import SessionStreamConsumer
-from application.session.session_query_engine import SessionQueryEngine
+from application.session.session_query_engine import QueueMessageOutcome, SessionQueryEngine
 from domain.project.model.project import Project
 from domain.session.service.sdk_session_binding_service import SdkSessionBindingService
 from domain.project.repository.project_repository import ProjectRepository
@@ -125,8 +125,12 @@ class SessionApplicationService:
     async def rewind_to_message(self, session_id: str, message_index: int) -> None:
         await self._query_engine.rewind_to_message(session_id, message_index)
 
-    async def queue_message(self, session_id: str, command: RunQueryCommand) -> None:
-        await self._query_engine.queue_message(session_id, command)
+    async def queue_message(
+        self,
+        session_id: str,
+        command: RunQueryCommand,
+    ) -> QueueMessageOutcome:
+        return await self._query_engine.queue_message(session_id, command)
 
     async def clear_queued_message(self, session_id: str) -> None:
         await self._query_engine.clear_queued_message(session_id)

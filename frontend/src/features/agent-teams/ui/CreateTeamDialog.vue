@@ -11,7 +11,7 @@ const props = defineProps({
 
 const emit = defineEmits(['created', 'cancel'])
 
-useEscapeToClose(() => props.visible, () => emit('cancel'))
+useEscapeToClose(() => props.visible, () => handleCancel())
 
 const { categories: agentCategories, fetchAgents } = useAgentManager()
 const isMac = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform || window.navigator.userAgent)
@@ -122,15 +122,18 @@ async function handleCreate() {
 
   try {
     const project = await createTeamProject(teamName.value.trim(), dirPath.value.trim(), config)
-    creating.value = false
     emit('created', project)
   } catch (err) {
     error.value = err.message || 'Failed to create team project'
+  } finally {
     creating.value = false
   }
 }
 
-function handleCancel() { emit('cancel') }
+function handleCancel() {
+  if (creating.value) return
+  emit('cancel')
+}
 
 onMounted(() => {
   loadTemplates()
@@ -141,13 +144,13 @@ onMounted(() => {
 <template>
   <Teleport to="body">
     <div v-if="visible" class="dialog-overlay" @click.self="handleCancel" role="dialog" aria-modal="true" aria-labelledby="create-team-dialog-title">
-      <div class="dialog">
+      <div class="dialog" :aria-busy="creating">
         <header class="dialog-header">
           <div>
             <h2 id="create-team-dialog-title" class="dialog-title">Create Agent Team</h2>
             <p class="dialog-subtitle">Add agent slots, then assign agents from catalog.</p>
           </div>
-          <button class="close-btn" type="button" aria-label="Close" @click="handleCancel">
+          <button class="close-btn" type="button" aria-label="Close" :disabled="creating" @click="handleCancel">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
           </button>
         </header>
@@ -253,6 +256,32 @@ onMounted(() => {
             {{ creating ? 'Creating...' : 'Create' }}
           </button>
         </footer>
+
+        <Transition name="creation-state">
+          <div v-if="creating" class="team-creation-state" role="status" aria-live="polite">
+            <div class="team-creation-state__graphic" aria-hidden="true">
+              <span class="team-creation-state__core">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="8" r="3" />
+                  <path d="M6.5 19a5.5 5.5 0 0 1 11 0" />
+                </svg>
+              </span>
+              <span
+                v-for="(_, index) in slots.slice(0, 6)"
+                :key="index"
+                class="team-creation-state__node"
+                :style="{ '--node-index': index, '--node-count': Math.min(slots.length, 6) }"
+              />
+            </div>
+            <div class="team-creation-state__copy">
+              <strong>Creating {{ teamName.trim() }}</strong>
+              <span>Preparing the workspace and connecting {{ slots.length }} {{ slots.length === 1 ? 'agent' : 'agents' }}…</span>
+            </div>
+            <span class="team-creation-state__progress" aria-hidden="true">
+              <span />
+            </span>
+          </div>
+        </Transition>
       </div>
     </div>
   </Teleport>
@@ -264,6 +293,7 @@ onMounted(() => {
 }
 
 .dialog {
+  position: relative;
   width: 860px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
@@ -292,6 +322,11 @@ onMounted(() => {
   width: 36px;
   height: 36px;
   transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.close-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .dialog-body {
@@ -639,7 +674,144 @@ onMounted(() => {
   height: 14px;
   border: 2px solid var(--bg-primary);
   border-top-color: transparent;
+  border-radius: 50%;
   animation: spin 0.6s linear infinite;
+}
+
+.team-creation-state {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 32%),
+    color-mix(in srgb, var(--dialog-surface) 94%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.team-creation-state__graphic {
+  position: relative;
+  width: 112px;
+  height: 112px;
+}
+
+.team-creation-state__core {
+  position: absolute;
+  inset: 31px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border));
+  border-radius: 16px;
+  background: var(--bg-secondary);
+  color: var(--accent);
+  box-shadow:
+    0 0 0 8px color-mix(in srgb, var(--accent) 7%, transparent),
+    var(--shadow-md);
+  animation: team-core-pulse 1.8s ease-in-out infinite;
+}
+
+.team-creation-state__node {
+  --node-angle: calc(360deg / var(--node-count) * var(--node-index));
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px;
+  border: 2px solid var(--dialog-surface);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 42%, var(--border));
+  transform: rotate(var(--node-angle)) translateY(-50px);
+  animation: team-node-pulse 1.4s ease-in-out infinite;
+  animation-delay: calc(var(--node-index) * 120ms);
+}
+
+.team-creation-state__copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  max-width: 380px;
+  text-align: center;
+}
+
+.team-creation-state__copy strong {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.team-creation-state__copy span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.team-creation-state__progress {
+  width: min(260px, 70%);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--border));
+}
+
+.team-creation-state__progress span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: team-progress 1.3s ease-in-out infinite;
+}
+
+.creation-state-enter-active,
+.creation-state-leave-active {
+  transition: opacity 160ms ease;
+}
+
+.creation-state-enter-from,
+.creation-state-leave-to {
+  opacity: 0;
+}
+
+@keyframes team-core-pulse {
+  0%, 100% { transform: scale(0.96); }
+  50% { transform: scale(1.04); }
+}
+
+@keyframes team-node-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes team-progress {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(70%); }
+  100% { transform: translateX(240%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .team-creation-state__core,
+  .team-creation-state__node,
+  .team-creation-state__progress span {
+    animation: none;
+  }
+
+  .team-creation-state__node {
+    opacity: 0.8;
+  }
+
+  .team-creation-state__progress span {
+    width: 72%;
+  }
 }
 
 @media (max-width: 760px) {

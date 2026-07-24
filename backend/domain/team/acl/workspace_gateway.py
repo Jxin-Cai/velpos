@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 
 
+class WorkspaceUnavailableError(Exception):
+    """Raised when a persisted agent workspace can no longer be used."""
+
+
 class WorkspaceGateway(ABC):
     @abstractmethod
     def create_independent_workspace(

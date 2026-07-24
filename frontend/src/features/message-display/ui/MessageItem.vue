@@ -22,20 +22,19 @@ const props = defineProps({
   },
   traceRunId: { type: String, default: '' },
   traceSummary: { type: Object, default: null },
+  interactiveAnswered: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['open-trace'])
+const emit = defineEmits(['open-trace', 'interactive-answered'])
 
 const wsConnection = inject('wsConnection')
 
-// Track whether interactive messages have been answered
-const interactiveAnswered = ref(false)
 const interactiveError = ref('')
 
 function handleInteractiveResponse(data) {
-  if (interactiveAnswered.value) return
+  if (props.interactiveAnswered) return
   if (wsConnection?.value && wsConnection.value.send({ action: 'user_response', data })) {
-    interactiveAnswered.value = true
+    emit('interactive-answered')
     interactiveError.value = ''
     return
   }

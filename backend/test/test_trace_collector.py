@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+import pytest
+
 from application.session.trace_collector import TraceCollector
 from domain.session.model.trace_span import TraceSpan
 
@@ -172,3 +174,23 @@ class TraceCollectorAbandonTest(unittest.TestCase):
         result = self.collector.find_latest_llm_turn(self.session_id, self.run_id)
         self.assertIsNotNone(result)
         self.assertEqual(result.id, turn2_id)
+
+
+@pytest.mark.asyncio
+async def test_abandons_and_flushes_running_spans_when_collector_stops() -> None:
+    # Arrange
+    persisted: list[TraceSpan] = []
+
+    class _CapturingRepository(_RepositoryStub):
+        async def save_batch(self, spans: list[TraceSpan]) -> None:
+            persisted.extend(spans)
+
+    collector = TraceCollector(repository=_CapturingRepository())
+    collector.ensure_run_span("session1", "run1")
+
+    # Act
+    await collector.stop()
+
+    # Assert
+    assert persisted
+    assert all(span.status == TraceSpan.STATUS_ABANDONED for span in persisted)

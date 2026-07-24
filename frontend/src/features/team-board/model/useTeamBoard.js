@@ -154,10 +154,11 @@ export function useTeamBoard() {
 
   async function moveCardToSlot(cardId, targetSlotId, idempotencyKey) {
     const card = cards.value.find(c => c.id === cardId)
-    if (!card || !team.value) return
+    if (!card || !team.value) return false
 
     const previousSlotId = card.current_slot_id
     const previousVersion = card.version
+    error.value = null
 
     // Optimistic update
     updateCardLocally(cardId, {
@@ -174,6 +175,7 @@ export function useTeamBoard() {
       // The execution can finish before this request resolves. Re-read the
       // board so a stale "running" response never overwrites "completed".
       await loadBoard(team.value.id)
+      return true
     } catch (e) {
       // Rollback
       updateCardLocally(cardId, {
@@ -181,6 +183,7 @@ export function useTeamBoard() {
         version: previousVersion,
       })
       error.value = e.message || 'Move failed'
+      return false
     }
   }
 

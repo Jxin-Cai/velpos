@@ -61,7 +61,7 @@ function handleCardDragStart({ card, event, keyboard }) {
 function canDropOn(card, targetId) {
   if (!card || !targetId) return false
   if (targetId === 'archive') {
-    return ['completed', 'failed', 'cancelled'].includes(card.status)
+    return ['backlog', 'completed', 'failed', 'cancelled'].includes(card.status)
   }
   return targetId !== 'backlog' && card.current_slot_id !== targetId
 }
@@ -77,11 +77,15 @@ function handleColumnDragOver(targetId, event) {
 async function dropCard(card, targetId) {
   if (!canDropOn(card, targetId)) return
   if (targetId === 'archive') {
-    await archiveCard(card.id)
-    announceToScreenReader(`Archived card "${card.title}".`)
+    const archived = await archiveCard(card.id)
+    announceToScreenReader(archived
+      ? `Archived card "${card.title}".`
+      : `Could not archive card "${card.title}": ${error.value || 'Archive failed'}`)
   } else {
-    await moveCardToSlot(card.id, targetId, generateIdempotencyKey())
-    announceToScreenReader(`Moved card "${card.title}" to new column.`)
+    const moved = await moveCardToSlot(card.id, targetId, generateIdempotencyKey())
+    announceToScreenReader(moved
+      ? `Moved card "${card.title}" to new column.`
+      : `Could not move card "${card.title}": ${error.value || 'Move failed'}`)
   }
 }
 
@@ -98,7 +102,7 @@ function handleDragEnd() {
   dropTargetSlotId.value = null
 }
 
-function handleBoardKeyDown(e) {
+async function handleBoardKeyDown(e) {
   if (!dragState.value || !dragState.value.keyboard) return
   const allSlotIds = [null, ...slots.value.map(s => s.id), 'archive']
   const currentSlotId = dragState.value.card.current_slot_id || null
@@ -125,8 +129,7 @@ function handleBoardKeyDown(e) {
     const card = dragState.value.card
     const targetSlotId = dropTargetSlotId.value
     if (canDropOn(card, targetSlotId)) {
-      dropCard(card, targetSlotId)
-      announceToScreenReader(`Dropped card "${card.title}".`)
+      await dropCard(card, targetSlotId)
     } else {
       announceToScreenReader(`Card "${card.title}" returned to original position.`)
     }

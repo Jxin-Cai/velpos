@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime, timedelta
 from html import escape
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -8,6 +10,7 @@ from application.session.command.create_session_command import CreateSessionComm
 from application.session.command.run_query_command import RunQueryCommand
 from domain.shared.async_utils import KeyedLockPool, safe_create_task
 from domain.shared.business_exception import BusinessException
+from domain.team.acl.workspace_gateway import WorkspaceUnavailableError
 from domain.team.model.status import CardExecutionStatus, HandoffStatus
 from domain.team.model.team_domain_error import TeamDomainError
 
@@ -23,6 +26,7 @@ if TYPE_CHECKING:
     )
     from domain.team.acl.session_context_collector import SessionContext, SessionContextCollector
     from domain.team.acl.workspace_gateway import WorkspaceGateway
+    from domain.team.model.agent_slot import AgentSlot
     from domain.team.model.card_execution import CardExecution
     from domain.team.model.handoff import Handoff
     from domain.team.model.team import Team
@@ -57,6 +61,7 @@ def format_handoff_artifact_links(handoff: Handoff) -> str:
 
 class TeamBoardApplicationService:
     _card_lock_pool = KeyedLockPool(max_size=1_000)
+    _terminal_session_sync_grace = timedelta(minutes=2)
 
     def __init__(
         self,
@@ -366,7 +371,11 @@ class TeamBoardApplicationService:
         previous_execution = await self._find_last_completed_execution(card)
 
         execution = card.assign_to(target_slot.id, idempotency_key)
-        workspace_path = self._workspace.create_execution_workspace(target_slot.workspace_ref, execution.id)
+        workspace_path = await self._prepare_execution_workspace(
+            team,
+            target_slot,
+            execution.id,
+        )
 
         if previous_execution is not None:
             handoff = await self._prepare_handoff(
@@ -420,7 +429,11 @@ class TeamBoardApplicationService:
             raise TeamDomainError(f"Slot {old_execution.agent_slot_id} not found")
 
         new_execution = card.retry_on(target_slot.id)
-        workspace_path = self._workspace.create_execution_workspace(target_slot.workspace_ref, new_execution.id)
+        workspace_path = await self._prepare_execution_workspace(
+            team,
+            target_slot,
+            new_execution.id,
+        )
 
         card.start_execution(new_execution.id)
         await self._card_repo.save(card)
@@ -465,7 +478,19 @@ class TeamBoardApplicationService:
             await self._execution_repo.save(execution)
             return
 
-        workspace_path = self._workspace.create_execution_workspace(target_slot.workspace_ref, execution.id)
+        try:
+            workspace_path = await self._prepare_execution_workspace(
+                team,
+                target_slot,
+                execution.id,
+            )
+        except TeamDomainError as error:
+            failure_reason = str(error)
+            card.fail_execution(execution.id, failure_reason)
+            execution.fail(failure_reason)
+            await self._card_repo.save(card)
+            await self._execution_repo.save(execution)
+            return
         card.start_execution(execution.id)
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
@@ -479,6 +504,30 @@ class TeamBoardApplicationService:
         safe_create_task(self._dispatch_execution_query_with_failsafe(
             session.session_id, prompt, card.id, execution.id
         ))
+
+    async def _prepare_execution_workspace(
+        self,
+        team: Team,
+        target_slot: AgentSlot,
+        execution_id: str,
+    ) -> str:
+        try:
+            return self._workspace.create_execution_workspace(
+                target_slot.workspace_ref,
+                execution_id,
+            )
+        except WorkspaceUnavailableError as error:
+            target_slot.mark_unstable()
+            await self._team_repo.save(team)
+            logger.warning(
+                "agent workspace unavailable for team %s slot %s",
+                team.id,
+                target_slot.id,
+            )
+            raise TeamDomainError(
+                "Target agent workspace is unavailable; restore its workspace "
+                "directory or recreate the team"
+            ) from error
 
     async def _reconcile_stuck_execution(self, execution: CardExecution) -> None:
         try:
@@ -497,6 +546,17 @@ class TeamBoardApplicationService:
             return
 
         if session.is_running:
+            return
+        if (
+            session.updated_time is not None
+            and datetime.now() - session.updated_time < self._terminal_session_sync_grace
+        ):
+            logger.debug(
+                "reconcile: deferring execution %s because session %s "
+                "recently became terminal",
+                execution.id,
+                execution.session_id,
+            )
             return
 
         card = await self._card_repo.find_by_id(execution.card_id)
@@ -567,6 +627,7 @@ class TeamBoardApplicationService:
         prompt_parts.append(f"## 愿望卡\n标题: {card.title}\n描述: {card.description}")
 
         session_cmd = CreateSessionCommand(
+            model=os.getenv("DEFAULT_MODEL", "default"),
             project_id=team.project_id,
             project_dir=workspace_path,
             name=f"[{team.name}] {card.title}",

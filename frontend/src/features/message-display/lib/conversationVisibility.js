@@ -6,6 +6,10 @@ const ARTIFACT_BLOCK_TYPES = new Set([
   'output_file',
 ])
 
+const IGNORED_SYSTEM_SUBTYPES = new Set([
+  'thinking_tokens',
+])
+
 function hasText(value) {
   return typeof value === 'string' && value.trim().length > 0
 }
@@ -24,9 +28,19 @@ function visibleAssistantBlocks(blocks = []) {
  * Raw model turns and execution details remain available in debug mode.
  */
 export function filterConversationMessages(messages = [], { debug = false } = {}) {
-  if (debug) return messages
+  const isIgnoredSystemMessage = message => (
+    message?.type === 'system'
+    && IGNORED_SYSTEM_SUBTYPES.has(message?.content?.subtype)
+  )
+
+  if (debug) {
+    return messages.some(isIgnoredSystemMessage)
+      ? messages.filter(message => !isIgnoredSystemMessage(message))
+      : messages
+  }
 
   return messages.flatMap(message => {
+    if (isIgnoredSystemMessage(message)) return []
     const content = message?.content || {}
 
     if (message?.type === 'user' || message?.type === 'interactive' || message?.type === 'artifact') {

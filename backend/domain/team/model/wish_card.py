@@ -49,6 +49,7 @@ class WishCard:
     @property
     def can_be_archived(self) -> bool:
         return self.status in {
+            WishCardStatus.BACKLOG,
             WishCardStatus.COMPLETED,
             WishCardStatus.FAILED,
             WishCardStatus.CANCELLED,

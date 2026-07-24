@@ -7,7 +7,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from domain.team.acl.workspace_gateway import WorkspaceGateway
+from domain.team.acl.workspace_gateway import (
+    WorkspaceGateway,
+    WorkspaceUnavailableError,
+)
 from infr.agent.catalog import get_agent_by_id, read_prompt
 
 
@@ -96,10 +99,7 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
         workspace_ref: str,
         execution_id: str,
     ) -> str:
-        workspace = Path(workspace_ref).resolve(strict=True)
-        root = self._registered_root_for(workspace)
-        self._ensure_confined(workspace, root)
-        self._load_manifest(workspace)
+        workspace, root = self._resolve_execution_workspace(workspace_ref)
         execution = self._normalize_slug(execution_id, "execution_id")
         executions_root = self._confined_path(workspace, "executions")
         self._reject_symlink(executions_root, "executions directory")
@@ -124,6 +124,22 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
+
+    def _resolve_execution_workspace(self, workspace_ref: str) -> tuple[Path, Path]:
+        try:
+            workspace = Path(workspace_ref).resolve(strict=True)
+            root = self._registered_root_for(workspace)
+            self._ensure_confined(workspace, root)
+            self._load_manifest(workspace)
+        except (FileNotFoundError, NotADirectoryError, ValueError) as error:
+            raise WorkspaceUnavailableError(
+                "agent workspace is missing or invalid"
+            ) from error
+        if not workspace.is_dir():
+            raise WorkspaceUnavailableError(
+                "agent workspace is missing or invalid"
+            )
+        return workspace, root
 
     def remove_workspace(self, workspace_ref: str) -> None:
         workspace = Path(workspace_ref).resolve(strict=True)

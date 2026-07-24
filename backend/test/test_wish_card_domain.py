@@ -178,6 +178,17 @@ def test_card_archived_when_execution_is_terminal(
     assert card.current_slot_id is None
 
 
+def test_card_archived_when_card_is_in_backlog() -> None:
+    # Arrange
+    card = WishCard.create(team_id="team-1", title="No longer needed")
+
+    # Act
+    card.archive()
+
+    # Assert
+    assert card.status is WishCardStatus.ARCHIVED
+
+
 def test_archive_rejected_when_card_is_running() -> None:
     # Arrange
     card = WishCard.create(team_id="team-1", title="Implement domain")

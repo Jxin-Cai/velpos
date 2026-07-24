@@ -20,6 +20,10 @@ class SessionRunStepRepository(ABC):
         ...
 
     @abstractmethod
+    async def find_running(self) -> list[SessionRunStep]:
+        ...
+
+    @abstractmethod
     async def commit(self) -> None:
         ...
 
