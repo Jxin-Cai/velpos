@@ -79,20 +79,30 @@ class WishCard:
         self,
         agent_slot_id: str,
         idempotency_key: str | None = None,
+        input_stage_output_id: str | None = None,
     ) -> CardExecution:
         if not self.can_be_assigned:
             raise TeamDomainError(f"wish card cannot be assigned in status {self.status.value}")
         if self.active_execution is not None:
             raise TeamDomainError("wish card already has an active execution")
 
-        execution = CardExecution.create(self.id, agent_slot_id, idempotency_key)
+        execution = CardExecution.create(
+            self.id,
+            agent_slot_id,
+            idempotency_key,
+            input_stage_output_id,
+        )
         self.executions.append(execution)
         self.assigned_agent_slot_id = agent_slot_id
         self.status = WishCardStatus.PREPARING
         self.updated_at = datetime.now(timezone.utc)
         return execution
 
-    def retry_on(self, agent_slot_id: str) -> CardExecution:
+    def retry_on(
+        self,
+        agent_slot_id: str,
+        input_stage_output_id: str | None = None,
+    ) -> CardExecution:
         """Create a fresh execution after a failed or cancelled run."""
         if self.status not in {WishCardStatus.FAILED, WishCardStatus.CANCELLED}:
             raise TeamDomainError(
@@ -100,7 +110,11 @@ class WishCard:
             )
         if self.active_execution is not None:
             raise TeamDomainError("wish card already has an active execution")
-        execution = CardExecution.create(self.id, agent_slot_id)
+        execution = CardExecution.create(
+            self.id,
+            agent_slot_id,
+            input_stage_output_id=input_stage_output_id,
+        )
         self.executions.append(execution)
         self.assigned_agent_slot_id = agent_slot_id
         self.status = WishCardStatus.PREPARING

@@ -96,6 +96,7 @@ async def get_board(team_id: str, service: ServiceDep) -> ApiResponse[dict]:
             "execution_id": latest.id if latest else None,
             "failure_reason": latest.failure_reason if latest else None,
             "needs_user_action": await service.execution_needs_user_action(latest),
+            "handoff_readiness": await service.get_handoff_readiness(latest),
             "execution_history": await service.get_card_history(latest.id) if latest else [],
         })
     return ApiResponse.success({"team_id": team.id, "name": team.name, "slots": slots, "cards": card_list})

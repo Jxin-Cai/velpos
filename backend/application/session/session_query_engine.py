@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncContextManager
 
 from domain.shared.async_utils import KeyedLockPool, safe_create_task
+from application.session.session_execution_state import SessionExecutionState
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_observability_recorder import SessionObservabilityRecorder
 from application.session.session_presenter import SessionPresenter
@@ -50,6 +51,9 @@ class _QueryContext:
     card_sync_reason: str = ""
 
 
+_shared_state = SessionExecutionState()
+
+
 class SessionQueryEngine:
     _TRANSIENT_RESULT_ERROR_MARKERS = (
         "channel_unavailable",
@@ -59,27 +63,18 @@ class SessionQueryEngine:
         "upstream returned http 503",
         "upstream returned http 504",
     )
-    _session_lock_pool = KeyedLockPool(max_size=500)
-    _cancelled_sessions: set[str] = set()
-    _queued_messages: dict[str, RunQueryCommand] = {}
-    _active_contexts: dict[str, _QueryContext] = {}
-    _waiting_for_slot: set[str] = set()
-    _slot_wait_started_at: dict[str, float] = {}
-    _queue_guard = asyncio.Lock()
-    _query_semaphore: asyncio.Semaphore | None = None
-    _query_semaphore_guard = asyncio.Lock()
 
     @classmethod
     async def _lock_for_session(cls, session_id: str) -> asyncio.Lock:
-        return await cls._session_lock_pool.acquire(session_id)
+        return await _shared_state.session_lock_pool.acquire(session_id)
 
     @classmethod
     async def _get_query_semaphore(cls) -> asyncio.Semaphore:
-        if cls._query_semaphore is None:
-            async with cls._query_semaphore_guard:
-                if cls._query_semaphore is None:
-                    cls._query_semaphore = asyncio.Semaphore(cls._configured_query_capacity())
-        return cls._query_semaphore
+        if _shared_state.query_semaphore is None:
+            async with _shared_state.query_semaphore_guard:
+                if _shared_state.query_semaphore is None:
+                    _shared_state.query_semaphore = asyncio.Semaphore(cls._configured_query_capacity())
+        return _shared_state.query_semaphore
 
     def __init__(
         self,
@@ -97,6 +92,7 @@ class SessionQueryEngine:
         on_user_message: Callable[..., Awaitable[None]] | None = None,
         session_service_factory: Callable | None = None,
         execution_lock_factory: Callable[[str], AsyncContextManager[None]] | None = None,
+        sync_card_execution_fn: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -112,19 +108,20 @@ class SessionQueryEngine:
         self._on_user_message = on_user_message
         self._session_service_factory = session_service_factory
         self._execution_lock_factory = execution_lock_factory
+        self._sync_card_execution_fn = sync_card_execution_fn
 
     async def cleanup_session_state(self, session_id: str) -> None:
-        async with self._queue_guard:
-            self._cancelled_sessions.discard(session_id)
-            self._queued_messages.pop(session_id, None)
-            self._active_contexts.pop(session_id, None)
-            self._waiting_for_slot.discard(session_id)
-            self._slot_wait_started_at.pop(session_id, None)
-        await self._session_lock_pool.release(session_id)
+        async with _shared_state.queue_guard:
+            _shared_state.cancelled_sessions.discard(session_id)
+            _shared_state.queued_messages.pop(session_id, None)
+            _shared_state.active_contexts.pop(session_id, None)
+            _shared_state.waiting_for_slot.discard(session_id)
+            _shared_state.slot_wait_started_at.pop(session_id, None)
+        await _shared_state.session_lock_pool.release(session_id)
 
     async def is_waiting_for_slot(self, session_id: str) -> bool:
-        async with self._queue_guard:
-            return session_id in self._waiting_for_slot
+        async with _shared_state.queue_guard:
+            return session_id in _shared_state.waiting_for_slot
 
     async def submit_query(self, command: RunQueryCommand) -> None:
         self._claude_agent_gateway.mark_active(command.session_id)
@@ -148,19 +145,19 @@ class SessionQueryEngine:
                     async with self._execution_lock_factory(command.session_id):
                         await self._run_with_capacity(command, query_semaphore)
         except asyncio.CancelledError:
-            async with self._queue_guard:
-                self._waiting_for_slot.discard(command.session_id)
-                self._slot_wait_started_at.pop(command.session_id, None)
+            async with _shared_state.queue_guard:
+                _shared_state.waiting_for_slot.discard(command.session_id)
+                _shared_state.slot_wait_started_at.pop(command.session_id, None)
             self._claude_agent_gateway.mark_idle(command.session_id)
             raise
         except Exception:
-            async with self._queue_guard:
-                self._waiting_for_slot.discard(command.session_id)
-                self._slot_wait_started_at.pop(command.session_id, None)
+            async with _shared_state.queue_guard:
+                _shared_state.waiting_for_slot.discard(command.session_id)
+                _shared_state.slot_wait_started_at.pop(command.session_id, None)
             self._claude_agent_gateway.mark_idle(command.session_id)
             raise
         finally:
-            await self._session_lock_pool.unref(command.session_id)
+            await _shared_state.session_lock_pool.unref(command.session_id)
 
     async def _run_with_capacity(
         self,
@@ -168,10 +165,10 @@ class SessionQueryEngine:
         query_semaphore: asyncio.Semaphore,
     ) -> None:
         if query_semaphore.locked():
-            async with self._queue_guard:
-                self._waiting_for_slot.add(command.session_id)
-                self._slot_wait_started_at[command.session_id] = time.monotonic()
-                queue_position = len(self._waiting_for_slot)
+            async with _shared_state.queue_guard:
+                _shared_state.waiting_for_slot.add(command.session_id)
+                _shared_state.slot_wait_started_at[command.session_id] = time.monotonic()
+                queue_position = len(_shared_state.waiting_for_slot)
             await self._connection_manager.broadcast(
                 command.session_id,
                 {
@@ -187,9 +184,9 @@ class SessionQueryEngine:
                 payload={"reason": "concurrency_limit"},
             )
         async with query_semaphore:
-            async with self._queue_guard:
-                wait_started_at = self._slot_wait_started_at.pop(command.session_id, None)
-                self._waiting_for_slot.discard(command.session_id)
+            async with _shared_state.queue_guard:
+                wait_started_at = _shared_state.slot_wait_started_at.pop(command.session_id, None)
+                _shared_state.waiting_for_slot.discard(command.session_id)
             if wait_started_at is not None:
                 await self._connection_manager.broadcast(
                     command.session_id,
@@ -218,8 +215,8 @@ class SessionQueryEngine:
         if await self._acknowledge_terminal_duplicate(command):
             return
         ctx = await self._prepare_query(command)
-        async with self._queue_guard:
-            self._active_contexts[command.session_id] = ctx
+        async with _shared_state.queue_guard:
+            _shared_state.active_contexts[command.session_id] = ctx
         self._stream_consumer.start_trace_run(
             command.session_id,
             ctx.run_id,
@@ -255,12 +252,12 @@ class SessionQueryEngine:
                 error=trace_error,
                 cancelled=(
                     ctx.cancelled_during_stream
-                    or command.session_id in self._cancelled_sessions
+                    or command.session_id in _shared_state.cancelled_sessions
                 ),
             )
-            async with self._queue_guard:
-                if self._active_contexts.get(command.session_id) is ctx:
-                    self._active_contexts.pop(command.session_id, None)
+            async with _shared_state.queue_guard:
+                if _shared_state.active_contexts.get(command.session_id) is ctx:
+                    _shared_state.active_contexts.pop(command.session_id, None)
             await self._finalize_query(ctx)
 
     # ------------------------------------------------------------------
@@ -390,26 +387,12 @@ class SessionQueryEngine:
             },
         )
 
-        attachment_refs = []
-        image_paths = set(command.image_paths)
-        for attachment in command.attachments:
-            path = attachment.get("path", "")
-            filename = attachment.get("filename", "attachment")
-            mime_type = attachment.get("mime_type", "")
-            if not path:
-                continue
-            if mime_type.startswith("image/") or path in image_paths:
-                attachment_refs.append(f"[Image: {path}]")
-            else:
-                attachment_refs.append(f"[Attachment: {filename} path={path}]")
-
-        actual_prompt = command.prompt
-        if attachment_refs:
-            actual_prompt = f"{command.prompt}\n\n" + "\n".join(attachment_refs)
+        actual_prompt = self._compose_prompt(command)
+        if actual_prompt != command.prompt:
             logger.info(
                 "[session=%s] 附加 %d 个附件到 prompt",
                 command.session_id,
-                len(attachment_refs),
+                len(command.attachments),
             )
 
         session.start_query()
@@ -462,6 +445,25 @@ class SessionQueryEngine:
                 f"Project directory no longer exists: {session.project_dir}. "
                 "Please recreate or remove this session."
             )
+
+        msg_stream, is_connected = await self._establish_stream(ctx)
+        got_result = await self._consume_stream_with_retry(ctx, msg_stream, is_connected)
+        if ctx.cancelled_during_stream:
+            return
+
+        got_result = await self._retry_transient_result(ctx, got_result)
+        got_result, auto_continue_count = await self._auto_continue_loop(ctx, got_result)
+
+        if not got_result:
+            await self._emit_synthetic_result(ctx, auto_continue_count)
+
+        await self._refresh_context_usage(session)
+
+    async def _establish_stream(self, ctx: _QueryContext):
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+        actual_prompt = ctx.actual_prompt
 
         async def _save_and_broadcast():
             await self._save_session(session, commit=True)
@@ -527,19 +529,26 @@ class SessionQueryEngine:
                 enable_file_checkpointing=True,
             )
 
-        max_auto_continues = int(os.getenv("CLAUDE_MAX_AUTO_CONTINUES", "10"))
+        return msg_stream, is_connected
+
+    async def _consume_stream_with_retry(self, ctx: _QueryContext, msg_stream, is_connected: bool) -> bool:
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+        run_step = ctx.run_step
+        actual_prompt = ctx.actual_prompt
 
         try:
-            got_result = await self._stream_consumer.consume(session, msg_stream, run_id)
+            return await self._stream_consumer.consume(session, msg_stream, run_id)
         except Exception as stream_err:
-            if command.session_id in self._cancelled_sessions:
+            if command.session_id in _shared_state.cancelled_sessions:
                 logger.info(
                     "[session=%s] 消息流因取消而中断, 跳过重试",
                     command.session_id,
                 )
                 await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "stream"})
                 ctx.cancelled_during_stream = True
-                return
+                return False
             if is_connected:
                 await self._recorder.record_audit_event(
                     command.session_id,
@@ -567,15 +576,18 @@ class SessionQueryEngine:
                     cwd=session.project_dir,
                     sdk_session_id=resume_sdk_session_id,
                 )
-                got_result = await self._stream_consumer.consume(session, msg_stream, run_id)
-            else:
-                raise
+                return await self._stream_consumer.consume(session, msg_stream, run_id)
+            raise
 
-        got_result = await self._retry_transient_result(ctx, got_result)
+    async def _auto_continue_loop(self, ctx: _QueryContext, got_result: bool) -> tuple[bool, int]:
+        session = ctx.session
+        command = ctx.command
+        run_id = ctx.run_id
+        max_auto_continues = int(os.getenv("CLAUDE_MAX_AUTO_CONTINUES", "10"))
 
         auto_continue_count = 0
         while not got_result and auto_continue_count < max_auto_continues:
-            if command.session_id in self._cancelled_sessions:
+            if command.session_id in _shared_state.cancelled_sessions:
                 break
             if not self._claude_agent_gateway.is_connected(command.session_id):
                 break
@@ -626,20 +638,22 @@ class SessionQueryEngine:
                 )
                 break
 
-        if not got_result:
-            synthetic_result = self._build_stream_end_result(session, auto_continue_count)
-            log_message = "消息流结束但未收到 ResultMessage"
-            if synthetic_result.content["is_error"]:
-                logger.warning("[session=%s] %s，且未收到 Agent 输出", command.session_id, log_message)
-            else:
-                logger.info("[session=%s] %s，使用已收到的 Agent 输出完成", command.session_id, log_message)
-            session.add_message(synthetic_result)
-            await self._connection_manager.broadcast(
-                session.session_id,
-                {"event": "message", "data": {"type": "result", "content": synthetic_result.content}},
-            )
+        return got_result, auto_continue_count
 
-        await self._refresh_context_usage(session)
+    async def _emit_synthetic_result(self, ctx: _QueryContext, auto_continue_count: int) -> None:
+        session = ctx.session
+        command = ctx.command
+        synthetic_result = self._build_stream_end_result(session, auto_continue_count)
+        log_message = "消息流结束但未收到 ResultMessage"
+        if synthetic_result.content["is_error"]:
+            logger.warning("[session=%s] %s，且未收到 Agent 输出", command.session_id, log_message)
+        else:
+            logger.info("[session=%s] %s，使用已收到的 Agent 输出完成", command.session_id, log_message)
+        session.add_message(synthetic_result)
+        await self._connection_manager.broadcast(
+            session.session_id,
+            {"event": "message", "data": {"type": "result", "content": synthetic_result.content}},
+        )
 
     async def _retry_transient_result(
         self,
@@ -656,7 +670,7 @@ class SessionQueryEngine:
             failure_reason = self._result_failure_reason(ctx.session)
             if not self._is_transient_result_error(failure_reason):
                 break
-            if ctx.command.session_id in self._cancelled_sessions:
+            if ctx.command.session_id in _shared_state.cancelled_sessions:
                 break
 
             delay_seconds = min(30.0, base_delay * (2 ** (attempt - 1)))
@@ -696,7 +710,7 @@ class SessionQueryEngine:
                 },
             )
             await asyncio.sleep(delay_seconds)
-            if ctx.command.session_id in self._cancelled_sessions:
+            if ctx.command.session_id in _shared_state.cancelled_sessions:
                 break
 
             retry_stream = self._claude_agent_gateway.send_query(
@@ -793,7 +807,10 @@ class SessionQueryEngine:
         from infr.config.database import async_session_factory
         from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
         from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
+        from infr.repository.stage_output_repository_impl import StageOutputRepositoryImpl
         from infr.repository.team_repository_impl import TeamRepositoryImpl
+        from infr.client.session_context_collector_impl import SessionContextCollectorImpl
+        from application.team_board.stage_output_builder import StageOutputBuilder
 
         slot_availability: str | None = None
 
@@ -838,6 +855,27 @@ class SessionQueryEngine:
                 return
             if succeeded:
                 card.complete_execution(execution.id)
+                stage_output_repo = StageOutputRepositoryImpl(db_session)
+                existing_output = await stage_output_repo.find_latest_by_execution_id(
+                    execution.id
+                )
+                if existing_output is None:
+                    final_output = MessageConversionService.extract_assistant_text(
+                        session.messages
+                    )
+                    artifacts = SessionContextCollectorImpl.collect_session_artifacts(
+                        session.messages,
+                        session.project_dir,
+                    )
+                    stage_output = StageOutputBuilder.build(
+                        card=card,
+                        execution=execution,
+                        source_session_id=session.session_id,
+                        final_output=final_output,
+                        artifacts=artifacts,
+                        previous_output_id=execution.input_stage_output_id,
+                    )
+                    await stage_output_repo.save(stage_output)
                 if execution.agent_slot_id:
                     team_repo = TeamRepositoryImpl(db_session)
                     team = await team_repo.find_by_id(card.team_id)
@@ -877,6 +915,7 @@ class SessionQueryEngine:
                 "session_id": latest.session_id if latest else None,
                 "execution_id": latest.id if latest else None,
                 "failure_reason": latest.failure_reason if latest else None,
+                "handoff_readiness": "ready" if succeeded else "none",
                 **({"slot_availability": slot_availability, "slot_id": execution.agent_slot_id}
                    if slot_availability is not None else {}),
             },
@@ -892,7 +931,7 @@ class SessionQueryEngine:
         run_id = ctx.run_id
         run_step = ctx.run_step
 
-        if command.session_id in self._cancelled_sessions:
+        if command.session_id in _shared_state.cancelled_sessions:
             session.clear_cancel_requested()
             await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "completion"})
             logger.info("[session=%s] 查询被取消, 跳过正常完成流程", command.session_id)
@@ -962,7 +1001,7 @@ class SessionQueryEngine:
         run_id = ctx.run_id
         run_step = ctx.run_step
 
-        if command.session_id in self._cancelled_sessions:
+        if command.session_id in _shared_state.cancelled_sessions:
             session.clear_cancel_requested()
             await self._recorder.fail_run_step(run_step, {"cancelled": True, "stage": "error"})
             logger.info("[session=%s] 查询异常但已取消, 跳过错误处理", command.session_id)
@@ -1006,9 +1045,9 @@ class SessionQueryEngine:
         run_id = ctx.run_id
 
         self._claude_agent_gateway.mark_idle(command.session_id)
-        if command.session_id in self._cancelled_sessions:
-            async with self._queue_guard:
-                self._cancelled_sessions.discard(command.session_id)
+        if command.session_id in _shared_state.cancelled_sessions:
+            async with _shared_state.queue_guard:
+                _shared_state.cancelled_sessions.discard(command.session_id)
             return
         final_save_succeeded = False
         try:
@@ -1055,7 +1094,8 @@ class SessionQueryEngine:
         )
         if ctx.card_sync_succeeded is not None:
             try:
-                await self._sync_team_card_execution(
+                sync_fn = self._sync_card_execution_fn or self._sync_team_card_execution
+                await sync_fn(
                     session,
                     succeeded=ctx.card_sync_succeeded,
                     reason=ctx.card_sync_reason,
@@ -1067,8 +1107,8 @@ class SessionQueryEngine:
                     exc_info=True,
                 )
 
-        async with self._queue_guard:
-            queued = self._queued_messages.pop(command.session_id, None)
+        async with _shared_state.queue_guard:
+            queued = _shared_state.queued_messages.pop(command.session_id, None)
         if queued:
             await self._set_queued_command(command.session_id, None)
             await self._connection_manager.broadcast(
@@ -1141,10 +1181,10 @@ class SessionQueryEngine:
             )
 
     async def cancel_query(self, session_id: str) -> None:
-        async with self._queue_guard:
-            self._cancelled_sessions.add(session_id)
-            self._waiting_for_slot.discard(session_id)
-            self._slot_wait_started_at.pop(session_id, None)
+        async with _shared_state.queue_guard:
+            _shared_state.cancelled_sessions.add(session_id)
+            _shared_state.waiting_for_slot.discard(session_id)
+            _shared_state.slot_wait_started_at.pop(session_id, None)
         await self._recorder.record_audit_event(session_id, "cancel_requested", actor="user")
         await self._recorder.record_timeline_event(
             session_id,
@@ -1320,16 +1360,16 @@ class SessionQueryEngine:
         session_id: str,
         command: RunQueryCommand,
     ) -> QueueMessageOutcome:
-        async with self._queue_guard:
+        async with _shared_state.queue_guard:
             # The WebSocket may still see a persisted RUNNING status after the
             # active turn has entered finalization. Queueing at that point
             # strands the message because the finalizer may already have
             # drained the queue. Make the decision under the same guard used by
             # active-context removal and queue draining.
-            if self._active_contexts.get(session_id) is None:
+            if _shared_state.active_contexts.get(session_id) is None:
                 return QueueMessageOutcome.RUN_IMMEDIATELY
-            previous = self._queued_messages.get(session_id)
-            self._queued_messages[session_id] = command
+            previous = _shared_state.queued_messages.get(session_id)
+            _shared_state.queued_messages[session_id] = command
         await self._set_queued_command(session_id, command)
         if previous is not None:
             await self._recorder.record_audit_event(
@@ -1351,16 +1391,16 @@ class SessionQueryEngine:
         return QueueMessageOutcome.QUEUED
 
     async def clear_queued_message(self, session_id: str) -> None:
-        async with self._queue_guard:
-            removed = self._queued_messages.pop(session_id, None)
+        async with _shared_state.queue_guard:
+            removed = _shared_state.queued_messages.pop(session_id, None)
         await self._set_queued_command(session_id, None)
         if removed:
             logger.info("[session=%s] 已清除排队消息", session_id)
 
     async def steer_queued_message(self, session_id: str) -> dict[str, Any]:
-        async with self._queue_guard:
-            queued = self._queued_messages.get(session_id)
-            ctx = self._active_contexts.get(session_id)
+        async with _shared_state.queue_guard:
+            queued = _shared_state.queued_messages.get(session_id)
+            ctx = _shared_state.active_contexts.get(session_id)
             if queued is None:
                 raise BusinessException("No queued message to steer")
             if (
@@ -1380,9 +1420,9 @@ class SessionQueryEngine:
                     "The current run has already finished; the message remains queued"
                 ) from exc
 
-            if self._queued_messages.get(session_id) is not queued:
+            if _shared_state.queued_messages.get(session_id) is not queued:
                 raise BusinessException("The queued message changed; please try again")
-            self._queued_messages.pop(session_id, None)
+            _shared_state.queued_messages.pop(session_id, None)
 
             message_id = queued.client_message_id or uuid.uuid4().hex[:12]
             ctx.session.add_message(Message.create(

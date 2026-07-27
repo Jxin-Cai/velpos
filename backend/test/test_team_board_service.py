@@ -12,6 +12,7 @@ from domain.team.model.status import SlotAvailability
 from domain.team.model.team import Team
 from domain.team.model.team_domain_error import TeamDomainError
 from domain.team.model.wish_card import WishCard
+from application.team_board.stage_output_builder import StageOutputBuilder
 
 
 @pytest.mark.asyncio
@@ -116,5 +117,81 @@ async def test_execution_not_failed_when_terminal_session_is_recent() -> None:
     service._card_repo.find_by_id.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_snapshot_used_when_execution_session_is_created_from_previous_stage() -> None:
+    # Arrange
+    captured_commands: list[CreateSessionCommand] = []
+
+    async def create_session(command: CreateSessionCommand) -> SimpleNamespace:
+        captured_commands.append(command)
+        return SimpleNamespace(session_id="session-2")
+
+    card = WishCard.create(team_id="team-1", title="Continue implementation")
+    source_execution = card.assign_to("slot-1")
+    stage_output = StageOutputBuilder.build(
+        card=card,
+        execution=source_execution,
+        source_session_id="session-1",
+        final_output="Completed the domain model.",
+    )
+    service = object.__new__(TeamBoardApplicationService)
+    service._session_service = SimpleNamespace(create_session=create_session)
+
+    # Act
+    _, prompt = await service._create_execution_session(
+        team=SimpleNamespace(project_id="project-1", name="Delivery"),
+        card=card,
+        execution=SimpleNamespace(id="execution-2", agent_slot_id="slot-2"),
+        workspace_path="/workspace/execution-2",
+        handoff=None,
+        input_stage_output=stage_output,
+    )
+
+    # Assert
+    assert stage_output.id in prompt
+    assert stage_output.checksum in prompt
+    assert "Completed the domain model." in prompt
+    assert captured_commands[0].card_execution_id == "execution-2"
+
+
+@pytest.mark.asyncio
+async def test_handoff_references_exact_snapshot_when_stage_is_moved() -> None:
+    # Arrange
+    card = WishCard.create(team_id="team-1", title="Continue implementation")
+    source_execution = card.assign_to("slot-1")
+    stage_output = StageOutputBuilder.build(
+        card=card,
+        execution=source_execution,
+        source_session_id="session-1",
+        final_output="Completed the domain model.",
+    )
+    saved_handoffs = []
+    service = object.__new__(TeamBoardApplicationService)
+    service._handoff_repo = SimpleNamespace(
+        save=lambda handoff: _append_async(saved_handoffs, handoff)
+    )
+    target_execution = SimpleNamespace(id="execution-2")
+    target_slot = SimpleNamespace(id="slot-2")
+
+    # Act
+    handoff = await service._prepare_handoff(
+        source_execution,
+        target_execution,
+        target_slot,
+        card,
+        stage_output,
+    )
+
+    # Assert
+    assert handoff.stage_output_id == stage_output.id
+    assert handoff.target_execution_id == target_execution.id
+    assert handoff.consumed_checksum == stage_output.checksum
+    assert saved_handoffs == [handoff]
+
+
 async def _async_value(value):
     return value
+
+
+async def _append_async(items, value):
+    items.append(value)

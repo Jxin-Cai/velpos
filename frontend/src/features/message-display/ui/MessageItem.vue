@@ -13,7 +13,7 @@ import UserChoiceBlock from './UserChoiceBlock.vue'
 import PermissionRequestBlock from './PermissionRequestBlock.vue'
 import TodoProgressBlock from './TodoProgressBlock.vue'
 import ArtifactBlock from './ArtifactBlock.vue'
-import TraceButton from '@features/trace-viewer/ui/TraceButton.vue'
+import { TraceButton } from '@features/trace-viewer'
 
 const props = defineProps({
   message: {

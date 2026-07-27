@@ -24,7 +24,6 @@ if TYPE_CHECKING:
         MoveWishCardCommand,
         RetryExecutionCommand,
     )
-    from domain.team.acl.session_context_collector import SessionContext, SessionContextCollector
     from domain.team.acl.workspace_gateway import WorkspaceGateway
     from domain.team.model.agent_slot import AgentSlot
     from domain.team.model.card_execution import CardExecution
@@ -35,6 +34,8 @@ if TYPE_CHECKING:
     from domain.team.repository.handoff_repository import HandoffRepository
     from domain.team.repository.team_repository import TeamRepository
     from domain.team.repository.wish_card_repository import WishCardRepository
+    from domain.team.repository.stage_output_repository import StageOutputRepository
+    from domain.team.model.stage_output import StageOutput
     from domain.session.repository.session_repository import SessionRepository
     from domain.project.acl.plugin_manager import PluginManager
     from domain.session.acl.connection_manager import ConnectionManager
@@ -69,9 +70,9 @@ class TeamBoardApplicationService:
         card_repo: WishCardRepository,
         execution_repo: CardExecutionRepository,
         handoff_repo: HandoffRepository,
+        stage_output_repo: StageOutputRepository,
         workspace_gateway: WorkspaceGateway,
         session_service: SessionApplicationService,
-        context_collector: SessionContextCollector,
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         plugin_manager: PluginManager | None = None,
         connection_manager: ConnectionManager | None = None,
@@ -81,9 +82,9 @@ class TeamBoardApplicationService:
         self._card_repo = card_repo
         self._execution_repo = execution_repo
         self._handoff_repo = handoff_repo
+        self._stage_output_repo = stage_output_repo
         self._workspace = workspace_gateway
         self._session_service = session_service
-        self._context_collector = context_collector
         self._session_service_factory = session_service_factory
         self._plugin_manager = plugin_manager
         self._connection_manager = connection_manager
@@ -182,9 +183,20 @@ class TeamBoardApplicationService:
         slot_names = {slot.id: slot.name for slot in team.agent_slots}
 
         handoffs = await self._handoff_repo.find_by_card_id(card.id)
+        stage_outputs = await self._stage_output_repo.find_by_card_id(card.id)
         # A handoff with source_execution_id=X was received by the execution
         # immediately following X in the card's execution list.
         handoff_by_source = {h.source_execution_id: h for h in handoffs}
+        handoff_by_target = {
+            h.target_execution_id: h
+            for h in handoffs
+            if h.target_execution_id is not None
+        }
+        output_by_execution: dict[str, StageOutput] = {}
+        for output in stage_outputs:
+            current = output_by_execution.get(output.execution_id)
+            if current is None or output.revision > current.revision:
+                output_by_execution[output.execution_id] = output
 
         result: list[dict[str, object]] = []
         executions = card.executions
@@ -211,15 +223,27 @@ class TeamBoardApplicationService:
                 "started_at": item.started_at.isoformat() if item.started_at else None,
                 "ended_at": item.ended_at.isoformat() if item.ended_at else None,
                 "failure_reason": item.failure_reason,
+                "input_stage_output_id": item.input_stage_output_id,
             }
+            stage_output = output_by_execution.get(item.id)
+            entry["output"] = (
+                self._serialize_stage_output(stage_output)
+                if stage_output is not None
+                else None
+            )
             # The handoff received by this execution was created with the
             # previous execution as source.
             previous_id = executions[idx - 1].id if idx > 0 else None
-            handoff = handoff_by_source.get(previous_id) if previous_id else None
+            handoff = handoff_by_target.get(item.id)
+            if handoff is None and previous_id:
+                handoff = handoff_by_source.get(previous_id)
             if handoff is not None:
                 entry["handoff"] = {
                     "id": handoff.id,
                     "summary": handoff.summary,
+                    "stage_output_id": handoff.stage_output_id,
+                    "consumed_revision": handoff.consumed_revision,
+                    "consumed_checksum": handoff.consumed_checksum,
                     "source_agent_name": slot_names.get(
                         handoff.source_agent_slot_id, handoff.source_agent_slot_id
                     ),
@@ -232,6 +256,37 @@ class TeamBoardApplicationService:
                 entry["handoff"] = None
             result.append(entry)
         return result
+
+    @staticmethod
+    def _serialize_stage_output(stage_output: StageOutput) -> dict[str, object]:
+        return {
+            "id": stage_output.id,
+            "revision": stage_output.revision,
+            "schema_version": stage_output.schema_version,
+            "status": stage_output.status.value,
+            "content": stage_output.content,
+            "rendered_markdown": stage_output.rendered_markdown,
+            "checksum": stage_output.checksum,
+            "compression_method": stage_output.compression_method,
+            "created_at": stage_output.created_at.isoformat(),
+            "artifacts": [
+                {
+                    "id": artifact.id,
+                    "name": artifact.name,
+                    "path": artifact.path,
+                    "media_type": artifact.media_type,
+                }
+                for artifact in stage_output.artifacts
+            ],
+        }
+
+    async def get_handoff_readiness(
+        self, execution: CardExecution | None
+    ) -> str:
+        if execution is None or execution.status is not CardExecutionStatus.COMPLETED:
+            return "none"
+        output = await self._stage_output_repo.find_latest_by_execution_id(execution.id)
+        return output.status.value if output is not None else "legacy"
 
     async def execution_needs_user_action(self, execution: CardExecution | None) -> bool:
         if execution is None or execution.status is not CardExecutionStatus.RUNNING or not execution.session_id:
@@ -305,6 +360,7 @@ class TeamBoardApplicationService:
                 [execution.id for execution in executions]
             )
         await self._handoff_repo.remove_by_card_id(card.id)
+        await self._stage_output_repo.remove_by_card_id(card.id)
         await self._execution_repo.remove_by_card_id(card.id)
         await self._card_repo.remove(card)
         await self._broadcast_board_event("board_card_deleted", cmd.team_id, card.id)
@@ -370,12 +426,25 @@ class TeamBoardApplicationService:
 
         previous_execution = await self._find_last_completed_execution(card)
 
-        execution = card.assign_to(target_slot.id, idempotency_key)
+        input_stage_output = (
+            await self._ensure_stage_output(previous_execution, card)
+            if previous_execution is not None
+            else None
+        )
+        execution = card.assign_to(
+            target_slot.id,
+            idempotency_key,
+            input_stage_output.id if input_stage_output is not None else None,
+        )
         workspace_path = await self._prepare_execution_workspace(
             team,
             target_slot,
             execution.id,
         )
+        # The handoff has a foreign key to the receiving execution. Flush the
+        # execution first; the request-scoped transaction still rolls both
+        # records back together if session preparation fails.
+        await self._execution_repo.save(execution)
 
         if previous_execution is not None:
             handoff = await self._prepare_handoff(
@@ -383,6 +452,7 @@ class TeamBoardApplicationService:
                 execution,
                 target_slot,
                 card,
+                input_stage_output,
             )
         else:
             handoff = None
@@ -396,6 +466,7 @@ class TeamBoardApplicationService:
             execution=execution,
             workspace_path=workspace_path,
             handoff=handoff,
+            input_stage_output=input_stage_output,
         )
         execution.session_id = session.session_id
 
@@ -428,7 +499,15 @@ class TeamBoardApplicationService:
         if target_slot is None:
             raise TeamDomainError(f"Slot {old_execution.agent_slot_id} not found")
 
-        new_execution = card.retry_on(target_slot.id)
+        input_stage_output = (
+            await self._stage_output_repo.find_by_id(old_execution.input_stage_output_id)
+            if old_execution.input_stage_output_id
+            else None
+        )
+        new_execution = card.retry_on(
+            target_slot.id,
+            old_execution.input_stage_output_id,
+        )
         workspace_path = await self._prepare_execution_workspace(
             team,
             target_slot,
@@ -444,6 +523,7 @@ class TeamBoardApplicationService:
             execution=new_execution,
             workspace_path=workspace_path,
             handoff=None,
+            input_stage_output=input_stage_output,
         )
         new_execution.session_id = session.session_id
 
@@ -576,39 +656,65 @@ class TeamBoardApplicationService:
         target_execution: CardExecution,
         target_slot,
         card: WishCard,
+        stage_output: StageOutput | None,
     ) -> Handoff:
         from domain.team.model.handoff import Handoff
 
-        context = await self._context_collector.collect(
-            session_id=source_execution.session_id or "",
-        )
+        if stage_output is None:
+            raise TeamDomainError("Completed execution has no ready stage output")
         handoff = Handoff.create(
             team_id=card.team_id,
             card_id=card.id,
             source_execution_id=source_execution.id,
             source_agent_slot_id=source_execution.agent_slot_id,
             target_agent_slot_id=target_slot.id,
-            summary=self._format_handoff_summary(context),
+            summary=stage_output.rendered_markdown,
+            target_execution_id=target_execution.id,
+            stage_output_id=stage_output.id,
+            consumed_revision=stage_output.revision,
+            consumed_checksum=stage_output.checksum,
         )
-        for artifact in context.artifacts:
+        for artifact in stage_output.artifacts:
             handoff.add_artifact(
-                name=artifact.path.rsplit("/", 1)[-1],
+                name=artifact.name,
                 path=artifact.path,
-                media_type=artifact.artifact_type,
+                media_type=artifact.media_type,
             )
         handoff.accept()
         await self._handoff_repo.save(handoff)
         return handoff
 
-    @staticmethod
-    def _format_handoff_summary(context: SessionContext) -> str:
-        session_lines = [f"- Velpos 会话 ID: `{context.source_session_id}`"]
-        if context.sdk_session_id:
-            session_lines.append(f"- Claude Code 会话 ID: `{context.sdk_session_id}`")
-        else:
-            session_lines.append("- Claude Code 会话 ID: 未记录")
-        conversation = context.summary or "前序会话没有可提取的文本内容。"
-        return "## 前序会话\n" + "\n".join(session_lines) + f"\n\n## 执行记录\n{conversation}"
+    async def _ensure_stage_output(
+        self,
+        source_execution: CardExecution,
+        card: WishCard,
+    ) -> StageOutput:
+        from application.team_board.stage_output_builder import StageOutputBuilder
+        from domain.session.service.message_conversion_service import MessageConversionService
+        from infr.client.session_context_collector_impl import SessionContextCollectorImpl
+
+        existing = await self._stage_output_repo.find_latest_by_execution_id(
+            source_execution.id
+        )
+        if existing is not None:
+            return existing
+        if not source_execution.session_id:
+            raise TeamDomainError("Completed execution has no source session")
+
+        session = await self._session_service.get_session(source_execution.session_id)
+        stage_output = StageOutputBuilder.build(
+            card=card,
+            execution=source_execution,
+            source_session_id=session.session_id,
+            final_output=MessageConversionService.extract_assistant_text(session.messages),
+            artifacts=SessionContextCollectorImpl.collect_session_artifacts(
+                session.messages,
+                session.project_dir,
+            ),
+            previous_output_id=source_execution.input_stage_output_id,
+        )
+        await self._stage_output_repo.save(stage_output)
+        return stage_output
 
     async def _create_execution_session(
         self,
@@ -617,14 +723,28 @@ class TeamBoardApplicationService:
         execution: CardExecution,
         workspace_path: str,
         handoff: Handoff | None,
+        input_stage_output: StageOutput | None = None,
     ):
         prompt_parts: list[str] = []
-        if handoff and handoff.status == HandoffStatus.ACCEPTED:
-            prompt_parts.append(f"## 上一执行上下文\n{handoff.summary}")
+        if input_stage_output is not None:
+            prompt_parts.append(
+                "## 上一阶段交接上下文\n"
+                f"{input_stage_output.rendered_markdown}\n\n"
+                f"上下文快照: `{input_stage_output.id}` "
+                f"v{input_stage_output.revision} "
+                f"sha256:{input_stage_output.checksum}"
+            )
+        elif handoff and handoff.status == HandoffStatus.ACCEPTED:
+            prompt_parts.append(f"## 上一阶段交接上下文\n{handoff.summary}")
             if handoff.artifacts:
                 artifact_lines = format_handoff_artifact_links(handoff)
                 prompt_parts.append(f"## 产物\n{artifact_lines}")
         prompt_parts.append(f"## 愿望卡\n标题: {card.title}\n描述: {card.description}")
+        prompt_parts.append(
+            "## 阶段完成要求\n"
+            "完成工作后，请在最终回复中简洁说明：本阶段结论、已完成、"
+            "关键决策、产物、验证、待处理事项和下一阶段建议。"
+        )
 
         session_cmd = CreateSessionCommand(
             model=os.getenv("DEFAULT_MODEL", "default"),

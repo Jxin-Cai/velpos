@@ -18,6 +18,7 @@ class CardExecution:
     failure_reason: str | None = None
     session_id: str | None = None
     idempotency_key: str | None = None
+    input_stage_output_id: str | None = None
 
     @classmethod
     def create(
@@ -25,6 +26,7 @@ class CardExecution:
         card_id: str,
         agent_slot_id: str,
         idempotency_key: str | None = None,
+        input_stage_output_id: str | None = None,
     ) -> "CardExecution":
         if not card_id.strip():
             raise TeamDomainError("card_id must not be blank")
@@ -38,6 +40,7 @@ class CardExecution:
             status=CardExecutionStatus.PREPARING,
             created_at=datetime.now(timezone.utc),
             idempotency_key=idempotency_key,
+            input_stage_output_id=input_stage_output_id,
         )
 
     @property

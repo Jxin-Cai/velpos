@@ -592,8 +592,8 @@ async def get_team_board_service(
     from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
     from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
     from infr.repository.handoff_repository_impl import HandoffRepositoryImpl
+    from infr.repository.stage_output_repository_impl import StageOutputRepositoryImpl
     from infr.workspace.filesystem_workspace_gateway import FilesystemWorkspaceGateway
-    from infr.client.session_context_collector_impl import SessionContextCollectorImpl
 
     session_service = await get_session_application_service(db_session)
     return TeamBoardApplicationService(
@@ -601,9 +601,9 @@ async def get_team_board_service(
         card_repo=WishCardRepositoryImpl(db_session),
         execution_repo=CardExecutionRepositoryImpl(db_session),
         handoff_repo=HandoffRepositoryImpl(db_session),
+        stage_output_repo=StageOutputRepositoryImpl(db_session),
         workspace_gateway=FilesystemWorkspaceGateway(),
         session_service=session_service,
-        context_collector=SessionContextCollectorImpl(SessionRepositoryImpl(db_session)),
         session_service_factory=_create_session_service,
         plugin_manager=_claude_plugin_manager,
         connection_manager=_connection_manager,

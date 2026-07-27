@@ -1,4 +1,5 @@
 import mimetypes
+import logging
 from pathlib import Path
 from collections.abc import Iterable, Iterator
 from typing import Any
@@ -10,6 +11,8 @@ from domain.team.acl.session_context_collector import (
     SessionContext,
     SessionContextCollector,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SessionContextCollectorImpl(SessionContextCollector):
@@ -30,6 +33,23 @@ class SessionContextCollectorImpl(SessionContextCollector):
             sdk_session_id=session.sdk_session_id,
             artifacts=self._collect_artifacts(session.messages, session.project_dir),
         )
+
+    @classmethod
+    def collect_session_artifacts(
+        cls,
+        messages: Iterable[Message],
+        project_dir: str,
+    ) -> tuple[SessionArtifact, ...]:
+        """Collect artifact metadata without collecting or forwarding conversation text."""
+        try:
+            return cls._collect_artifacts(messages, project_dir)
+        except OSError:
+            logger.warning(
+                "Could not collect stage output artifacts from workspace %s",
+                project_dir,
+                exc_info=True,
+            )
+            return ()
 
     @classmethod
     def _build_summary(cls, messages: Iterable[Message]) -> str:

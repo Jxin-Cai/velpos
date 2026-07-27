@@ -67,6 +67,10 @@ class HandoffRepositoryImpl(HandoffRepository):
             status=handoff.status.value,
             created_time=handoff.created_at,
             resolved_time=handoff.resolved_at,
+            target_execution_id=handoff.target_execution_id,
+            stage_output_id=handoff.stage_output_id,
+            consumed_revision=handoff.consumed_revision,
+            consumed_checksum=handoff.consumed_checksum,
             artifacts=[
                 HandoffArtifactModel(
                     id=artifact.id,
@@ -93,6 +97,10 @@ class HandoffRepositoryImpl(HandoffRepository):
             status=HandoffStatus(model.status),
             created_at=model.created_time,
             resolved_at=model.resolved_time,
+            target_execution_id=model.target_execution_id,
+            stage_output_id=model.stage_output_id,
+            consumed_revision=model.consumed_revision,
+            consumed_checksum=model.consumed_checksum,
             artifacts=[
                 HandoffArtifact(
                     id=artifact.id,

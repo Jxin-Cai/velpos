@@ -24,6 +24,24 @@ const STATUS_CONFIG = {
 const statusConfig = computed(() => STATUS_CONFIG[props.card.status] || STATUS_CONFIG.backlog)
 const isRunning = computed(() => props.card.status === 'running')
 const canRetry = computed(() => props.card.status === 'failed' || props.card.status === 'cancelled')
+const executionHistory = computed(() => Array.isArray(props.card.execution_history)
+  ? props.card.execution_history
+  : [])
+const latestOutput = computed(() => {
+  for (let index = executionHistory.value.length - 1; index >= 0; index -= 1) {
+    if (executionHistory.value[index]?.output) return executionHistory.value[index].output
+  }
+  return null
+})
+const latestSummary = computed(() => latestOutput.value?.content?.stage_summary || '')
+const readinessLabel = computed(() => {
+  const readiness = props.card.handoff_readiness
+  if (readiness === 'ready') return 'Context ready'
+  if (readiness === 'degraded') return 'Review context'
+  if (readiness === 'legacy') return 'Context on move'
+  if (props.card.status === 'completed') return 'Preparing context'
+  return ''
+})
 const detailsVisible = ref(false)
 const deleteConfirmationVisible = ref(false)
 
@@ -99,6 +117,26 @@ function handleKeyDown(e) {
       </span>
     </div>
     <p v-if="card.description" class="wish-card__desc">{{ card.description }}</p>
+    <p v-if="latestSummary" class="wish-card__summary">{{ latestSummary }}</p>
+    <div v-if="executionHistory.length || readinessLabel" class="wish-card__context-meta">
+      <span v-if="executionHistory.length">
+        {{ executionHistory.length }} {{ executionHistory.length === 1 ? 'stage' : 'stages' }}
+      </span>
+      <span
+        v-if="readinessLabel"
+        class="wish-card__readiness"
+        :data-readiness="card.handoff_readiness"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path v-if="card.handoff_readiness === 'ready'" d="m5 12 4 4L19 6" />
+          <template v-else>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </template>
+        </svg>
+        {{ readinessLabel }}
+      </span>
+    </div>
     <div v-if="isRunning" class="wish-card__progress">
       <div class="progress-bar">
         <div class="progress-bar__fill"></div>
@@ -216,6 +254,41 @@ function handleKeyDown(e) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.wish-card__summary {
+  display: -webkit-box;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.wish-card__context-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.wish-card__readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wish-card__readiness[data-readiness="ready"] {
+  color: var(--status-success);
+}
+
+.wish-card__readiness[data-readiness="degraded"] {
+  color: var(--status-running);
 }
 
 .wish-card__title {

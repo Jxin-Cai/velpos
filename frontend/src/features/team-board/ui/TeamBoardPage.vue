@@ -63,7 +63,9 @@ function canDropOn(card, targetId) {
   if (targetId === 'archive') {
     return ['backlog', 'completed', 'failed', 'cancelled'].includes(card.status)
   }
-  return targetId !== 'backlog' && card.current_slot_id !== targetId
+  return targetId !== 'backlog'
+    && card.current_slot_id !== targetId
+    && isCardDraggable(card)
 }
 
 function handleColumnDragOver(targetId, event) {

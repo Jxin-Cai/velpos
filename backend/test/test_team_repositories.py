@@ -17,11 +17,13 @@ from domain.session.model.session import Session
 from domain.team.model.card_execution import CardExecution
 from domain.team.model.handoff import Handoff
 from domain.team.model.status import CardExecutionStatus, WishCardStatus
+from application.team_board.stage_output_builder import StageOutputBuilder
 from domain.team.model.team import Team
 from domain.team.model.wish_card import WishCard
 from infr.config.base import Base
 from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
 from infr.repository.handoff_repository_impl import HandoffRepositoryImpl
+from infr.repository.stage_output_repository_impl import StageOutputRepositoryImpl
 from infr.repository.project_model import ProjectModel
 from infr.repository.session_model import SessionModel
 from infr.repository.session_repository_impl import SessionRepositoryImpl
@@ -30,6 +32,8 @@ from infr.repository.team_model import (
     CardExecutionModel,
     CardHandoffModel,
     HandoffArtifactModel,
+    CardStageOutputModel,
+    StageOutputArtifactModel,
     TeamModel,
     WishCardModel,
 )
@@ -48,6 +52,8 @@ _TABLES = [
     AgentSlotModel.__table__,
     WishCardModel.__table__,
     CardExecutionModel.__table__,
+    CardStageOutputModel.__table__,
+    StageOutputArtifactModel.__table__,
     CardHandoffModel.__table__,
     HandoffArtifactModel.__table__,
     SessionModel.__table__,
@@ -257,6 +263,36 @@ async def test_handoff_round_trip_when_saved_with_artifact(db_session: AsyncSess
 
     # Assert
     assert loaded == handoff
+
+
+@pytest.mark.asyncio
+async def test_stage_output_round_trip_when_saved_with_artifact(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    team = await _save_team(db_session)
+    card = _card(team)
+    execution = card.assign_to(team.agent_slots[0].id)
+    await WishCardRepositoryImpl(db_session).save(card)
+    stage_output = StageOutputBuilder.build(
+        card=card,
+        execution=execution,
+        source_session_id="sess0001",
+        final_output="Completed the implementation.",
+    )
+    stage_output.add_artifact(
+        name="result.md",
+        path="/workspace/result.md",
+        media_type="text/markdown",
+    )
+    repository = StageOutputRepositoryImpl(db_session)
+
+    # Act
+    await repository.save(stage_output)
+    loaded = await repository.find_latest_by_execution_id(execution.id)
+
+    # Assert
+    assert loaded == stage_output
 
 
 @pytest.mark.asyncio

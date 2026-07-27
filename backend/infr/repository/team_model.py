@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -130,12 +130,18 @@ class CardExecutionModel(Base):
     ended_time: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(8), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    input_stage_output_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("card_stage_outputs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     card: Mapped[WishCardModel] = relationship(back_populates="executions")
 
     __table_args__ = (
         UniqueConstraint("card_id", "idempotency_key", name="uq_card_executions_idempotency"),
         Index("idx_card_executions_card_time", "card_id", "created_time"),
         Index("idx_card_executions_slot_status", "agent_slot_id", "status"),
+        Index("idx_card_executions_input_output", "input_stage_output_id"),
     )
 
 
@@ -168,6 +174,18 @@ class CardHandoffModel(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     resolved_time: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    target_execution_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("card_executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    stage_output_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("card_stage_outputs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    consumed_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consumed_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
     artifacts: Mapped[list[HandoffArtifactModel]] = relationship(
         back_populates="handoff",
         cascade="all, delete-orphan",
@@ -178,6 +196,8 @@ class CardHandoffModel(Base):
     __table_args__ = (
         Index("idx_card_handoffs_card_time", "card_id", "created_time"),
         Index("idx_card_handoffs_target_status", "target_agent_slot_id", "status"),
+        Index("idx_card_handoffs_target_execution", "target_execution_id"),
+        Index("idx_card_handoffs_stage_output", "stage_output_id"),
     )
 
 
@@ -201,4 +221,71 @@ class HandoffArtifactModel(Base):
     __table_args__ = (
         UniqueConstraint("handoff_id", "path", name="uq_handoff_artifacts_path"),
         Index("idx_handoff_artifacts_handoff", "handoff_id", "created_time"),
+    )
+
+
+class CardStageOutputModel(Base):
+    __tablename__ = "card_stage_outputs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    card_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("wish_cards.id", ondelete="CASCADE"), nullable=False
+    )
+    execution_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("card_executions.id", ondelete="CASCADE"), nullable=False
+    )
+    previous_output_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("card_stage_outputs.id", ondelete="SET NULL"), nullable=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    rendered_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    source_session_id: Mapped[str] = mapped_column(String(8), nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    compression_method: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    artifacts: Mapped[list[StageOutputArtifactModel]] = relationship(
+        back_populates="stage_output",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="StageOutputArtifactModel.created_time",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "execution_id", "revision", name="uq_card_stage_outputs_execution_revision"
+        ),
+        Index("idx_card_stage_outputs_card_time", "card_id", "created_time"),
+        Index(
+            "idx_card_stage_outputs_execution_revision",
+            "execution_id",
+            "revision",
+        ),
+    )
+
+
+class StageOutputArtifactModel(Base):
+    __tablename__ = "stage_output_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    stage_output_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("card_stage_outputs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    path: Mapped[str] = mapped_column(String(700), nullable=False)
+    media_type: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    stage_output: Mapped[CardStageOutputModel] = relationship(back_populates="artifacts")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "stage_output_id", "path", name="uq_stage_output_artifacts_path"
+        ),
+        Index("idx_stage_output_artifacts_output", "stage_output_id", "created_time"),
     )

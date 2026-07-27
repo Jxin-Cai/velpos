@@ -81,6 +81,8 @@ class WishCardRepositoryImpl(WishCardRepository):
                     started_time=execution.started_at,
                     ended_time=execution.ended_at,
                     session_id=execution.session_id,
+                    idempotency_key=execution.idempotency_key,
+                    input_stage_output_id=execution.input_stage_output_id,
                 )
                 for execution in card.executions
             ],
@@ -108,6 +110,8 @@ class WishCardRepositoryImpl(WishCardRepository):
                     started_at=execution.started_time,
                     ended_at=execution.ended_time,
                     session_id=execution.session_id,
+                    idempotency_key=execution.idempotency_key,
+                    input_stage_output_id=execution.input_stage_output_id,
                 )
                 for execution in model.executions
             ],

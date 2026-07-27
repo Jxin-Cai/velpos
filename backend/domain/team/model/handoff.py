@@ -28,6 +28,10 @@ class Handoff:
     status: HandoffStatus
     created_at: datetime
     resolved_at: datetime | None = None
+    target_execution_id: str | None = None
+    stage_output_id: str | None = None
+    consumed_revision: int | None = None
+    consumed_checksum: str | None = None
     artifacts: list[HandoffArtifact] = field(default_factory=list)
 
     def add_artifact(
@@ -60,6 +64,10 @@ class Handoff:
         source_agent_slot_id: str,
         target_agent_slot_id: str,
         summary: str,
+        target_execution_id: str | None = None,
+        stage_output_id: str | None = None,
+        consumed_revision: int | None = None,
+        consumed_checksum: str | None = None,
     ) -> "Handoff":
         required = {
             "team_id": team_id,
@@ -85,6 +93,10 @@ class Handoff:
             summary=summary,
             status=HandoffStatus.PENDING,
             created_at=datetime.now(timezone.utc),
+            target_execution_id=target_execution_id,
+            stage_output_id=stage_output_id,
+            consumed_revision=consumed_revision,
+            consumed_checksum=consumed_checksum,
         )
 
     def accept(self) -> None:

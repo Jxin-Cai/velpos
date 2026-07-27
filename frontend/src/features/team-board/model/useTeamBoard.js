@@ -41,6 +41,7 @@ const EVENT_CARD_FIELDS = Object.freeze([
   'session_id',
   'execution_id',
   'failure_reason',
+  'handoff_readiness',
 ])
 
 const team = ref(null)
@@ -76,7 +77,9 @@ const backlogCards = computed(() => cardsBySlot.value.get(null) || [])
 const archivedCards = computed(() => cards.value.filter(card => card.status === CARD_STATUS.ARCHIVED))
 
 function isCardDraggable(card) {
-  return DRAGGABLE_STATUSES.includes(card.status)
+  if (!DRAGGABLE_STATUSES.includes(card.status)) return false
+  if (card.status !== CARD_STATUS.COMPLETED) return true
+  return ['ready', 'degraded', 'legacy'].includes(card.handoff_readiness)
 }
 
 function updateCardLocally(cardId, patch) {

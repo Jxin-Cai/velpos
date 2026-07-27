@@ -18,6 +18,14 @@ _TRACE_ENABLED = os.getenv("VELPOS_TRACE_ENABLED", "true").lower() in ("1", "tru
 
 class TraceCollector:
 
+    _CLOSE_ORDER = {
+        TraceSpan.SPAN_TYPE_TOOL_CALL: 0,
+        TraceSpan.SPAN_TYPE_LLM_TURN: 1,
+        TraceSpan.SPAN_TYPE_SUBAGENT: 2,
+        TraceSpan.SPAN_TYPE_AGENT: 3,
+        TraceSpan.SPAN_TYPE_RUN: 4,
+    }
+
     def __init__(
         self,
         repository: TraceSpanRepository | None = None,
@@ -375,14 +383,7 @@ class TraceCollector:
             and span.status == TraceSpan.STATUS_RUNNING
         ]
         # Complete leaf work before its containers.
-        close_order = {
-            TraceSpan.SPAN_TYPE_TOOL_CALL: 0,
-            TraceSpan.SPAN_TYPE_LLM_TURN: 1,
-            TraceSpan.SPAN_TYPE_SUBAGENT: 2,
-            TraceSpan.SPAN_TYPE_AGENT: 3,
-            TraceSpan.SPAN_TYPE_RUN: 4,
-        }
-        spans.sort(key=lambda span: close_order.get(span.span_type, 0))
+        spans.sort(key=lambda span: self._CLOSE_ORDER.get(span.span_type, 0))
         for span in spans:
             if abandoned:
                 self.abandon_span(span.id, reason="Process lost")
@@ -400,14 +401,7 @@ class TraceCollector:
             if span.session_id == session_id
             and span.status == TraceSpan.STATUS_RUNNING
         ]
-        close_order = {
-            TraceSpan.SPAN_TYPE_TOOL_CALL: 0,
-            TraceSpan.SPAN_TYPE_LLM_TURN: 1,
-            TraceSpan.SPAN_TYPE_SUBAGENT: 2,
-            TraceSpan.SPAN_TYPE_AGENT: 3,
-            TraceSpan.SPAN_TYPE_RUN: 4,
-        }
-        spans.sort(key=lambda span: close_order.get(span.span_type, 0))
+        spans.sort(key=lambda span: self._CLOSE_ORDER.get(span.span_type, 0))
         for span in spans:
             self.abandon_span(span.id, reason=reason)
 

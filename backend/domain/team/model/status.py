@@ -36,3 +36,9 @@ class HandoffStatus(str, Enum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+
+
+class StageOutputStatus(str, Enum):
+    READY = "ready"
+    DEGRADED = "degraded"
+    FAILED = "failed"

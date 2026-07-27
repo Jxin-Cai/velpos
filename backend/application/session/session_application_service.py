@@ -25,7 +25,7 @@ from domain.session.service.message_conversion_service import MessageConversionS
 from application.session.session_presenter import SessionPresenter
 from application.session.session_observability_recorder import SessionObservabilityRecorder
 from application.session.session_stream_consumer import SessionStreamConsumer
-from application.session.session_query_engine import QueueMessageOutcome, SessionQueryEngine
+from application.session.session_query_engine import QueueMessageOutcome, SessionQueryEngine, _shared_state, _shared_state
 from domain.project.model.project import Project
 from domain.session.service.sdk_session_binding_service import SdkSessionBindingService
 from domain.project.repository.project_repository import ProjectRepository
@@ -85,7 +85,7 @@ class SessionApplicationService:
             connection_manager=connection_manager,
             save_session_fn=self._save_session,
             accept_sdk_session_id_fn=self._accept_or_reject_sdk_session_id,
-            cancelled_sessions=SessionQueryEngine._cancelled_sessions,
+            cancelled_sessions=_shared_state.cancelled_sessions,
             trace_collector=trace_collector,
         )
         self._query_engine = SessionQueryEngine(
@@ -369,7 +369,7 @@ class SessionApplicationService:
         from infr.config.database import async_session_factory
         from infr.repository.session_repository_impl import SessionRepositoryImpl
 
-        session_lock = await SessionQueryEngine._session_lock_pool.acquire(session_id)
+        session_lock = await _shared_state.session_lock_pool.acquire(session_id)
         try:
             async with session_lock:
                 try:
@@ -392,7 +392,7 @@ class SessionApplicationService:
                 except Exception:
                     logger.warning("[session=%s] SDK session pre-bind failed", session_id, exc_info=True)
         finally:
-            await SessionQueryEngine._session_lock_pool.unref(session_id)
+            await _shared_state.session_lock_pool.unref(session_id)
 
     async def get_session(self, session_id: str) -> Session:
         session = await self._session_repository.find_by_id(session_id)
@@ -592,7 +592,7 @@ class SessionApplicationService:
             logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
 
     async def refresh_context_usage(self, session_id: str) -> Session:
-        session_lock = await SessionQueryEngine._session_lock_pool.acquire(session_id)
+        session_lock = await _shared_state.session_lock_pool.acquire(session_id)
         try:
             async with session_lock:
                 if self._execution_lock_factory is None:
@@ -600,7 +600,7 @@ class SessionApplicationService:
                 async with self._execution_lock_factory(session_id):
                     return await self._refresh_context_usage_locked(session_id)
         finally:
-            await SessionQueryEngine._session_lock_pool.unref(session_id)
+            await _shared_state.session_lock_pool.unref(session_id)
 
     async def _refresh_context_usage_locked(self, session_id: str) -> Session:
         session = await self.get_session(session_id)

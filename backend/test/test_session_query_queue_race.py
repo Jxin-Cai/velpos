@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from application.session.command.run_query_command import RunQueryCommand
-from application.session.session_query_engine import QueueMessageOutcome, SessionQueryEngine
+from application.session.session_query_engine import (
+    QueueMessageOutcome,
+    SessionQueryEngine,
+    _shared_state,
+)
 
 
 def _engine() -> SessionQueryEngine:
@@ -34,9 +38,9 @@ async def test_runs_message_immediately_when_active_context_has_finished() -> No
         client_message_id="message-next",
     )
     engine = _engine()
-    async with SessionQueryEngine._queue_guard:
-        SessionQueryEngine._active_contexts.pop(session_id, None)
-        SessionQueryEngine._queued_messages.pop(session_id, None)
+    async with _shared_state.queue_guard:
+        _shared_state.active_contexts.pop(session_id, None)
+        _shared_state.queued_messages.pop(session_id, None)
 
     # Act
     outcome = await engine.queue_message(session_id, command)
@@ -58,9 +62,9 @@ async def test_queues_message_when_active_context_still_exists() -> None:
     engine._set_queued_command = AsyncMock()
     engine._recorder = SimpleNamespace(record_audit_event=AsyncMock())
     active_context = object()
-    async with SessionQueryEngine._queue_guard:
-        SessionQueryEngine._active_contexts[session_id] = active_context
-        SessionQueryEngine._queued_messages.pop(session_id, None)
+    async with _shared_state.queue_guard:
+        _shared_state.active_contexts[session_id] = active_context
+        _shared_state.queued_messages.pop(session_id, None)
 
     try:
         # Act
@@ -69,6 +73,6 @@ async def test_queues_message_when_active_context_still_exists() -> None:
         # Assert
         assert outcome is QueueMessageOutcome.QUEUED
     finally:
-        async with SessionQueryEngine._queue_guard:
-            SessionQueryEngine._active_contexts.pop(session_id, None)
-            SessionQueryEngine._queued_messages.pop(session_id, None)
+        async with _shared_state.queue_guard:
+            _shared_state.active_contexts.pop(session_id, None)
+            _shared_state.queued_messages.pop(session_id, None)

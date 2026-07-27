@@ -26,6 +26,14 @@ function formatDate(value) {
 function artifactHref(artifact) {
   return getTeamArtifactUrl(props.projectId, artifact.path)
 }
+
+function contentItems(output, key) {
+  return Array.isArray(output?.content?.[key]) ? output.content[key] : []
+}
+
+function shortChecksum(value) {
+  return value ? value.slice(0, 12) : '—'
+}
 </script>
 
 <template>
@@ -86,9 +94,61 @@ function artifactHref(artifact) {
 
                 <p v-if="execution.failure_reason" class="execution-failure">{{ execution.failure_reason }}</p>
 
+                <details v-if="execution.output" class="stage-output">
+                  <summary>
+                    <span>
+                      <span class="stage-output__label">Passed to the next stage</span>
+                      <span class="stage-output__version">
+                        v{{ execution.output.revision }} · {{ shortChecksum(execution.output.checksum) }}
+                      </span>
+                    </span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </summary>
+                  <div class="stage-output__body">
+                    <section v-if="execution.output.content?.stage_summary">
+                      <h3>Stage result</h3>
+                      <p>{{ execution.output.content.stage_summary }}</p>
+                    </section>
+                    <section
+                      v-for="[label, key] in [
+                        ['Completed', 'completed_work'],
+                        ['Decisions', 'decisions'],
+                        ['Deliverables', 'deliverables'],
+                        ['Validation', 'validation'],
+                        ['Open items', 'unresolved_issues'],
+                        ['Risks', 'risks'],
+                      ]"
+                      v-show="contentItems(execution.output, key).length"
+                      :key="key"
+                    >
+                      <h3>{{ label }}</h3>
+                      <ul>
+                        <li v-for="item in contentItems(execution.output, key)" :key="item">{{ item }}</li>
+                      </ul>
+                    </section>
+                    <section v-if="execution.output.content?.next_stage_brief">
+                      <h3>Next stage</h3>
+                      <p>{{ execution.output.content.next_stage_brief }}</p>
+                    </section>
+                    <div v-if="execution.output.artifacts?.length" class="artifact-list">
+                      <a
+                        v-for="artifact in execution.output.artifacts"
+                        :key="artifact.id || artifact.path"
+                        :href="artifactHref(artifact)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >{{ artifact.name }}</a>
+                    </div>
+                  </div>
+                </details>
+
                 <div v-if="execution.handoff" class="handoff-block">
-                  <span class="handoff-label">Context from {{ execution.handoff.source_agent_name }}</span>
-                  <p>{{ execution.handoff.summary }}</p>
+                  <span class="handoff-label">Input consumed from {{ execution.handoff.source_agent_name }}</span>
+                  <span v-if="execution.handoff.stage_output_id" class="handoff-snapshot">
+                    Snapshot {{ execution.handoff.stage_output_id }}
+                  </span>
                   <div v-if="execution.handoff.artifacts?.length" class="artifact-list">
                     <a
                       v-for="artifact in execution.handoff.artifacts"
@@ -173,11 +233,31 @@ function artifactHref(artifact) {
 .execution-failure { margin: 10px 0 0; padding: 8px 10px; border-left: 2px solid var(--status-danger); background: var(--status-danger-bg); color: var(--status-danger); font-size: 11px; line-height: 1.5; }
 .handoff-block { margin-top: 12px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-tertiary); }
 .handoff-label { color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
+.handoff-snapshot { display: block; margin-top: 5px; color: var(--text-muted); font: 10px/1.4 var(--font-mono); overflow-wrap: anywhere; }
 .handoff-block p { margin: 6px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
 .artifact-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .artifact-list a { color: var(--accent); font-size: 11px; text-decoration: none; }
 .artifact-list a:hover { text-decoration: underline; }
 .empty-chain { padding: 28px 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: 12px; text-align: center; }
+
+.stage-output { margin-top: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--status-success) 28%, var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--status-success-bg) 55%, var(--bg-secondary)); }
+.stage-output summary { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; color: var(--text-primary); cursor: pointer; list-style: none; }
+.stage-output summary::-webkit-details-marker { display: none; }
+.stage-output summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.stage-output summary > svg { flex: none; transition: transform var(--transition-fast); }
+.stage-output[open] summary > svg { transform: rotate(180deg); }
+.stage-output__label { display: block; color: var(--status-success); font-size: 11px; font-weight: 600; }
+.stage-output__version { display: block; margin-top: 2px; color: var(--text-muted); font: 9px/1.4 var(--font-mono); }
+.stage-output__body { padding: 0 11px 12px; border-top: 1px solid color-mix(in srgb, var(--status-success) 18%, var(--border-subtle)); }
+.stage-output__body section { margin-top: 11px; }
+.stage-output__body h3 { margin: 0 0 4px; color: var(--text-muted); font-size: 10px; font-weight: 600; letter-spacing: .025em; text-transform: uppercase; }
+.stage-output__body p, .stage-output__body ul { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+.stage-output__body ul { padding-left: 17px; }
+.stage-output__body li + li { margin-top: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-output summary > svg { transition: none; }
+}
 
 @media (max-width: 560px) {
   .detail-overlay { padding: 8px; }

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from application.session.session_query_engine import SessionQueryEngine
+from application.session.session_query_engine import SessionQueryEngine, _shared_state
 
 
 def _engine() -> SessionQueryEngine:
@@ -29,7 +29,7 @@ def _engine() -> SessionQueryEngine:
 async def test_limits_parallel_queries_when_capacity_is_configured(monkeypatch):
     # Arrange
     monkeypatch.setenv("SESSION_MAX_CONCURRENT_QUERIES", "3")
-    SessionQueryEngine._query_semaphore = None
+    _shared_state.query_semaphore = None
     engine = _engine()
     active = 0
     peak_active = 0
@@ -66,7 +66,7 @@ def test_uses_safe_default_when_capacity_is_invalid(monkeypatch):
 async def test_serializes_different_engines_when_execution_lock_is_shared(monkeypatch):
     # Arrange
     monkeypatch.setenv("SESSION_MAX_CONCURRENT_QUERIES", "8")
-    SessionQueryEngine._query_semaphore = None
+    _shared_state.query_semaphore = None
     shared_lock = asyncio.Lock()
 
     @asynccontextmanager

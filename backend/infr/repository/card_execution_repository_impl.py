@@ -61,6 +61,7 @@ class CardExecutionRepositoryImpl(CardExecutionRepository):
             ended_time=execution.ended_at,
             session_id=execution.session_id,
             idempotency_key=execution.idempotency_key,
+            input_stage_output_id=execution.input_stage_output_id,
         )
 
     @staticmethod
@@ -76,4 +77,5 @@ class CardExecutionRepositoryImpl(CardExecutionRepository):
             ended_at=model.ended_time,
             session_id=model.session_id,
             idempotency_key=model.idempotency_key,
+            input_stage_output_id=model.input_stage_output_id,
         )
