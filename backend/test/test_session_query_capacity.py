@@ -100,3 +100,31 @@ async def test_serializes_different_engines_when_execution_lock_is_shared(monkey
 
     # Assert
     assert peak_active == 1
+
+
+@pytest.mark.asyncio
+async def test_schedules_idle_cleanup_when_query_finalization_fails() -> None:
+    # Arrange
+    engine = _engine()
+    command = SimpleNamespace(session_id="session-1")
+    context = SimpleNamespace(
+        session=SimpleNamespace(session_id="session-1"),
+        command=command,
+        run_id="run-1",
+        message_id="message-1",
+        cancelled_during_stream=False,
+    )
+    engine._acknowledge_terminal_duplicate = AsyncMock(return_value=False)
+    engine._prepare_query = AsyncMock(return_value=context)
+    engine._execute_streaming = AsyncMock()
+    engine._handle_result = AsyncMock()
+    engine._finalize_query = AsyncMock(side_effect=RuntimeError("finalization failed"))
+
+    # Act
+    with pytest.raises(RuntimeError, match="finalization failed"):
+        await engine.run_claude_query(command)
+
+    # Assert
+    engine._claude_agent_gateway.schedule_idle_disconnect.assert_called_once_with(
+        "session-1",
+    )

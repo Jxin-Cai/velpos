@@ -34,7 +34,7 @@ import { getSettings, updateSettings } from '@features/settings-manager'
 import { usePermissionMode } from '../model/usePermissionMode'
 import { getExecutionHistory } from '@features/team-board'
 
-const emit = defineEmits(['return-team'])
+const emit = defineEmits(['locate-session', 'return-team'])
 
 const {
   session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
@@ -992,7 +992,7 @@ function copyToClipboard(text, chipName) {
 }
 
 function copySessionResumeCommand() {
-  window.dispatchEvent(new CustomEvent('vp-scroll-to-session', { detail: { sessionId: currentSessionId.value } }))
+  emit('locate-session')
   if (claudeResumeCommand.value) {
     copyToClipboard(claudeResumeCommand.value, 'session')
   }
@@ -3439,9 +3439,48 @@ button.dash-chip[disabled] {
 
 /* Mobile: enforce minimum font size */
 @media (max-width: 768px) {
+  .input-section {
+    position: relative;
+    flex-shrink: 0;
+    padding-top: 0;
+    background: var(--layer-base);
+  }
+
+  .input-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 8px 18px 2px;
+    scrollbar-width: none;
+  }
+
+  .input-toolbar::-webkit-scrollbar,
+  .dash-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-group {
+    flex-shrink: 0;
+  }
+
+  .input-row {
+    padding: 8px 18px 0;
+  }
+
+  .session-dashboard {
+    padding: 7px 18px 10px;
+  }
+
+  .dash-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
   .dash-chip {
     font-size: 12px;
+    flex-shrink: 0;
   }
+
   .context-track-label,
   .context-pct {
     font-size: 11px;

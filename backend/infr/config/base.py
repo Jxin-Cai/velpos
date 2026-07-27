@@ -8,6 +8,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("环境变量 DATABASE_URL 未设置，请在 .env 文件中配置")
 
+MYSQL_CONNECT_ARGS: dict[str, object] = (
+    {"ssl": None}
+    if os.getenv("MYSQL_DISABLE_SSL", "").lower() in {"1", "true", "yes"}
+    else {}
+)
+
 
 class Base(DeclarativeBase):
     pass

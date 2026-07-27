@@ -64,7 +64,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             raise RuntimeError("CLAUDE_CLI_PATH environment variable is not set")
         self._permission_mode = permission_mode or os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
         self._max_buffer_size = max_buffer_size or int(os.getenv("CLAUDE_MAX_BUFFER_SIZE", str(10 * 1024 * 1024)))
-        self._idle_timeout = float(os.getenv("CLAUDE_IDLE_TIMEOUT", "300"))
+        self._idle_timeout = float(os.getenv("CLAUDE_IDLE_TIMEOUT", "60"))
         self._user_response_timeout = float(os.getenv("CLAUDE_USER_RESPONSE_TIMEOUT", "3600"))
         self._result_settle_seconds = float(os.getenv("CLAUDE_RESULT_SETTLE_SECONDS", "0.1"))
         self._final_result_timeout = float(os.getenv("CLAUDE_FINAL_RESULT_TIMEOUT_SECONDS", "300"))

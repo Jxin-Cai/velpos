@@ -244,19 +244,20 @@ start_backend() {
         info "Detected Claude CLI: $CLAUDE_CLI_PATH"
     fi
 
-    local reload_args=()
+    local uvicorn_args=(
+        main:app
+        --host 0.0.0.0
+        --port "$BACKEND_PORT"
+        --log-level info
+    )
     case "${BACKEND_RELOAD:-false}" in
         1|true|TRUE|yes|YES)
-            reload_args=(--reload)
+            uvicorn_args+=(--reload)
             warn "Backend auto-reload is enabled; active Agent runs will be interrupted by source changes"
             ;;
     esac
 
-    nohup uv run uvicorn main:app \
-        --host 0.0.0.0 \
-        --port "$BACKEND_PORT" \
-        "${reload_args[@]}" \
-        --log-level info \
+    nohup uv run uvicorn "${uvicorn_args[@]}" \
         > "$BACKEND_LOG" 2>&1 &
 
     local pid=$!

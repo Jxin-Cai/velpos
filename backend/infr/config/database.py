@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from infr.config.base import DATABASE_URL
+from infr.config.base import DATABASE_URL, MYSQL_CONNECT_ARGS
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ if not _is_sqlite:
         pool_size=10,
         max_overflow=20,
         pool_timeout=30,
+        connect_args=MYSQL_CONNECT_ARGS,
     )
 
 async_engine = create_async_engine(DATABASE_URL, **_engine_kwargs)

@@ -231,6 +231,8 @@ All dev settings are in this single file. `CLAUDE_CLI_PATH` is **auto-detected**
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
 | `SESSION_MAX_CONCURRENT_QUERIES` | `8` | Maximum concurrent Agent queries across sessions (max 64) |
+| `CLAUDE_PREWARM_CONNECTIONS` | `false` | Pre-open an Agent CLI process when viewing a session; disabled by default to keep passive sessions lightweight |
+| `CLAUDE_IDLE_TIMEOUT` | `60` | Seconds before an idle Agent CLI connection and its child processes are released |
 | `CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS` | `60` | Silence detection interval |
 | `CLAUDE_STREAM_MAX_SILENT_TIMEOUTS` | `10` | Consecutive silent intervals before releasing a stuck execution slot |
 | `CLAUDE_RESULT_SETTLE_SECONDS` | `0.1` | Grace window for task events that arrive immediately after an SDK result |

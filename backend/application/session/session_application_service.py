@@ -25,7 +25,7 @@ from domain.session.service.message_conversion_service import MessageConversionS
 from application.session.session_presenter import SessionPresenter
 from application.session.session_observability_recorder import SessionObservabilityRecorder
 from application.session.session_stream_consumer import SessionStreamConsumer
-from application.session.session_query_engine import QueueMessageOutcome, SessionQueryEngine, _shared_state, _shared_state
+from application.session.session_query_engine import QueueMessageOutcome, SessionQueryEngine, _shared_state
 from domain.project.model.project import Project
 from domain.session.service.sdk_session_binding_service import SdkSessionBindingService
 from domain.project.repository.project_repository import ProjectRepository
@@ -311,6 +311,12 @@ class SessionApplicationService:
     # ── Context usage ────────────────────────────────────────
 
     async def _refresh_context_usage(self, session: Session) -> bool:
+        # A freshly created SDK connection already contains Claude's system
+        # prompt, but that is not conversation context created by the user.
+        # Keep a brand-new Velpos session at 0 until its first query completes.
+        if not session.messages:
+            return False
+
         context_usage = await self._claude_agent_gateway.get_context_usage(session.session_id)
         if not context_usage:
             return False
@@ -361,38 +367,7 @@ class SessionApplicationService:
             session.session_id, "bypassPermissions"
         )
 
-        safe_create_task(self._bind_sdk_session(session.session_id, session.model, project_dir))
-
         return session
-
-    async def _bind_sdk_session(self, session_id: str, model: str, cwd: str) -> None:
-        from infr.config.database import async_session_factory
-        from infr.repository.session_repository_impl import SessionRepositoryImpl
-
-        session_lock = await _shared_state.session_lock_pool.acquire(session_id)
-        try:
-            async with session_lock:
-                try:
-                    await self._claude_agent_gateway.open_fresh_connection(session_id, model, cwd)
-                    sdk_session_id = ""
-                    async for msg_dict in self._claude_agent_gateway.send_query(session_id, "/status"):
-                        sid = msg_dict.get("sdk_session_id")
-                        if sid:
-                            sdk_session_id = sid
-                    if sdk_session_id:
-                        async with async_session_factory() as db:
-                            repo = SessionRepositoryImpl(db)
-                            session = await repo.find_by_id(session_id)
-                            if session:
-                                session.update_sdk_session_id(sdk_session_id)
-                                await repo.save(session)
-                                await db.commit()
-                        self._claude_agent_gateway.schedule_idle_disconnect(session_id)
-                        logger.info("[session=%s] SDK session bound on create: %s", session_id, sdk_session_id)
-                except Exception:
-                    logger.warning("[session=%s] SDK session pre-bind failed", session_id, exc_info=True)
-        finally:
-            await _shared_state.session_lock_pool.unref(session_id)
 
     async def get_session(self, session_id: str) -> Session:
         session = await self._session_repository.find_by_id(session_id)
@@ -552,6 +527,8 @@ class SessionApplicationService:
     # ── Connection management ────────────────────────────────
 
     async def prewarm_connection(self, session_id: str) -> None:
+        if not self._connection_prewarm_enabled():
+            return
         if self._claude_agent_gateway.is_connected(session_id):
             return
 
@@ -577,6 +554,7 @@ class SessionApplicationService:
                 cwd=session.project_dir,
                 sdk_session_id=resume_sdk_session_id,
             )
+            self._claude_agent_gateway.schedule_idle_disconnect(session_id)
             logger.info("[session=%s] SDK 连接预热完成", session_id)
         except RuntimeError as e:
             if "resume failed" in str(e).lower() or "no longer exists" in str(e).lower():
@@ -590,6 +568,15 @@ class SessionApplicationService:
                 logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
         except Exception as e:
             logger.warning("[session=%s] SDK 连接预热失败: %s", session_id, e)
+
+    @staticmethod
+    def _connection_prewarm_enabled() -> bool:
+        return os.getenv("CLAUDE_PREWARM_CONNECTIONS", "false").strip().casefold() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     async def refresh_context_usage(self, session_id: str) -> Session:
         session_lock = await _shared_state.session_lock_pool.acquire(session_id)

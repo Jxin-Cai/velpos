@@ -4,11 +4,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 import asyncio
 import logging
 import os
+
+load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / "build" / "dev" / ".env")
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
@@ -96,7 +97,7 @@ async def _run_alembic_upgrade() -> None:
     from sqlalchemy import inspect, pool, text
     from sqlalchemy.ext.asyncio import async_engine_from_config
 
-    from infr.config.base import DATABASE_URL
+    from infr.config.base import DATABASE_URL, MYSQL_CONNECT_ARGS
 
     backend_dir = Path(__file__).resolve().parent
     alembic_cfg = Config(str(backend_dir / "alembic.ini"))
@@ -122,6 +123,7 @@ async def _run_alembic_upgrade() -> None:
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=MYSQL_CONNECT_ARGS,
     )
 
     def _do_upgrade(connection):

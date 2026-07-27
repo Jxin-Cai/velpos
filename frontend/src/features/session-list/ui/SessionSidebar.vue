@@ -50,6 +50,7 @@ const { activeCardsForTeam, loadTeamCards, isTeamLoaded } = useWishCards()
 const showCreateDialog = ref(false)
 const showCreateTeamDialog = ref(false)
 const selectedWishCardId = ref(null)
+const sidebarListRef = ref(null)
 
 // Pinned management
 const pinnedProjectIds = ref(loadPinnedIds(PINNED_PROJECTS_KEY))
@@ -119,22 +120,51 @@ watch(() => props.sessions, () => {
 // Multi-select mode
 const selectionMode = ref(false)
 const selectedIds = ref(new Set())
+const lastSelectedIndex = ref(-1)
+
+// Flat list of all session IDs in display order (for shift-click range selection)
+const flatSessionIds = computed(() => {
+  const ids = []
+  for (const group of projectGroups.value) {
+    if (group.project_type === 'team') continue
+    for (const session of group.sessions) {
+      ids.push(session.session_id)
+    }
+  }
+  return ids
+})
 
 function toggleSelectionMode() {
   selectionMode.value = !selectionMode.value
   if (!selectionMode.value) {
     selectedIds.value = new Set()
+    lastSelectedIndex.value = -1
   }
 }
 
-function toggleSelect(sessionId) {
-  const next = new Set(selectedIds.value)
-  if (next.has(sessionId)) {
-    next.delete(sessionId)
+function toggleSelect(sessionId, event) {
+  const currentIndex = flatSessionIds.value.indexOf(sessionId)
+
+  if (event?.shiftKey && lastSelectedIndex.value >= 0 && currentIndex >= 0) {
+    // Shift-click: select range between last selected and current
+    const start = Math.min(lastSelectedIndex.value, currentIndex)
+    const end = Math.max(lastSelectedIndex.value, currentIndex)
+    const next = new Set(selectedIds.value)
+    for (let i = start; i <= end; i++) {
+      next.add(flatSessionIds.value[i])
+    }
+    selectedIds.value = next
   } else {
-    next.add(sessionId)
+    // Normal click: toggle single item
+    const next = new Set(selectedIds.value)
+    if (next.has(sessionId)) {
+      next.delete(sessionId)
+    } else {
+      next.add(sessionId)
+    }
+    selectedIds.value = next
+    lastSelectedIndex.value = currentIndex
   }
-  selectedIds.value = next
 }
 
 function confirmBatchDelete() {
@@ -419,26 +449,54 @@ function handleWishCardClick(group, cardId) {
   emit('open-wish-card', { teamId, cardId })
 }
 
-function scrollToSession(sessionId) {
-  if (!sessionId) return
+async function scrollToSession(sessionId) {
+  if (!sessionId) return false
   // Find which group the session belongs to
   for (const group of projectGroups.value) {
     const found = group.sessions.find(s => s.session_id === sessionId)
     if (found) {
-      // Expand the group if collapsed
+      // Programmatic location must not race the collapse animation. Expand the
+      // group immediately so the target has its final layout before scrolling.
       if (isGroupCollapsed(group.id)) {
-        toggleGroup(group.id)
+        const next = new Set(collapsedGroups.value)
+        next.delete(group.id)
+        collapsedGroups.value = next
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
       }
-      // Wait for DOM update then scroll
-      nextTick(() => {
-        const el = document.querySelector(`[data-session-id="${sessionId}"]`)
-        if (el) {
-          el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-        }
+
+      await nextTick()
+
+      const groupContent = groupContentRefs[group.id]
+      if (groupContent) {
+        groupContent.style.maxHeight = 'none'
+        groupContent.style.opacity = ''
+      }
+
+      const escapedId = globalThis.CSS?.escape
+        ? globalThis.CSS.escape(sessionId)
+        : sessionId.replace(/["\\]/g, '\\$&')
+      const list = sidebarListRef.value
+      const el = list?.querySelector(`[data-session-id="${escapedId}"]`)
+      if (!list || !el) return false
+
+      // Scroll the sidebar itself instead of delegating to scrollIntoView,
+      // which may choose an outer scrolling ancestor while the sidebar is
+      // being revealed.
+      const listRect = list.getBoundingClientRect()
+      const itemRect = el.getBoundingClientRect()
+      const top = list.scrollTop
+        + itemRect.top
+        - listRect.top
+        - (list.clientHeight - itemRect.height) / 2
+      const prefersReducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      list.scrollTo({
+        top: Math.max(0, top),
+        behavior: prefersReducedMotion ? 'auto' : 'smooth',
       })
-      break
+      return true
     }
   }
+  return false
 }
 
 // 监听全局session切换事件，自动滚动到目标session
@@ -501,7 +559,7 @@ defineExpose({ scrollToSession })
 
     <div class="sidebar-list-wrapper">
       <div class="sidebar-list-fade sidebar-list-fade--top"></div>
-      <div class="sidebar-list">
+      <div ref="sidebarListRef" class="sidebar-list">
       <!-- Loading skeleton -->
       <template v-if="loading">
         <div v-for="n in 3" :key="'skeleton-' + n" class="skeleton-item">
@@ -644,6 +702,8 @@ defineExpose({ scrollToSession })
           <div
               class="group-content"
               :class="{ collapsed: isGroupCollapsed(group.id) }"
+              :aria-hidden="isGroupCollapsed(group.id)"
+              :inert="isGroupCollapsed(group.id) || undefined"
               :ref="el => { if (el) groupContentRefs[group.id] = el; else delete groupContentRefs[group.id] }"
             >
             <!-- Team projects: show WishCard buttons -->
@@ -904,6 +964,7 @@ defineExpose({ scrollToSession })
 .group-content.collapsed {
   max-height: 0 !important;
   opacity: 0;
+  visibility: hidden;
 }
 
 .indented-session {
@@ -1382,12 +1443,6 @@ defineExpose({ scrollToSession })
 .slide-up-leave-to {
   transform: translateY(100%);
   opacity: 0;
-}
-
-@media (max-width: 768px) {
-  .session-sidebar {
-    display: none;
-  }
 }
 
 /* Confirm swap transition */

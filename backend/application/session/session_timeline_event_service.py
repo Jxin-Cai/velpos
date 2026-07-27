@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from domain.session.acl.connection_manager import ConnectionManager
 from domain.session.model.session_timeline_event import SessionTimelineEvent
@@ -35,7 +35,11 @@ class SessionTimelineEventService:
     ) -> SessionTimelineEvent:
         last_err: Exception | None = None
         for _ in range(_MAX_SEQ_RETRIES):
-            seq = await self._repository.next_seq(session_id, run_id)
+            try:
+                seq = await self._repository.next_seq(session_id, run_id)
+            except OperationalError as exc:
+                last_err = exc
+                continue
             event = SessionTimelineEvent.create(
                 session_id=session_id,
                 run_id=run_id,
@@ -49,6 +53,9 @@ class SessionTimelineEventService:
                 await self._repository.save(event)
                 break
             except IntegrityError as exc:
+                last_err = exc
+                continue
+            except OperationalError as exc:
                 last_err = exc
                 continue
         else:

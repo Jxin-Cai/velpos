@@ -186,7 +186,10 @@ function handleNotificationNavigate(sessionId) {
   handleSessionSelect(sessionId)
 }
 
-function handleLocateSession() {
+async function handleLocateSession() {
+  if (!currentSessionId.value) return
+
+  setSidebarMode('single')
   if (isSidebarCollapsed.value) {
     isSidebarCollapsed.value = false
     localStorage.setItem('pf_sidebar_collapsed', false)
@@ -194,7 +197,9 @@ function handleLocateSession() {
   if (window.innerWidth <= 768) {
     isMobileSidebarOpen.value = true
   }
-  sidebarRef.value?.scrollToSession(currentSessionId.value)
+
+  await nextTick()
+  await sidebarRef.value?.scrollToSession(currentSessionId.value)
 }
 
 function closeProjectScheduler() {
@@ -1192,10 +1197,12 @@ useGlobalHotkeys({
     bottom: 0;
     z-index: 50;
     transform: translateX(-100%);
+    visibility: hidden;
   }
 
   .main-sidebar.sidebar-open {
     transform: translateX(0);
+    visibility: visible;
   }
 
   .main-sidebar.sidebar-collapsed {

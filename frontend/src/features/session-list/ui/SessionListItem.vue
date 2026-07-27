@@ -121,20 +121,20 @@ async function copySessionId() {
   <div
     class="session-item"
     :class="{ active, 'is-claude-code': isClaudeCode, 'is-selected': selected, 'is-pinned': pinned }"
-    @click="selectable ? emit('toggle-select', session.session_id) : emit('select', session.session_id)"
+    @click="selectable ? emit('toggle-select', session.session_id, $event) : emit('select', session.session_id)"
     role="button"
     tabindex="0"
     :aria-label="'Session ' + getShortId(session.session_id)"
-    @keydown.enter="selectable ? emit('toggle-select', session.session_id) : emit('select', session.session_id)"
+    @keydown.enter="selectable ? emit('toggle-select', session.session_id, $event) : emit('select', session.session_id)"
   >
     <Transition name="confirm-swap" mode="out-in">
     <div v-if="!showDeleteConfirm" key="normal">
       <div class="session-main">
-        <label v-if="selectable" class="select-checkbox" @click.stop>
+        <label v-if="selectable" class="select-checkbox" @click.stop="emit('toggle-select', session.session_id, $event)">
           <input
             type="checkbox"
             :checked="selected"
-            @change="emit('toggle-select', session.session_id)"
+            @change.stop
           />
           <span class="checkbox-mark"></span>
         </label>

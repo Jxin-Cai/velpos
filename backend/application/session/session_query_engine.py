@@ -258,7 +258,10 @@ class SessionQueryEngine:
             async with _shared_state.queue_guard:
                 if _shared_state.active_contexts.get(command.session_id) is ctx:
                     _shared_state.active_contexts.pop(command.session_id, None)
-            await self._finalize_query(ctx)
+            try:
+                await self._finalize_query(ctx)
+            finally:
+                self._claude_agent_gateway.schedule_idle_disconnect(command.session_id)
 
     # ------------------------------------------------------------------
     # Phase 1: Prepare query context

@@ -231,6 +231,8 @@ cp build/dev/.env.example build/dev/.env
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
 | `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
 | `SESSION_MAX_CONCURRENT_QUERIES` | `8` | 全局并行 Agent 查询数（建议按 CPU/额度调整，最大 64） |
+| `CLAUDE_PREWARM_CONNECTIONS` | `false` | 查看会话时是否预先启动 Agent CLI；默认关闭，避免未运行会话占用进程和内存 |
+| `CLAUDE_IDLE_TIMEOUT` | `60` | Agent CLI 空闲连接及其子进程的回收等待秒数 |
 | `CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS` | `60` | 无输出时的检测间隔 |
 | `CLAUDE_STREAM_MAX_SILENT_TIMEOUTS` | `10` | 连续无输出次数上限；达到后断开并释放执行 slot，等待用户输入时不触发 |
 | `CLAUDE_RESULT_SETTLE_SECONDS` | `0.1` | SDK Result 后等待紧随其后的后台任务事件的宽限时间 |

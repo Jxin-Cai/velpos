@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 从 base.py 导入（不触发 async_engine 的创建，避免 aiomysql 未安装时报错）
-from infr.config.base import DATABASE_URL, Base
+from infr.config.base import DATABASE_URL, MYSQL_CONNECT_ARGS, Base
 
 # --- 确保所有 ORM 模型被导入以支持 autogenerate ---
 import infr.repository.evolution_proposal_model  # noqa: F401
@@ -91,6 +91,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=MYSQL_CONNECT_ARGS,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from application.session.command.create_session_command import CreateSessionCommand
 from application.session.session_application_service import SessionApplicationService
 
 
@@ -69,3 +70,86 @@ async def test_fails_stale_running_query_when_process_dead_and_gateway_inactive(
     session.fail_query.assert_called_once_with()
     session.complete_query.assert_not_called()
     service._save_session.assert_awaited_once_with(session, commit=True)
+
+
+@pytest.mark.asyncio
+async def test_skips_connection_prewarm_when_disabled_by_default(monkeypatch) -> None:
+    # Arrange
+    monkeypatch.delenv("CLAUDE_PREWARM_CONNECTIONS", raising=False)
+    session = Mock(sdk_session_id="sdk-session")
+    gateway = SimpleNamespace(
+        is_connected=Mock(return_value=False),
+        open_connection=AsyncMock(),
+        schedule_idle_disconnect=Mock(),
+    )
+    service = _create_service(session, gateway)
+
+    # Act
+    await service.prewarm_connection("session-1")
+
+    # Assert
+    gateway.open_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_schedules_idle_cleanup_when_connection_is_prewarmed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    # Arrange
+    monkeypatch.setenv("CLAUDE_PREWARM_CONNECTIONS", "true")
+    session = Mock(
+        sdk_session_id="sdk-session",
+        project_dir=str(tmp_path),
+        model="test-model",
+    )
+    gateway = SimpleNamespace(
+        is_connected=Mock(return_value=False),
+        open_connection=AsyncMock(),
+        schedule_idle_disconnect=Mock(),
+    )
+    service = _create_service(session, gateway)
+    service._resolve_resume_sdk_session_id = AsyncMock(return_value="sdk-session")
+
+    # Act
+    await service.prewarm_connection("session-1")
+
+    # Assert
+    gateway.schedule_idle_disconnect.assert_called_once_with("session-1")
+
+
+@pytest.mark.asyncio
+async def test_keeps_context_empty_when_session_has_no_messages() -> None:
+    # Arrange
+    session = Mock(session_id="session-1", messages=[])
+    gateway = SimpleNamespace(get_context_usage=AsyncMock(return_value={"total_tokens": 4096}))
+    service = _create_service(session, gateway)
+
+    # Act
+    refreshed = await service._refresh_context_usage(session)
+
+    # Assert
+    assert refreshed is False
+    gateway.get_context_usage.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_does_not_send_hidden_query_when_session_is_created(tmp_path) -> None:
+    # Arrange
+    gateway = SimpleNamespace(
+        set_permission_mode=AsyncMock(),
+        open_fresh_connection=AsyncMock(),
+        send_query=Mock(),
+    )
+    service = _create_service(Mock(), gateway)
+    service._project_repository = None
+    command = CreateSessionCommand(
+        model="test-model",
+        project_dir=str(tmp_path),
+    )
+
+    # Act
+    await service.create_session(command)
+
+    # Assert
+    gateway.send_query.assert_not_called()
