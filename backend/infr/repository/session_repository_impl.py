@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from infr.config.database import is_sqlite
 
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
@@ -50,13 +52,26 @@ class SessionRepositoryImpl(SessionRepository):
         models = result.scalars().all()
         return [self._to_domain(m) for m in models]
 
+    @staticmethod
+    def _message_count_expr():
+        if is_sqlite:
+            col = SessionModel.messages
+            return case(
+                (col == "[]", literal(0)),
+                (col.is_(None), literal(0)),
+                else_=(
+                    func.length(col) - func.length(func.replace(col, "},{", "}|{"))
+                ) + 1,
+            ).label("message_count")
+        return func.json_length(SessionModel.messages).label("message_count")
+
     async def find_all_summaries(self) -> list[SessionSummary]:
         stmt = select(
             SessionModel.session_id,
             SessionModel.project_id,
             SessionModel.model,
             SessionModel.status,
-            func.json_length(SessionModel.messages).label("message_count"),
+            self._message_count_expr(),
             SessionModel.input_tokens,
             SessionModel.output_tokens,
             SessionModel.last_input_tokens,
