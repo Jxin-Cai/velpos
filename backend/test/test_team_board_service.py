@@ -6,7 +6,12 @@ import pytest
 
 from application.session.command.create_session_command import CreateSessionCommand
 from application.team_board.commands import MoveWishCardCommand
-from application.team_board.team_board_service import TeamBoardApplicationService
+from application.team_board.card_execution_service import CardExecutionService
+from application.team_board.execution_reconciliation_service import ExecutionReconciliationService
+from application.team_board.team_workspace_helpers import (
+    ensure_agent_project,
+    prepare_execution_workspace,
+)
 from domain.team.acl.workspace_gateway import WorkspaceUnavailableError
 from domain.team.model.status import SlotAvailability
 from domain.team.model.team import Team
@@ -18,8 +23,7 @@ from application.team_board.stage_output_builder import StageOutputBuilder
 @pytest.mark.asyncio
 async def test_agent_project_uses_full_slot_name_when_project_is_missing() -> None:
     # Arrange
-    service = object.__new__(TeamBoardApplicationService)
-    service._project_repo = SimpleNamespace(
+    project_repo = SimpleNamespace(
         find_by_dir_path=AsyncMock(return_value=None),
         save=AsyncMock(),
     )
@@ -30,7 +34,7 @@ async def test_agent_project_uses_full_slot_name_when_project_is_missing() -> No
     )
 
     # Act
-    project = await service._ensure_agent_project("delivery", slot)
+    project = await ensure_agent_project("delivery", slot, project_repo)
 
     # Assert
     assert project.name == "delivery-Software architect"
@@ -40,7 +44,7 @@ async def test_agent_project_uses_full_slot_name_when_project_is_missing() -> No
 async def test_move_rejected_when_route_team_does_not_own_card() -> None:
     # Arrange
     card = WishCard.create(team_id="team-owner", title="Private card")
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(CardExecutionService)
     service._card_repo = SimpleNamespace(find_by_id=lambda _card_id: _async_value(card))
     command = MoveWishCardCommand(
         team_id="different-team",
@@ -72,15 +76,14 @@ async def test_slot_marked_unstable_when_execution_workspace_is_unavailable() ->
     def fail_to_create_workspace(_workspace_ref: str, _execution_id: str) -> str:
         raise WorkspaceUnavailableError("agent workspace is missing or invalid")
 
-    service = object.__new__(TeamBoardApplicationService)
-    service._team_repo = SimpleNamespace(save=save_team)
-    service._workspace = SimpleNamespace(
+    workspace_gw = SimpleNamespace(
         create_execution_workspace=fail_to_create_workspace
     )
+    team_repo = SimpleNamespace(save=save_team)
 
     # Act / Assert
     with pytest.raises(TeamDomainError, match="workspace is unavailable"):
-        await service._prepare_execution_workspace(team, slot, "execution-1")
+        await prepare_execution_workspace(team, slot, "execution-1", workspace_gw, team_repo)
     assert slot.availability is SlotAvailability.UNSTABLE
     assert saved_teams == [team]
 
@@ -97,8 +100,9 @@ async def test_default_model_used_when_team_execution_session_is_created(
         captured_commands.append(command)
         return SimpleNamespace(session_id="session-1")
 
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(CardExecutionService)
     service._session_service = SimpleNamespace(create_session=create_session)
+    service._connection_manager = None
     team = SimpleNamespace(project_id="project-1", name="Delivery")
     card = SimpleNamespace(title="Implement API", description="Build the endpoint")
     execution = SimpleNamespace(id="execution-1", agent_slot_id="slot-1")
@@ -126,8 +130,9 @@ async def test_agent_project_used_when_team_execution_session_is_created() -> No
         captured_commands.append(command)
         return SimpleNamespace(session_id="session-1")
 
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(CardExecutionService)
     service._session_service = SimpleNamespace(create_session=create_session)
+    service._connection_manager = None
 
     # Act
     await service._create_execution_session(
@@ -147,7 +152,7 @@ async def test_agent_project_used_when_team_execution_session_is_created() -> No
 async def test_frontend_notified_when_team_execution_session_is_created() -> None:
     # Arrange
     connection_manager = SimpleNamespace(broadcast_global=AsyncMock())
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(CardExecutionService)
     service._session_service = SimpleNamespace(
         create_session=AsyncMock(return_value=SimpleNamespace(session_id="session-1"))
     )
@@ -181,7 +186,7 @@ async def test_execution_not_failed_when_terminal_session_is_recent() -> None:
         session_id="session-1",
     )
     session = SimpleNamespace(is_running=False, updated_time=datetime.now())
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(ExecutionReconciliationService)
     service._session_service = SimpleNamespace(
         get_session=AsyncMock(return_value=session)
     )
@@ -211,8 +216,9 @@ async def test_snapshot_used_when_execution_session_is_created_from_previous_sta
         source_session_id="session-1",
         final_output="Completed the domain model.",
     )
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(CardExecutionService)
     service._session_service = SimpleNamespace(create_session=create_session)
+    service._connection_manager = None
 
     # Act
     _, prompt = await service._create_execution_session(
@@ -244,7 +250,7 @@ async def test_handoff_references_exact_snapshot_when_stage_is_moved() -> None:
         final_output="Completed the domain model.",
     )
     saved_handoffs = []
-    service = object.__new__(TeamBoardApplicationService)
+    service = object.__new__(CardExecutionService)
     service._handoff_repo = SimpleNamespace(
         save=lambda handoff: _append_async(saved_handoffs, handoff)
     )

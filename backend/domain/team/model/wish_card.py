@@ -17,6 +17,7 @@ class WishCard:
     created_at: datetime
     updated_at: datetime
     assigned_agent_slot_id: str | None = None
+    _version: int = 0
     executions: list[CardExecution] = field(default_factory=list)
 
     @classmethod
@@ -69,7 +70,7 @@ class WishCard:
 
     @property
     def version(self) -> int:
-        return len(self.executions)
+        return self._version
 
     @property
     def latest_execution(self) -> CardExecution | None:
@@ -95,6 +96,7 @@ class WishCard:
         self.executions.append(execution)
         self.assigned_agent_slot_id = agent_slot_id
         self.status = WishCardStatus.PREPARING
+        self._version += 1
         self.updated_at = datetime.now(timezone.utc)
         return execution
 
@@ -118,6 +120,7 @@ class WishCard:
         self.executions.append(execution)
         self.assigned_agent_slot_id = agent_slot_id
         self.status = WishCardStatus.PREPARING
+        self._version += 1
         self.updated_at = datetime.now(timezone.utc)
         return execution
 

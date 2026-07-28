@@ -33,9 +33,7 @@ class SlotAvailability(str, Enum):
 
 
 class HandoffStatus(str, Enum):
-    PENDING = "pending"
     ACCEPTED = "accepted"
-    REJECTED = "rejected"
 
 
 class StageOutputStatus(str, Enum):

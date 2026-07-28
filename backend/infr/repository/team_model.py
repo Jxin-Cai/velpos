@@ -92,6 +92,7 @@ class WishCardModel(Base):
         Text, nullable=False, default="", server_default=""
     )
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     assigned_agent_slot_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("team_agent_slots.id", ondelete="SET NULL"),

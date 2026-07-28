@@ -24,16 +24,8 @@ const STATUS_CONFIG = {
 const statusConfig = computed(() => STATUS_CONFIG[props.card.status] || STATUS_CONFIG.backlog)
 const isRunning = computed(() => props.card.status === 'running')
 const canRetry = computed(() => props.card.status === 'failed' || props.card.status === 'cancelled')
-const executionHistory = computed(() => Array.isArray(props.card.execution_history)
-  ? props.card.execution_history
-  : [])
-const latestOutput = computed(() => {
-  for (let index = executionHistory.value.length - 1; index >= 0; index -= 1) {
-    if (executionHistory.value[index]?.output) return executionHistory.value[index].output
-  }
-  return null
-})
-const latestSummary = computed(() => latestOutput.value?.content?.stage_summary || '')
+const executionCount = computed(() => props.card.execution_count || 0)
+const latestSummary = computed(() => props.card.latest_stage_summary || '')
 const readinessLabel = computed(() => {
   const readiness = props.card.handoff_readiness
   if (readiness === 'ready') return 'Context ready'
@@ -118,9 +110,9 @@ function handleKeyDown(e) {
     </div>
     <p v-if="card.description" class="wish-card__desc">{{ card.description }}</p>
     <p v-if="latestSummary" class="wish-card__summary">{{ latestSummary }}</p>
-    <div v-if="executionHistory.length || readinessLabel" class="wish-card__context-meta">
-      <span v-if="executionHistory.length">
-        {{ executionHistory.length }} {{ executionHistory.length === 1 ? 'stage' : 'stages' }}
+    <div v-if="executionCount || readinessLabel" class="wish-card__context-meta">
+      <span v-if="executionCount">
+        {{ executionCount }} {{ executionCount === 1 ? 'stage' : 'stages' }}
       </span>
       <span
         v-if="readinessLabel"

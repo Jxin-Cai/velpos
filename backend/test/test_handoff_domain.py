@@ -16,18 +16,16 @@ def _create_handoff() -> Handoff:
     )
 
 
-def test_handoff_pending_when_created_between_different_slots() -> None:
-    # Arrange
+def test_handoff_accepted_when_created_between_different_slots() -> None:
+    # Arrange & Act
     handoff = _create_handoff()
 
-    # Act
-    status = handoff.status
-
     # Assert
-    assert status is HandoffStatus.PENDING
+    assert handoff.status is HandoffStatus.ACCEPTED
+    assert handoff.resolved_at is not None
 
 
-def test_handoff_rejected_when_target_is_source_slot() -> None:
+def test_creation_rejected_when_target_is_source_slot() -> None:
     # Arrange
     handoff_arguments = {
         "team_id": "team-1",
@@ -38,36 +36,41 @@ def test_handoff_rejected_when_target_is_source_slot() -> None:
         "summary": "Continue the work.",
     }
 
-    # Act
-    def create_handoff() -> None:
+    # Act & Assert
+    with pytest.raises(TeamDomainError):
         Handoff.create(**handoff_arguments)
 
-    # Assert
+
+def test_creation_rejected_when_required_field_is_blank() -> None:
+    # Act & Assert
     with pytest.raises(TeamDomainError):
-        create_handoff()
+        Handoff.create(
+            team_id="team-1",
+            card_id="card-1",
+            source_execution_id="execution-1",
+            source_agent_slot_id="slot-1",
+            target_agent_slot_id="slot-2",
+            summary="  ",
+        )
 
 
-def test_handoff_accepted_when_pending() -> None:
+def test_artifact_added_when_valid_name_and_path() -> None:
     # Arrange
     handoff = _create_handoff()
 
     # Act
-    handoff.accept()
+    artifact = handoff.add_artifact(name="report.pdf", path="/output/report.pdf", media_type="application/pdf")
 
     # Assert
-    assert handoff.status is HandoffStatus.ACCEPTED
-    assert handoff.resolved_at is not None
+    assert artifact.name == "report.pdf"
+    assert artifact.path == "/output/report.pdf"
+    assert len(handoff.artifacts) == 1
 
 
-def test_handoff_transition_rejected_when_already_resolved() -> None:
+def test_artifact_rejected_when_name_is_blank() -> None:
     # Arrange
     handoff = _create_handoff()
-    handoff.reject()
 
-    # Act
-    def accept_rejected_handoff() -> None:
-        handoff.accept()
-
-    # Assert
+    # Act & Assert
     with pytest.raises(TeamDomainError):
-        accept_rejected_handoff()
+        handoff.add_artifact(name="  ", path="/output/report.pdf")

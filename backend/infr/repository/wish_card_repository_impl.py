@@ -67,6 +67,7 @@ class WishCardRepositoryImpl(WishCardRepository):
             title=card.title,
             description=card.description,
             status=card.status.value,
+            version=card.version,
             assigned_agent_slot_id=card.assigned_agent_slot_id,
             created_time=card.created_at,
             updated_time=card.updated_at,
@@ -97,6 +98,7 @@ class WishCardRepositoryImpl(WishCardRepository):
             description=model.description,
             status=WishCardStatus(model.status),
             assigned_agent_slot_id=model.assigned_agent_slot_id,
+            _version=model.version,
             created_at=model.created_time,
             updated_at=model.updated_time,
             executions=[

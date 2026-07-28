@@ -23,6 +23,7 @@ from application.project.workspace_directory import (
 from domain.team.model.team_domain_error import TeamDomainError
 from ohs.dependencies import get_team_board_service
 from ohs.http.api_response import ApiResponse
+from ohs.http.assembler.team_board_assembler import TeamBoardAssembler
 
 router = APIRouter(prefix="/api/teams", tags=["Teams"])
 
@@ -88,26 +89,22 @@ async def get_board(team_id: str, service: ServiceDep) -> ApiResponse[dict]:
         team, cards = await service.get_board(team_id)
     except TeamDomainError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    slots = [{"id": s.id, "display_name": s.name, "agent_profile_id": s.role, "availability": s.availability.value}
-             for s in team.agent_slots]
-    card_list = []
+
+    readiness_map: dict[str, str] = {}
+    user_action_map: dict[str, bool] = {}
+    summary_map: dict[str, str] = {}
     for card in cards:
         latest = card.latest_execution
-        card_list.append({
-            "id": card.id,
-            "title": card.title,
-            "description": card.description,
-            "status": card.status.value,
-            "current_slot_id": card.current_slot_id,
-            "version": card.version,
-            "session_id": latest.session_id if latest else None,
-            "execution_id": latest.id if latest else None,
-            "failure_reason": latest.failure_reason if latest else None,
-            "needs_user_action": await service.execution_needs_user_action(latest),
-            "handoff_readiness": await service.get_handoff_readiness(latest),
-            "execution_history": await service.get_card_history(latest.id) if latest else [],
-        })
-    return ApiResponse.success({"team_id": team.id, "name": team.name, "slots": slots, "cards": card_list})
+        readiness_map[card.id] = await service.get_handoff_readiness(latest)
+        user_action_map[card.id] = await service.execution_needs_user_action(latest)
+        if card.executions:
+            summary_map[card.id] = await service.get_latest_stage_summary(card.id)
+
+    return ApiResponse.success(
+        TeamBoardAssembler.to_board_response(
+            team, cards, readiness_map, user_action_map, summary_map
+        )
+    )
 
 
 @router.post("/{team_id}/cards", summary="Create a wish card")
@@ -117,15 +114,7 @@ async def create_card(team_id: str, body: CreateCardRequest, service: ServiceDep
         card = await service.create_card(cmd)
     except TeamDomainError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return ApiResponse.success({
-        "id": card.id,
-        "title": card.title,
-        "description": card.description,
-        "status": card.status.value,
-        "current_slot_id": card.current_slot_id,
-        "version": card.version,
-        "session_id": None,
-    })
+    return ApiResponse.success(TeamBoardAssembler.to_card_created_response(card))
 
 
 @router.post("/{team_id}/cards/{card_id}/archive", summary="Archive a finished wish card")
@@ -140,12 +129,7 @@ async def archive_card(
         ))
     except TeamDomainError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    return ApiResponse.success({
-        "id": card.id,
-        "status": card.status.value,
-        "current_slot_id": card.current_slot_id,
-        "version": card.version,
-    })
+    return ApiResponse.success(TeamBoardAssembler.to_card_status_response(card))
 
 
 @router.delete("/{team_id}/cards/{card_id}", summary="Delete an archived wish card")
@@ -175,11 +159,7 @@ async def move_card(
         execution = await service.move_card(cmd)
     except TeamDomainError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return ApiResponse.success({
-        "execution_id": execution.id,
-        "status": execution.status.value,
-        "session_id": execution.session_id,
-    })
+    return ApiResponse.success(TeamBoardAssembler.to_execution_response(execution))
 
 
 @router.post("/executions/{execution_id}/retry", summary="Retry a failed execution")
@@ -189,10 +169,7 @@ async def retry_execution(execution_id: str, service: ServiceDep) -> ApiResponse
         execution = await service.retry_execution(cmd)
     except TeamDomainError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return ApiResponse.success({
-        "execution_id": execution.id,
-        "status": execution.status.value,
-    })
+    return ApiResponse.success(TeamBoardAssembler.to_execution_response(execution))
 
 
 @router.get("/executions/{execution_id}", summary="Get execution details")
@@ -201,13 +178,7 @@ async def get_execution(execution_id: str, service: ServiceDep) -> ApiResponse[d
         execution = await service.get_execution(execution_id)
     except TeamDomainError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return ApiResponse.success({
-        "id": execution.id,
-        "card_id": execution.card_id,
-        "agent_slot_id": execution.agent_slot_id,
-        "status": execution.status.value,
-        "session_id": execution.session_id,
-    })
+    return ApiResponse.success(TeamBoardAssembler.to_execution_detail_response(execution))
 
 
 @router.get("/executions/{execution_id}/history", summary="Get wish card execution history")

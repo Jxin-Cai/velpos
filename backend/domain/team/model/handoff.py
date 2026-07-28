@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from domain.team.model.status import HandoffStatus
-from domain.team.model.team_domain_error import TeamDomainError
 
 
 @dataclass(frozen=True)
@@ -40,6 +39,8 @@ class Handoff:
         path: str,
         media_type: str = "",
     ) -> HandoffArtifact:
+        from domain.team.model.team_domain_error import TeamDomainError
+
         if not name.strip():
             raise TeamDomainError("artifact name must not be blank")
         if not path.strip():
@@ -69,6 +70,8 @@ class Handoff:
         consumed_revision: int | None = None,
         consumed_checksum: str | None = None,
     ) -> "Handoff":
+        from domain.team.model.team_domain_error import TeamDomainError
+
         required = {
             "team_id": team_id,
             "card_id": card_id,
@@ -83,6 +86,7 @@ class Handoff:
         if source_agent_slot_id == target_agent_slot_id:
             raise TeamDomainError("handoff target must differ from source agent slot")
 
+        now = datetime.now(timezone.utc)
         return cls(
             id=str(uuid4()),
             team_id=team_id,
@@ -91,24 +95,11 @@ class Handoff:
             source_agent_slot_id=source_agent_slot_id,
             target_agent_slot_id=target_agent_slot_id,
             summary=summary,
-            status=HandoffStatus.PENDING,
-            created_at=datetime.now(timezone.utc),
+            status=HandoffStatus.ACCEPTED,
+            created_at=now,
+            resolved_at=now,
             target_execution_id=target_execution_id,
             stage_output_id=stage_output_id,
             consumed_revision=consumed_revision,
             consumed_checksum=consumed_checksum,
         )
-
-    def accept(self) -> None:
-        self._require_pending()
-        self.status = HandoffStatus.ACCEPTED
-        self.resolved_at = datetime.now(timezone.utc)
-
-    def reject(self) -> None:
-        self._require_pending()
-        self.status = HandoffStatus.REJECTED
-        self.resolved_at = datetime.now(timezone.utc)
-
-    def _require_pending(self) -> None:
-        if self.status is not HandoffStatus.PENDING:
-            raise TeamDomainError(f"handoff is already {self.status.value}")

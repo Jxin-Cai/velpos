@@ -1,7 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, watch } from 'vue'
 import { useEscapeToClose } from '@shared/lib/useDialogManager'
-import { getTeamArtifactUrl } from '../api/teamBoardApi'
+import { getExecutionHistory, getTeamArtifactUrl } from '../api/teamBoardApi'
 
 const props = defineProps({
   visible: { type: Boolean, required: true },
@@ -13,9 +13,26 @@ const emit = defineEmits(['close', 'navigate'])
 
 useEscapeToClose(() => props.visible, () => emit('close'))
 
-const history = computed(() => Array.isArray(props.card.execution_history)
-  ? props.card.execution_history
-  : [])
+const history = ref([])
+const loading = ref(false)
+
+watch(() => props.visible, async (isVisible) => {
+  if (!isVisible) return
+  const executionId = props.card.execution_id
+  if (!executionId) {
+    history.value = []
+    return
+  }
+  loading.value = true
+  try {
+    const res = await getExecutionHistory(executionId)
+    history.value = Array.isArray(res?.data) ? res.data : []
+  } catch {
+    history.value = []
+  } finally {
+    loading.value = false
+  }
+}, { immediate: true })
 
 function formatDate(value) {
   if (!value) return '—'
