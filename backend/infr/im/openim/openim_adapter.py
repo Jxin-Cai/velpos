@@ -125,6 +125,7 @@ class OpenImAdapter(ImChannelAdapter):
         content: str,
         reply_context: dict | None = None,
         idempotency_key: str = "",
+        attachments: list[dict] | None = None,
     ) -> str:
         await self._im_gateway.send_message(
             binding.im_user_id, binding.friend_user_id, content,
@@ -185,5 +186,6 @@ class OpenImStubAdapter(ImChannelAdapter):
         content: str,
         reply_context: dict | None = None,
         idempotency_key: str = "",
+        attachments: list[dict] | None = None,
     ) -> str:
         raise RuntimeError("OpenIM infrastructure is not configured")

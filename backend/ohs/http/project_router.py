@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import mimetypes
-import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +15,10 @@ from application.project.command.reorder_projects_command import ReorderProjects
 from application.project.plugin_init_application_service import PluginInitApplicationService
 from application.project.project_application_service import ProjectApplicationService
 from application.project.workspace_application_service import WorkspaceApplicationService
+from application.project.workspace_directory import (
+    create_workspace_directory,
+    default_team_workspace_root,
+)
 from ohs.assembler.session_assembler import SessionAssembler
 from ohs.dependencies import get_plugin_init_application_service, get_project_application_service, get_workspace_application_service
 from ohs.dependencies import get_project_repository, get_team_board_service
@@ -71,7 +75,6 @@ TeamBoardDep = Annotated[TeamBoardApplicationService, Depends(get_team_board_ser
 
 class CreateTeamProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    dir_path: str = Field(default="", max_length=512)
     team_config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -81,11 +84,10 @@ async def create_team_project(
     project_repo: ProjectRepoDep,
     team_service: TeamBoardDep,
 ) -> ApiResponse[ProjectResponse]:
-    dir_path = request.dir_path.strip() if request.dir_path else ""
-    if not dir_path:
-        teams_root = os.path.expanduser("~/.velpos/teams")
-        dir_path = os.path.join(teams_root, request.name.strip())
-    os.makedirs(dir_path, exist_ok=True)
+    dir_path = str(await asyncio.to_thread(
+        create_workspace_directory,
+        str(default_team_workspace_root()),
+    ))
 
     config = dict(request.team_config)
     items = config.get("pipeline") or config.get("members") or config.get("slots") or []
@@ -128,7 +130,10 @@ async def create_project(
     request: CreateProjectRequest,
     service: ServiceDep,
 ) -> ApiResponse[ProjectResponse]:
-    command = CreateProjectCommand(name=request.name, github_url=request.github_url)
+    command = CreateProjectCommand(
+        name=request.name,
+        github_url=request.github_url,
+    )
     project = await service.create_project(command)
     return ApiResponse.success(ProjectResponse.from_domain(project))
 

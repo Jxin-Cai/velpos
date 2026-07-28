@@ -39,6 +39,34 @@ def _inbox(message_id: str) -> ImInboxEvent:
     )
 
 
+@pytest.mark.asyncio
+async def test_preserves_attachments_when_inbound_message_is_claimed():
+    # Arrange
+    engine, session_factory = await _database()
+    event = _inbox("external-attachment")
+    event.attachments = [
+        {
+            "filename": "image.png",
+            "mime_type": "image/png",
+            "path": "/tmp/image.png",
+        }
+    ]
+
+    try:
+        async with session_factory() as session:
+            repository = ImInboxRepositoryImpl(session)
+            await repository.accept(event)
+            await session.commit()
+
+            # Act
+            claimed = await repository.claim_next(datetime.now(), lease_seconds=60)
+
+            # Assert
+            assert claimed is not None and claimed.attachments == event.attachments
+    finally:
+        await engine.dispose()
+
+
 def _outbox(key: str, content: str) -> ImOutboxMessage:
     return ImOutboxMessage(
         id=0,
@@ -49,6 +77,34 @@ def _outbox(key: str, content: str) -> ImOutboxMessage:
         content=content,
         deduplication_key=key,
     )
+
+
+@pytest.mark.asyncio
+async def test_preserves_attachments_when_outbound_message_is_claimed():
+    # Arrange
+    engine, session_factory = await _database()
+    message = _outbox("attachment-key", "with image")
+    message.attachments = [
+        {
+            "filename": "image.png",
+            "mime_type": "image/png",
+            "path": "/tmp/image.png",
+        }
+    ]
+
+    try:
+        async with session_factory() as session:
+            repository = ImOutboxRepositoryImpl(session)
+            await repository.enqueue(message)
+            await session.commit()
+
+            # Act
+            claimed = await repository.claim_next(datetime.now(), lease_seconds=60)
+
+            # Assert
+            assert claimed is not None and claimed.attachments == message.attachments
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

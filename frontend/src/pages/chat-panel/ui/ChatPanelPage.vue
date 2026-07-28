@@ -34,7 +34,7 @@ import { getSettings, updateSettings } from '@features/settings-manager'
 import { usePermissionMode } from '../model/usePermissionMode'
 import { getExecutionHistory } from '@features/team-board'
 
-const emit = defineEmits(['locate-session', 'return-team'])
+const emit = defineEmits(['locate-session', 'return-team', 'open-file'])
 
 const {
   session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
@@ -1161,7 +1161,9 @@ function formatMaxTokens(n) {
       :load-more="loadMoreMessages"
       :ensure-message-loaded="loadThroughMessage"
       :load-error="historyLoadError"
+      :project-id="cardProjectId"
       @open-trace="openMessageTrace"
+      @open-file="emit('open-file', $event)"
     >
       <template #footer>
         <div v-if="showRecoveryHint" class="recovery-indicator">

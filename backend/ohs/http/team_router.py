@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,10 @@ from application.team_board.commands import (
     RetryExecutionCommand,
 )
 from application.team_board.team_board_service import TeamBoardApplicationService
+from application.project.workspace_directory import (
+    create_workspace_directory,
+    default_team_workspace_root,
+)
 from domain.team.model.team_domain_error import TeamDomainError
 from ohs.dependencies import get_team_board_service
 from ohs.http.api_response import ApiResponse
@@ -33,7 +38,6 @@ class SlotDTO(BaseModel):
 class CreateTeamRequest(BaseModel):
     name: str
     project_id: str
-    root_path: str
     slots: list[SlotDTO]
 
 
@@ -54,10 +58,14 @@ class ArchiveCardRequest(BaseModel):
 
 @router.post("", summary="Create a team with agent slots")
 async def create_team(body: CreateTeamRequest, service: ServiceDep) -> ApiResponse[dict]:
+    root_path = await asyncio.to_thread(
+        create_workspace_directory,
+        str(default_team_workspace_root()),
+    )
     cmd = CreateTeamCommand(
         name=body.name,
         project_id=body.project_id,
-        root_path=body.root_path,
+        root_path=str(root_path),
         slots=tuple(AgentSlotConfig(
             display_name=s.display_name,
             agent_profile_id=s.agent_profile_id,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_registry import ImChannelRegistry
@@ -88,6 +89,7 @@ class SessionEventCoordinator:
         content: str,
         log_label: str = "Outbound",
         deduplication_key: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         """Forward a message to the bound IM channel with 3-attempt retry."""
         if self._enqueue_im is not None:
@@ -95,6 +97,7 @@ class SessionEventCoordinator:
                 session_id,
                 content,
                 deduplication_key=deduplication_key,
+                attachments=attachments,
             )
             return
         last_err = None
@@ -106,7 +109,11 @@ class SessionEventCoordinator:
                         binding_repo=ImBindingRepositoryImpl(db_session),
                         init_repo=ChannelInitRepositoryImpl(db_session),
                     )
-                    await svc.sync_outbound(session_id, content)
+                    await svc.sync_outbound(
+                        session_id,
+                        content,
+                        attachments=attachments,
+                    )
                     await db_session.commit()
                 return
             except Exception as exc:
@@ -143,12 +150,14 @@ class SessionEventCoordinator:
         content: str,
         *,
         deduplication_key: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         await self._sync_to_im(
             session_id,
             f"[Web User]\n{content}",
             "User message",
             deduplication_key,
+            attachments,
         )
 
     # ── IM binding check ──────────────────────────────────────────

@@ -34,6 +34,7 @@ class ImInboxEvent:
     content: str
     sender_id: str = ""
     group_id: str = ""
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     status: ImInboxStatus = ImInboxStatus.RECEIVED
     attempt_count: int = 0
     next_attempt_at: datetime = field(default_factory=datetime.now)
@@ -79,6 +80,7 @@ class ImOutboxMessage:
     channel_type: str
     content: str
     deduplication_key: str
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     reply_context: dict[str, Any] = field(default_factory=dict)
     status: ImOutboxStatus = ImOutboxStatus.PENDING
     attempt_count: int = 0

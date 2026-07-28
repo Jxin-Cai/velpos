@@ -66,6 +66,33 @@ const failureMessage = computed(() => {
   return events.value.find(event => event.is_error && event.error_message)?.error_message || null
 })
 
+// Retry chain tracking: count retries per original tool_use_id
+const retryChains = computed(() => {
+  const chains = new Map()
+  for (const event of events.value) {
+    if (event.type === 'tool_use' && event.retry_of_tool_use_id) {
+      const count = chains.get(event.retry_of_tool_use_id) || 0
+      chains.set(event.retry_of_tool_use_id, count + 1)
+    }
+  }
+  return chains
+})
+
+const retrySequence = computed(() => {
+  const sequence = new Map()
+  const counters = new Map()
+  for (const event of events.value) {
+    if (event.type === 'tool_use' && event.retry_of_tool_use_id) {
+      const count = (counters.get(event.retry_of_tool_use_id) || 0) + 1
+      counters.set(event.retry_of_tool_use_id, count)
+      sequence.set(event.tool_use_id, count)
+    }
+  }
+  return sequence
+})
+
+const THINKING_KEYWORDS = ['retry', 'error', 'fallback', 'failed', 'alternative', 'workaround']
+
 const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) => {
   if (event.type === 'tool_result' && pairedResultIds.value.has(event.tool_use_id)) return []
   if (event.type === 'tool_use' && subagentToolIds.value.has(event.tool_use_id)) return []
@@ -77,10 +104,14 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
     timestamp: event.timestamp,
     isError: Boolean(event.is_error),
     errorMessage: event.error_message || null,
+    errorCategory: event.error_category || null,
   }
 
   if (event.type === 'tool_use') {
     const result = toolResultsById.value.get(event.tool_use_id)
+    const retryOf = event.retry_of_tool_use_id || null
+    const retryNum = retrySequence.value.get(event.tool_use_id) || 0
+    const retriedCount = retryChains.value.get(event.tool_use_id) || 0
     return [{
       ...base,
       kind: 'tool',
@@ -90,7 +121,11 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
       output: result?.content,
       endedTime: result?.timestamp,
       isError: Boolean(event.is_error || result?.is_error),
+      errorCategory: event.error_category || result?.error_category || null,
       toolUseId: event.tool_use_id,
+      retryOf,
+      retryNum,
+      retriedCount,
     }]
   }
 
@@ -121,6 +156,7 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
       input: event.content,
       output: output?.content,
       endedTime: output?.timestamp,
+      inputSummary: event.metadata?.input_summary || null,
     }]
   }
 
@@ -138,12 +174,17 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
 
   if (event.type === 'thinking') {
     const planning = event.metadata?.phase === 'planning'
+    const text = typeof event.content === 'string' ? event.content : ''
+    const keywords = THINKING_KEYWORDS.filter(kw => text.toLowerCase().includes(kw))
+    const preview = text.slice(0, 200) + (text.length > 200 ? '...' : '')
     return [{
       ...base,
       kind: 'thinking',
       label: planning ? 'Planning' : 'Thinking',
       title: planning ? 'Plan before task execution' : 'Reasoning',
       output: event.content,
+      thinkingPreview: preview,
+      thinkingKeywords: keywords,
     }]
   }
 
@@ -153,11 +194,48 @@ const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) =
 const total = computed(() => props.detail?.total || 0)
 const toolCallCount = computed(() => events.value.filter(event => event.type === 'tool_use').length)
 const hasMore = computed(() => props.detail?.next_cursor != null)
-const tokenCount = computed(() => {
+const tokenBreakdown = computed(() => {
   const usage = props.loop?.usage || {}
-  return (usage.input_tokens || 0) + (usage.output_tokens || 0)
+  const input = usage.input_tokens || 0
+  const output = usage.output_tokens || 0
+  const cacheRead = usage.cache_read_input_tokens || 0
+  const cacheWrite = usage.cache_creation_input_tokens || 0
+  // Total input context = new input tokens + cache-served tokens
+  const totalInput = input + cacheRead
+  const cacheHitPct = totalInput > 0 ? Math.round(cacheRead / totalInput * 100) : 0
+  return { input, output, cacheWrite, cacheRead, total: input + output, cacheHitPct }
+})
+const tokenTooltip = computed(() => {
+  const b = tokenBreakdown.value
+  const parts = [`Input: ${formatTokensK(b.input)}`, `Output: ${formatTokensK(b.output)}`]
+  if (b.cacheWrite) parts.push(`Cache write: ${formatTokensK(b.cacheWrite)}`)
+  if (b.cacheRead) parts.push(`Cache read: ${formatTokensK(b.cacheRead)}`)
+  return parts.join(' · ')
 })
 const isReconstructed = computed(() => props.provenance?.reconstructed_from_transcript)
+
+function formatTokensK(n) {
+  if (!n) return '0'
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function formatChars(n) {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function errorCategoryLabel(category) {
+  const map = {
+    permission_denied: 'Permission',
+    timeout: 'Timeout',
+    invalid_input: 'Invalid input',
+    execution_failure: 'Failed',
+    network_error: 'Network',
+  }
+  return map[category] || 'Error'
+}
 
 function formatDuration(ms) {
   if (!ms || ms <= 0) return '—'
@@ -217,7 +295,13 @@ function itemDuration(item) {
           <div><dt>Duration</dt><dd>{{ formatDuration(loop?.duration_ms) }}</dd></div>
           <div><dt>Events</dt><dd>{{ total }}</dd></div>
           <div><dt>Tools</dt><dd>{{ toolCallCount }}</dd></div>
-          <div><dt>Tokens</dt><dd>{{ tokenCount.toLocaleString() }}</dd></div>
+          <div>
+            <dt>Tokens</dt>
+            <dd :title="tokenTooltip">
+              {{ formatTokensK(tokenBreakdown.total) }}
+              <span v-if="tokenBreakdown.cacheHitPct > 0" class="cache-hit-badge">{{ tokenBreakdown.cacheHitPct }}% cached</span>
+            </dd>
+          </div>
         </dl>
       </section>
 
@@ -244,12 +328,13 @@ function itemDuration(item) {
       </div>
 
       <ol v-if="timelineItems.length" class="event-timeline">
-        <li v-for="(item, index) in timelineItems" :key="item.id" class="timeline-item" :class="`timeline-item--${item.kind}`">
+        <li v-for="(item, index) in timelineItems" :key="item.id" class="timeline-item" :class="[`timeline-item--${item.kind}`, { 'has-keywords': item.thinkingKeywords?.length }]">
           <span class="timeline-marker" aria-hidden="true">{{ index + 1 }}</span>
-          <details class="event-card" open>
+          <details class="event-card" :open="item.kind !== 'thinking'">
             <summary class="event-summary">
               <span class="event-icon" aria-hidden="true">
                 <svg v-if="item.kind === 'tool'" viewBox="0 0 16 16"><path d="M6.5 3.5a3 3 0 0 0 3.8 3.8l-5.5 5.5-1.6-1.6 5.5-5.5a3 3 0 0 0 3.8-3.8L10.7 4.2 9.2 2.7z"/></svg>
+                <svg v-else-if="item.kind === 'thinking'" viewBox="0 0 16 16"><path d="M8 2a4.5 4.5 0 0 0-2 8.5V12h4v-1.5A4.5 4.5 0 0 0 8 2z"/><path d="M6 13.5h4M7 15h2"/></svg>
                 <svg v-else-if="item.kind === 'input'" viewBox="0 0 16 16"><path d="M3 8h9M8 4l4 4-4 4"/></svg>
                 <svg v-else-if="item.kind === 'output'" viewBox="0 0 16 16"><path d="M13 8H4M8 4 4 8l4 4"/></svg>
                 <svg v-else viewBox="0 0 16 16"><circle cx="8" cy="8" r="4"/></svg>
@@ -257,16 +342,30 @@ function itemDuration(item) {
               <span class="event-heading">
                 <span class="event-label">{{ item.label }}</span>
                 <strong>{{ item.title }}</strong>
+                <span v-if="item.kind === 'thinking' && item.thinkingPreview" class="thinking-preview">{{ item.thinkingPreview }}</span>
               </span>
               <span class="event-timing">
                 <span v-if="item.timestamp">{{ formatTime(item.timestamp) }}</span>
                 <span v-if="itemDuration(item)">{{ itemDuration(item) }}</span>
               </span>
-              <span v-if="item.isError" class="event-error-flag">Error</span>
+              <span v-if="item.retryNum" class="event-retry-flag">Retry #{{ item.retryNum }}</span>
+              <span v-else-if="item.retriedCount" class="event-retried-flag">{{ item.retriedCount }} retries</span>
+              <span v-if="item.isError" class="event-error-flag" :class="`error-cat--${item.errorCategory || 'unknown'}`">{{ errorCategoryLabel(item.errorCategory) }}</span>
+              <span v-if="item.thinkingKeywords?.length" class="thinking-keywords">
+                <span v-for="kw in item.thinkingKeywords" :key="kw" class="keyword-tag">{{ kw }}</span>
+              </span>
               <svg class="summary-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <path d="m4 6 4 4 4-4"/>
               </svg>
             </summary>
+
+            <!-- Model input summary card -->
+            <div v-if="item.kind === 'model' && item.inputSummary" class="input-summary-bar">
+              <span class="summary-chip"><strong>{{ item.inputSummary.message_count }}</strong> messages</span>
+              <span class="summary-chip"><strong>{{ formatChars(item.inputSummary.total_chars) }}</strong> chars</span>
+              <span v-if="item.inputSummary.tool_result_count" class="summary-chip"><strong>{{ item.inputSummary.tool_result_count }}</strong> tool results</span>
+              <span v-if="item.inputSummary.has_images" class="summary-chip">has images</span>
+            </div>
 
             <div class="event-body" :class="{ 'event-body--split': item.input != null && item.output != null }">
               <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Input" />
@@ -354,6 +453,21 @@ function itemDuration(item) {
 .event-timing { margin-left: auto; display: flex; gap: 6px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
 .event-timing span + span { padding-left: 6px; border-left: 1px solid var(--border-subtle); color: var(--text-secondary); }
 .event-error-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent); color: var(--color-error, #ef4444); font-size: 9px; font-weight: 600; text-transform: uppercase; }
+.event-error-flag.error-cat--permission_denied { background: color-mix(in srgb, #f59e0b 12%, transparent); color: #d97706; }
+.event-error-flag.error-cat--timeout { background: color-mix(in srgb, #f97316 12%, transparent); color: #ea580c; }
+.event-error-flag.error-cat--invalid_input { background: color-mix(in srgb, #eab308 12%, transparent); color: #ca8a04; }
+.event-error-flag.error-cat--network_error { background: color-mix(in srgb, #8b5cf6 12%, transparent); color: #7c3aed; }
+.event-retry-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, #f59e0b 12%, transparent); color: #d97706; font-size: 9px; font-weight: 600; text-transform: uppercase; }
+.event-retried-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--text-accent) 10%, transparent); color: var(--text-accent); font-size: 9px; font-weight: 600; }
+.cache-hit-badge { margin-left: 4px; padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-success, #22c55e) 12%, transparent); color: var(--color-success, #22c55e); font-size: 9px; font-weight: 600; }
+.input-summary-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-secondary)); }
+.summary-chip { padding: 3px 8px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.summary-chip strong { color: var(--text-primary); font-weight: 650; }
+.thinking-preview { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: 10px; font-weight: 400; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+.thinking-keywords { display: inline-flex; gap: 3px; margin-left: 4px; }
+.keyword-tag { padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-warning, #f59e0b) 15%, transparent); color: var(--color-warning, #d97706); font-size: 8px; font-weight: 600; text-transform: uppercase; }
+.timeline-item--thinking .event-card { border-left: 2px dashed var(--color-warning, #f59e0b); background: color-mix(in srgb, var(--color-warning, #f59e0b) 3%, var(--bg-primary)); }
+.timeline-item--thinking .event-icon { color: var(--color-warning, #d97706); border-color: color-mix(in srgb, var(--color-warning) 35%, var(--border-subtle)); }
 .summary-chevron { flex: 0 0 auto; color: var(--text-tertiary); transition: transform 160ms ease; }
 .event-card[open] .summary-chevron { transform: rotate(180deg); }
 .event-body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--bg-secondary) 45%, var(--bg-primary)); }

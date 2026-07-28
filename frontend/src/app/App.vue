@@ -73,7 +73,7 @@ const {
 const { fetchStatus: fetchImStatus, fetchChannels: fetchImChannels, resetState: resetImState } = useImBinding()
 
 const { addNotification } = useNotifications()
-const { markWorking, markDone } = useWorkingSessions()
+const { markWorking, markDone, syncWorkingSessions } = useWorkingSessions()
 const { startListening: startHotkeyHintListening, stopListening: stopHotkeyHintListening } = useHotkeyHint()
 
 const ready = ref(false)
@@ -84,7 +84,7 @@ const gitManagerVisible = ref(false)
 const terminalDrawerVisible = ref(false)
 const terminalDockHeight = ref(0)
 const workspaceVisible = ref(false)
-const workspaceDockWidth = ref(0)
+const workspaceInitialPath = ref('')
 const schedulerVisible = ref(false)
 const schedulerProjectId = ref('')
 const scheduleCounts = ref({})
@@ -138,8 +138,9 @@ function toggleSidebarCollapse() {
   localStorage.setItem('pf_sidebar_collapsed', isSidebarCollapsed.value)
 }
 
-function handleWorkspaceWidthChange(width) {
-  workspaceDockWidth.value = width || 0
+function openWorkspaceFile(path) {
+  workspaceInitialPath.value = path || ''
+  workspaceVisible.value = true
 }
 
 function handleTerminalHeightChange(height) {
@@ -651,6 +652,15 @@ function ensureConnection(sessionId) {
   setupUnifiedHandler(connection, sessionId)
 }
 
+function restoreRunningSessions() {
+  syncWorkingSessions(sessions.value, projects.value)
+  for (const item of sessions.value) {
+    if (item.status === 'running') {
+      ensureConnection(item.session_id)
+    }
+  }
+}
+
 function forceCloseConnection(sessionId) {
   const conn = _connections.get(sessionId)
   if (conn) {
@@ -706,6 +716,7 @@ watch(currentSessionId, (newId, oldId) => {
 onMounted(async () => {
   try {
     await loadSessions()
+    restoreRunningSessions()
     await loadScheduleCounts()
     globalEventConnection = createGlobalEventConnection()
     globalEventConnection.onEvent(handleGlobalEvent)
@@ -878,7 +889,6 @@ useGlobalHotkeys({
         class="app-body"
         :style="{
           paddingBottom: terminalDrawerVisible ? terminalDockHeight + 'px' : '0px',
-          paddingRight: workspaceVisible ? workspaceDockWidth + 'px' : '0px',
         }"
       >
         <div
@@ -960,6 +970,7 @@ useGlobalHotkeys({
             v-else-if="currentSessionId && !importing"
             @locate-session="handleLocateSession"
             @return-team="handleReturnToTeam"
+            @open-file="openWorkspaceFile"
           />
           <div v-else-if="importing" class="loading">
             <div class="loading-shimmer-container">
@@ -991,11 +1002,11 @@ useGlobalHotkeys({
       <WorkspacePanel
         :visible="workspaceVisible"
         :project="currentProject"
+        :initial-path="workspaceInitialPath"
         :vb-running="vbRunning"
         :vb-message="vbMessage"
         @apply-vb="handleApplyVb"
-        @width-change="handleWorkspaceWidthChange"
-        @close="workspaceVisible = false"
+        @close="workspaceVisible = false; workspaceInitialPath = ''"
       />
       <TerminalDrawer
         :visible="terminalDrawerVisible"

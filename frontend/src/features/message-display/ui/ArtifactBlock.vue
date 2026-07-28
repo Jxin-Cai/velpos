@@ -1,6 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { openPath } from '@features/terminal'
+import { computed } from 'vue'
 
 const props = defineProps({
   block: {
@@ -8,6 +7,7 @@ const props = defineProps({
     required: true,
   },
 })
+const emit = defineEmits(['open-file'])
 
 const artifactPath = computed(() => (
   props.block.path
@@ -26,14 +26,9 @@ const artifactLabel = computed(() => (
 ))
 
 const isWebUrl = computed(() => /^https?:\/\//i.test(artifactPath.value))
-const artifactError = ref('')
-
 function openArtifact() {
   if (!artifactPath.value || isWebUrl.value) return
-  artifactError.value = ''
-  openPath(artifactPath.value).catch(() => {
-    artifactError.value = 'Unable to open this artifact.'
-  })
+  emit('open-file', artifactPath.value)
 }
 </script>
 
@@ -59,7 +54,6 @@ function openArtifact() {
       {{ artifactLabel }}
     </button>
     <span v-else class="artifact-label">{{ artifactLabel }}</span>
-    <span v-if="artifactError" class="artifact-error" role="alert">{{ artifactError }}</span>
   </div>
 </template>
 
@@ -107,8 +101,4 @@ function openArtifact() {
   text-decoration: underline;
 }
 
-.artifact-error {
-  color: var(--red);
-  font-size: 12px;
-}
 </style>

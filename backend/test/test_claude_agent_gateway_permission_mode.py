@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -66,3 +67,44 @@ async def test_propagates_cancellation_when_pending_permission_is_cancelled() ->
     assert cancelled is True
     with pytest.raises(asyncio.CancelledError):
         await permission_task
+
+
+@pytest.mark.asyncio
+async def test_waits_to_set_permission_mode_when_query_operation_is_locked() -> None:
+    # Arrange
+    gateway = ClaudeAgentGateway(cli_path="/usr/local/bin/claude")
+    client = AsyncMock()
+    gateway._clients["session-1"] = client
+    operation_lock = gateway._client_operation_lock("session-1")
+    await operation_lock.acquire()
+
+    # Act
+    update_task = asyncio.create_task(
+        gateway.set_permission_mode("session-1", "acceptEdits")
+    )
+    await asyncio.sleep(0)
+
+    # Assert
+    client.set_permission_mode.assert_not_awaited()
+    operation_lock.release()
+    await update_task
+    client.set_permission_mode.assert_awaited_once_with("acceptEdits")
+
+
+@pytest.mark.asyncio
+async def test_applies_latest_permission_mode_when_updates_arrive_while_active() -> None:
+    # Arrange
+    gateway = ClaudeAgentGateway(cli_path="/usr/local/bin/claude")
+    client = AsyncMock()
+    gateway._clients["session-1"] = client
+    gateway.mark_active("session-1")
+
+    # Act
+    await gateway.set_permission_mode("session-1", "default")
+    first_task = gateway._pending_permission_tasks["session-1"]
+    await gateway.set_permission_mode("session-1", "acceptEdits")
+    gateway.mark_idle("session-1")
+    await first_task
+
+    # Assert
+    client.set_permission_mode.assert_awaited_once_with("acceptEdits")

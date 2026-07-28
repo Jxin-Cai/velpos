@@ -14,6 +14,8 @@ class ExecutionEventDto(BaseModel):
     tool_name: str | None = None
     is_error: bool = False
     error_message: str | None = None
+    error_category: str | None = None
+    retry_of_tool_use_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime | None = None
 
@@ -71,6 +73,8 @@ class ProvenanceDto(BaseModel):
 class ExecutionTreeResponse(BaseModel):
     agent_id: str
     request: Any = None
+    status: str = "unknown"
+    error_message: str | None = None
     tasks: list[ExecutionTaskDto] = Field(default_factory=list)
     dependencies: list[TaskDependencyDto] = Field(default_factory=list)
     subagents: list[SubagentPlaceholderDto] = Field(default_factory=list)

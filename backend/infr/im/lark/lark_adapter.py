@@ -8,9 +8,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
+import shutil
+import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from domain.im_binding.acl.im_channel_adapter import (
     BindResult,
@@ -23,6 +29,13 @@ from domain.im_binding.model.channel_spec import BindingMode, ImChannelSpec
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
 from infr.im.lark.lark_api import LarkApiClient, LarkApiError
+from infr.im.lark.lark_message import (
+    LarkInboundContent,
+    LarkMessageType,
+    LarkOutboundMessage,
+    parse_inbound_content,
+)
+from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +62,7 @@ class _WsConnection:
     on_message: object | None = None
     main_loop: asyncio.AbstractEventLoop | None = None
     ws_loop: asyncio.AbstractEventLoop | None = None
+    credentials: tuple[str, str, str] | None = None
 
 
 class LarkAdapter(ImChannelAdapter):
@@ -60,9 +74,31 @@ class LarkAdapter(ImChannelAdapter):
 
     def __init__(self) -> None:
         self._api = LarkApiClient()
+        self._sdk_clients: dict[tuple[str, str, str], Any] = {}
+        self._attachment_storage = AttachmentStorageGateway()
         # Multiple WS connections keyed by channel_id
         self._connections: dict[str, _WsConnection] = {}
         self._lock = asyncio.Lock()
+
+    def _get_sdk_client(self, app_id: str, app_secret: str, brand: str):
+        key = (app_id, app_secret, brand)
+        client = self._sdk_clients.get(key)
+        if client is not None:
+            return client
+
+        import lark_oapi as lark
+        from lark_oapi.core.const import FEISHU_DOMAIN, LARK_DOMAIN
+
+        domain = LARK_DOMAIN if brand == "lark" else FEISHU_DOMAIN
+        client = (
+            lark.Client.builder()
+            .app_id(app_id)
+            .app_secret(app_secret)
+            .domain(domain)
+            .build()
+        )
+        self._sdk_clients[key] = client
+        return client
 
     def _get_credentials(
         self, binding_or_config: ImBinding | dict,
@@ -260,6 +296,7 @@ class LarkAdapter(ImChannelAdapter):
             session_id=binding.session_id,
             on_message=on_message,
             main_loop=asyncio.get_running_loop(),
+            credentials=creds,
         )
 
         # Atomically replace: pop old + insert new inside one lock acquisition
@@ -505,19 +542,11 @@ class LarkAdapter(ImChannelAdapter):
         attempt = 0
 
         try:
-            from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
             from lark_oapi.ws import Client as LarkWsClient
             from lark_oapi.core.const import FEISHU_DOMAIN, LARK_DOMAIN
 
             domain = LARK_DOMAIN if brand == "lark" else FEISHU_DOMAIN
-
-            def on_lark_message(data):
-                self._on_lark_message(conn, data)
-
-            handler = EventDispatcherHandler.builder("", "") \
-                .register_p2_im_message_receive_v1(on_lark_message) \
-                .register_p2_im_message_message_read_v1(lambda data: None) \
-                .build()
+            handler = self._build_event_handler(conn)
 
             while not conn.stop:
                 thread_loop = asyncio.new_event_loop()
@@ -583,6 +612,25 @@ class LarkAdapter(ImChannelAdapter):
             conn.ws_loop = None
             logger.info("[Lark-adapter] WS thread exited channel=%s", conn.channel_id)
 
+    def _build_event_handler(self, conn: _WsConnection):
+        from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+
+        def on_lark_message(data):
+            self._on_lark_message(conn, data)
+
+        def on_card_action(data):
+            return self._on_card_action(conn, data)
+
+        return (
+            EventDispatcherHandler.builder("", "")
+            .register_p2_im_message_receive_v1(on_lark_message)
+            .register_p2_im_message_message_read_v1(lambda data: None)
+            .register_p2_im_message_reaction_created_v1(lambda data: None)
+            .register_p2_im_message_reaction_deleted_v1(lambda data: None)
+            .register_p2_card_action_trigger(on_card_action)
+            .build()
+        )
+
     def _on_lark_message(self, conn: _WsConnection, data) -> None:
         """Callback from lark-oapi SDK (runs in WS thread), scoped to a specific connection."""
         try:
@@ -602,34 +650,39 @@ class LarkAdapter(ImChannelAdapter):
             chat_id = msg.chat_id or ""
             msg_type = msg.message_type or "text"
 
-            content = ""
-            if msg.content:
-                try:
-                    content_data = json.loads(msg.content)
-                    content = content_data.get("text", "")
-                except (json.JSONDecodeError, TypeError):
-                    content = msg.content
-
             sender_id = ""
             if event.sender and event.sender.sender_id:
                 sender_id = event.sender.sender_id.open_id or ""
 
-            if not content or not message_id:
+            if not message_id:
                 logger.warning(
-                    "[Lark-adapter] Skipping event: content=%r message_id=%r msg_type=%s raw_content=%r channel=%s",
-                    content, message_id, msg_type, msg.content, conn.channel_id,
+                    "[Lark-adapter] Skipping event without message_id: "
+                    "msg_type=%s channel=%s",
+                    msg_type,
+                    conn.channel_id,
                 )
                 return
 
             logger.info(
-                "[Lark-adapter] Message: channel=%s msg_id=%s chat_id=%s sender=%s type=%s content=%.100s",
-                conn.channel_id, message_id, chat_id, sender_id, msg_type, content,
+                "[Lark-adapter] Message: channel=%s msg_id=%s chat_id=%s "
+                "sender=%s type=%s",
+                conn.channel_id,
+                message_id,
+                chat_id,
+                sender_id,
+                msg_type,
             )
 
-            # Dispatch to main event loop using this connection's callback
             if conn.on_message and conn.main_loop:
                 future = asyncio.run_coroutine_threadsafe(
-                    conn.on_message(message_id, content, sender_id, chat_id),
+                    self._handle_lark_message(
+                        conn,
+                        message_id=message_id,
+                        message_type=msg_type,
+                        raw_content=msg.content or "",
+                        sender_id=sender_id,
+                        chat_id=chat_id,
+                    ),
                     conn.main_loop,
                 )
                 future.add_done_callback(
@@ -649,13 +702,227 @@ class LarkAdapter(ImChannelAdapter):
         except Exception:
             logger.error("[Lark-adapter] Error handling event channel=%s", conn.channel_id, exc_info=True)
 
+    async def _handle_lark_message(
+        self,
+        conn: _WsConnection,
+        *,
+        message_id: str,
+        message_type: str,
+        raw_content: str,
+        sender_id: str,
+        chat_id: str,
+    ) -> None:
+        parsed = parse_inbound_content(message_type, raw_content)
+        content, attachments = await self._materialize_inbound_resources(
+            conn,
+            message_id,
+            message_type,
+            parsed,
+        )
+        if not content.strip():
+            logger.warning(
+                "[Lark-adapter] Skipping empty decoded message: channel=%s "
+                "msg_id=%s type=%s",
+                conn.channel_id,
+                message_id,
+                message_type,
+            )
+            return
+        await conn.on_message(
+            message_id,
+            content,
+            sender_id,
+            chat_id,
+            attachments,
+        )
+
+    async def _materialize_inbound_resources(
+        self,
+        conn: _WsConnection,
+        message_id: str,
+        message_type: str,
+        parsed: LarkInboundContent,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        if not parsed.resources:
+            return parsed.text, []
+        app_credentials = self._connection_credentials(conn.channel_id)
+        if app_credentials is None:
+            logger.warning(
+                "[Lark-adapter] Cannot download message resources without credentials: "
+                "channel=%s msg_id=%s",
+                conn.channel_id,
+                message_id,
+            )
+            return parsed.text, []
+        app_id, app_secret, brand = app_credentials
+        client = self._get_sdk_client(app_id, app_secret, brand)
+        attachments: list[dict[str, Any]] = []
+        for resource_type, file_key in parsed.resources:
+            try:
+                attachment = await self._download_message_resource(
+                    client,
+                    conn.session_id,
+                    message_id,
+                    file_key,
+                    resource_type,
+                    message_type,
+                )
+                attachments.append(attachment)
+            except LarkApiError:
+                logger.error(
+                    "[Lark-adapter] Failed to download inbound resource: "
+                    "channel=%s msg_id=%s type=%s",
+                    conn.channel_id,
+                    message_id,
+                    resource_type,
+                    exc_info=True,
+                )
+        return parsed.text, attachments
+
+    def _connection_credentials(self, channel_id: str) -> tuple[str, str, str] | None:
+        conn = self._connections.get(channel_id)
+        if conn is None:
+            return None
+        return conn.credentials
+
+    async def _download_message_resource(
+        self,
+        client,
+        session_id: str,
+        message_id: str,
+        file_key: str,
+        resource_type: str,
+        message_type: str,
+    ) -> dict[str, Any]:
+        from lark_oapi.api.im.v1 import GetMessageResourceRequest
+
+        request = (
+            GetMessageResourceRequest.builder()
+            .message_id(message_id)
+            .file_key(file_key)
+            .type(resource_type)
+            .build()
+        )
+        response = await client.im.v1.message_resource.aget(request)
+        if not response.success() or response.file is None:
+            raise self._sdk_error("download message resource", response)
+        data = response.file.getvalue()
+        filename = response.file_name or self._default_resource_name(message_type, file_key)
+        filename = self._ensure_resource_suffix(filename, message_type)
+        path, digest = self._attachment_storage.save("", session_id, filename, data)
+        mime_type = mimetypes.guess_type(filename)[0] or self._default_mime_type(message_type)
+        return {
+            "filename": filename,
+            "mime_type": mime_type,
+            "size_bytes": len(data),
+            "path": path,
+            "sha256": digest,
+            "source": "lark",
+            "external_key": file_key,
+        }
+
+    @staticmethod
+    def _default_resource_name(message_type: str, file_key: str) -> str:
+        extension = {
+            LarkMessageType.IMAGE.value: ".png",
+            LarkMessageType.AUDIO.value: ".opus",
+            LarkMessageType.MEDIA.value: ".mp4",
+        }.get(message_type, ".bin")
+        return f"lark-{file_key[:12] or uuid.uuid4().hex[:12]}{extension}"
+
+    @staticmethod
+    def _default_mime_type(message_type: str) -> str:
+        return {
+            LarkMessageType.IMAGE.value: "image/png",
+            LarkMessageType.AUDIO.value: "audio/ogg",
+            LarkMessageType.MEDIA.value: "video/mp4",
+        }.get(message_type, "application/octet-stream")
+
+    @staticmethod
+    def _ensure_resource_suffix(filename: str, message_type: str) -> str:
+        if Path(filename).suffix:
+            return filename
+        suffix = {
+            LarkMessageType.IMAGE.value: ".png",
+            LarkMessageType.AUDIO.value: ".opus",
+            LarkMessageType.MEDIA.value: ".mp4",
+        }.get(message_type, "")
+        return f"{filename}{suffix}" if suffix else filename
+
+    def _on_card_action(self, conn: _WsConnection, data):
+        """Convert card interaction callbacks into regular inbound messages."""
+        from lark_oapi.event.callback.model.p2_card_action_trigger import (
+            P2CardActionTriggerResponse,
+        )
+
+        try:
+            event = data.event
+            action = event.action if event else None
+            context = event.context if event else None
+            operator = event.operator if event else None
+            action_body = {
+                "tag": getattr(action, "tag", None),
+                "name": getattr(action, "name", None),
+                "value": getattr(action, "value", None),
+                "form_value": getattr(action, "form_value", None),
+                "input_value": getattr(action, "input_value", None),
+                "option": getattr(action, "option", None),
+                "options": getattr(action, "options", None),
+                "checked": getattr(action, "checked", None),
+            }
+            compact = {key: value for key, value in action_body.items() if value not in (None, "", [], {})}
+            content = "[飞书卡片操作]\n" + json.dumps(compact, ensure_ascii=False)
+            source = ":".join(
+                (
+                    str(getattr(context, "open_message_id", "") or ""),
+                    str(getattr(event, "token", "") or ""),
+                    json.dumps(compact, ensure_ascii=False, sort_keys=True),
+                )
+            )
+            message_id = f"card-action:{uuid.uuid5(uuid.NAMESPACE_URL, source)}"
+            chat_id = getattr(context, "open_chat_id", "") or ""
+            sender_id = getattr(operator, "open_id", "") or ""
+            if conn.on_message and conn.main_loop:
+                future = asyncio.run_coroutine_threadsafe(
+                    conn.on_message(message_id, content, sender_id, chat_id, []),
+                    conn.main_loop,
+                )
+                future.add_done_callback(
+                    lambda f, cid=conn.channel_id: (
+                        logger.error(
+                            "[Lark-adapter] Card action callback failed: channel=%s",
+                            cid,
+                            exc_info=f.exception(),
+                        )
+                        if not f.cancelled() and f.exception() else None
+                    )
+                )
+        except Exception:
+            logger.error(
+                "[Lark-adapter] Error handling card action: channel=%s",
+                conn.channel_id,
+                exc_info=True,
+            )
+        return P2CardActionTriggerResponse()
+
     # ── Send message ────────────────────────────────────────────
 
     async def send_message(
-        self, binding: ImBinding, content: str,
+        self,
+        binding: ImBinding,
+        content: str | dict[str, Any] | LarkOutboundMessage,
         reply_context: dict | None = None,
         idempotency_key: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
+        if attachments:
+            return await self._send_message_with_attachments(
+                binding,
+                str(content) if isinstance(content, str) else "",
+                attachments,
+                reply_context,
+                idempotency_key,
+            )
         creds = self._get_credentials(binding)
         if not creds:
             raise RuntimeError("Lark credentials are unavailable")
@@ -676,18 +943,25 @@ class LarkAdapter(ImChannelAdapter):
         if not receive_id:
             raise RuntimeError("Lark routing target is unavailable")
 
-        token = await self._api.get_tenant_token(app_id, app_secret, brand)
+        client = self._get_sdk_client(app_id, app_secret, brand)
+        message = LarkOutboundMessage.from_value(content)
+        encoded_content = await self._prepare_outbound_content(client, message)
+        sdk_uuid = (
+            str(uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
+            if idempotency_key
+            else ""
+        )
 
         sent = False
-        response: dict = {}
+        response = None
         if reply_msg_id:
             try:
-                response = await self._api.reply_message(
-                    token,
+                response = await self._reply_sdk_message(
+                    client,
                     reply_msg_id,
-                    content,
-                    brand=brand,
-                    idempotency_key=idempotency_key,
+                    message.message_type.value,
+                    encoded_content,
+                    sdk_uuid,
                 )
                 sent = True
             except LarkApiError:
@@ -698,13 +972,13 @@ class LarkAdapter(ImChannelAdapter):
                 )
 
         if not sent:
-            response = await self._api.send_message(
-                token,
+            response = await self._create_sdk_message(
+                client,
                 receive_id,
-                content,
-                receive_id_type=receive_id_type,
-                brand=brand,
-                idempotency_key=idempotency_key,
+                receive_id_type,
+                message.message_type.value,
+                encoded_content,
+                sdk_uuid,
             )
 
         logger.info(
@@ -713,7 +987,370 @@ class LarkAdapter(ImChannelAdapter):
             receive_id[:8],
             bool(reply_msg_id and sent),
         )
-        return str(response.get("message_id") or "")
+        return str(getattr(getattr(response, "data", None), "message_id", "") or "")
+
+    async def _send_message_with_attachments(
+        self,
+        binding: ImBinding,
+        content: str,
+        attachments: list[dict[str, Any]],
+        reply_context: dict | None,
+        idempotency_key: str,
+    ) -> str:
+        message_ids: list[str] = []
+        operation_key = idempotency_key or uuid.uuid4().hex
+        if content.strip():
+            message_ids.append(
+                await self.send_message(
+                    binding,
+                    content,
+                    reply_context=reply_context,
+                    idempotency_key=f"{operation_key}:text",
+                )
+            )
+        for index, attachment in enumerate(attachments):
+            payload = self._attachment_to_outbound_message(attachment)
+            message_ids.append(
+                await self.send_message(
+                    binding,
+                    payload,
+                    reply_context=reply_context,
+                    idempotency_key=f"{operation_key}:attachment:{index}",
+                )
+            )
+        return next((message_id for message_id in reversed(message_ids) if message_id), "")
+
+    @staticmethod
+    def _attachment_to_outbound_message(
+        attachment: dict[str, Any],
+    ) -> LarkOutboundMessage:
+        mime_type = str(attachment.get("mime_type") or "application/octet-stream")
+        file_path = str(attachment.get("path") or "")
+        if not file_path:
+            raise ValueError("Outbound attachment is missing its local path")
+        if mime_type.startswith("image/"):
+            message_type = LarkMessageType.IMAGE
+        elif mime_type.startswith("audio/"):
+            message_type = LarkMessageType.AUDIO
+        elif mime_type.startswith("video/"):
+            message_type = LarkMessageType.MEDIA
+        else:
+            message_type = LarkMessageType.FILE
+        return LarkOutboundMessage(
+            message_type=message_type,
+            file_path=file_path,
+            file_name=str(
+                attachment.get("filename")
+                or attachment.get("name")
+                or Path(file_path).name
+            ),
+            duration=int(attachment.get("duration") or 0),
+            image_path=str(attachment.get("image_path") or ""),
+            image_key=str(attachment.get("image_key") or ""),
+        )
+
+    async def _prepare_outbound_content(
+        self,
+        client,
+        message: LarkOutboundMessage,
+    ) -> str:
+        if message.message_type in (LarkMessageType.TEXT, LarkMessageType.POST, LarkMessageType.INTERACTIVE):
+            return message.encoded_content()
+        if not message.file_path:
+            raise ValueError(f"{message.message_type.value} message requires file_path")
+        prepared = message
+        temporary_paths: list[Path] = []
+        try:
+            if message.message_type is LarkMessageType.IMAGE:
+                source = Path(message.file_path)
+                declared_suffix = Path(message.resolved_file_name()).suffix
+                if not source.suffix and declared_suffix:
+                    staged_image = self._temporary_media_path(declared_suffix)
+                    shutil.copyfile(source, staged_image)
+                    temporary_paths.append(staged_image)
+                    from dataclasses import replace
+
+                    prepared = replace(prepared, file_path=str(staged_image))
+            if message.message_type in (LarkMessageType.AUDIO, LarkMessageType.MEDIA):
+                prepared, temporary_paths = await self._prepare_media_for_lark(message)
+            if prepared.message_type is LarkMessageType.IMAGE:
+                image_key = await self._upload_image(client, prepared.file_path)
+                return prepared.encoded_content(image_key=image_key)
+
+            file_key = await self._upload_file(client, prepared)
+            if prepared.message_type is LarkMessageType.MEDIA:
+                image_key = prepared.image_key
+                if not image_key and prepared.image_path:
+                    image_key = await self._upload_image(client, prepared.image_path)
+                if not image_key:
+                    raise ValueError("video message requires a cover image")
+                return prepared.encoded_content(file_key=file_key, image_key=image_key)
+            return prepared.encoded_content(file_key=file_key)
+        finally:
+            for path in temporary_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "[Lark-adapter] Failed to remove temporary media file",
+                        exc_info=True,
+                    )
+
+    async def _prepare_media_for_lark(
+        self,
+        message: LarkOutboundMessage,
+    ) -> tuple[LarkOutboundMessage, list[Path]]:
+        from dataclasses import replace
+
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg is required to send audio and video to Lark")
+
+        temporary_paths: list[Path] = []
+        source = Path(message.file_path)
+        prepared = message
+
+        if message.message_type is LarkMessageType.AUDIO and source.suffix.lower() != ".opus":
+            output = self._temporary_media_path(".opus")
+            temporary_paths.append(output)
+            await self._run_ffmpeg(
+                ffmpeg,
+                "-i",
+                str(source),
+                "-vn",
+                "-acodec",
+                "libopus",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                str(output),
+            )
+            prepared = replace(prepared, file_path=str(output), file_name=f"{source.stem}.opus")
+
+        if message.message_type is LarkMessageType.MEDIA:
+            if source.suffix.lower() != ".mp4":
+                output = self._temporary_media_path(".mp4")
+                temporary_paths.append(output)
+                await self._run_ffmpeg(
+                    ffmpeg,
+                    "-i",
+                    str(source),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-movflags",
+                    "+faststart",
+                    str(output),
+                )
+                prepared = replace(
+                    prepared,
+                    file_path=str(output),
+                    file_name=f"{source.stem}.mp4",
+                )
+            if not prepared.image_key and not prepared.image_path:
+                cover = self._temporary_media_path(".png")
+                temporary_paths.append(cover)
+                await self._run_ffmpeg(
+                    ffmpeg,
+                    "-i",
+                    prepared.file_path,
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=min(1280\\,iw):-2",
+                    str(cover),
+                )
+                prepared = replace(prepared, image_path=str(cover))
+
+        if prepared.duration <= 0:
+            duration = await self._probe_media_duration(prepared.file_path)
+            if duration > 0:
+                prepared = replace(prepared, duration=duration)
+
+        return prepared, temporary_paths
+
+    @staticmethod
+    def _temporary_media_path(suffix: str) -> Path:
+        file = tempfile.NamedTemporaryFile(
+            prefix="velpos-lark-",
+            suffix=suffix,
+            delete=False,
+        )
+        file.close()
+        return Path(file.name)
+
+    @staticmethod
+    async def _run_ffmpeg(ffmpeg: str, *arguments: str) -> None:
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            *arguments,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace")[-1000:]
+            raise RuntimeError(f"Failed to prepare media for Lark: {detail}")
+
+    @staticmethod
+    async def _probe_media_duration(file_path: str) -> int:
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return 0
+        process = await asyncio.create_subprocess_exec(
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            file_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _stderr = await process.communicate()
+        if process.returncode != 0:
+            return 0
+        try:
+            return max(0, round(float(stdout.decode("utf-8").strip()) * 1000))
+        except ValueError:
+            return 0
+
+    async def _upload_image(self, client, file_path: str) -> str:
+        from lark_oapi.api.im.v1 import CreateImageRequest, CreateImageRequestBody
+
+        path = Path(file_path)
+        if not path.is_file():
+            raise ValueError(f"Image file does not exist: {file_path}")
+        with path.open("rb") as image:
+            body = (
+                CreateImageRequestBody.builder()
+                .image_type("message")
+                .image(image)
+                .build()
+            )
+            request = CreateImageRequest.builder().request_body(body).build()
+            response = await client.im.v1.image.acreate(request)
+        if not response.success():
+            raise self._sdk_error("upload image", response)
+        image_key = getattr(getattr(response, "data", None), "image_key", "")
+        if not image_key:
+            raise LarkApiError("Lark upload image returned no image_key")
+        return str(image_key)
+
+    async def _upload_file(self, client, message: LarkOutboundMessage) -> str:
+        from lark_oapi.api.im.v1 import CreateFileRequest, CreateFileRequestBody
+
+        path = Path(message.file_path)
+        if not path.is_file():
+            raise ValueError(f"Media file does not exist: {message.file_path}")
+        file_type = self._lark_file_type(message.message_type, path.suffix)
+        with path.open("rb") as file:
+            builder = (
+                CreateFileRequestBody.builder()
+                .file_type(file_type)
+                .file_name(message.resolved_file_name())
+                .file(file)
+            )
+            if message.duration > 0:
+                builder = builder.duration(message.duration)
+            request = CreateFileRequest.builder().request_body(builder.build()).build()
+            response = await client.im.v1.file.acreate(request)
+        if not response.success():
+            raise self._sdk_error("upload file", response)
+        file_key = getattr(getattr(response, "data", None), "file_key", "")
+        if not file_key:
+            raise LarkApiError("Lark upload file returned no file_key")
+        return str(file_key)
+
+    @staticmethod
+    def _lark_file_type(message_type: LarkMessageType, suffix: str) -> str:
+        if message_type is LarkMessageType.AUDIO:
+            return "opus"
+        if message_type is LarkMessageType.MEDIA:
+            return "mp4"
+        return {
+            ".pdf": "pdf",
+            ".doc": "doc",
+            ".docx": "doc",
+            ".xls": "xls",
+            ".xlsx": "xls",
+            ".ppt": "ppt",
+            ".pptx": "ppt",
+        }.get(suffix.lower(), "stream")
+
+    async def _create_sdk_message(
+        self,
+        client,
+        receive_id: str,
+        receive_id_type: str,
+        message_type: str,
+        content: str,
+        sdk_uuid: str,
+    ):
+        from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+
+        body_builder = (
+            CreateMessageRequestBody.builder()
+            .receive_id(receive_id)
+            .msg_type(message_type)
+            .content(content)
+        )
+        if sdk_uuid:
+            body_builder = body_builder.uuid(sdk_uuid)
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type(receive_id_type)
+            .request_body(body_builder.build())
+            .build()
+        )
+        response = await client.im.v1.message.acreate(request)
+        if not response.success():
+            raise self._sdk_error("send message", response)
+        return response
+
+    async def _reply_sdk_message(
+        self,
+        client,
+        message_id: str,
+        message_type: str,
+        content: str,
+        sdk_uuid: str,
+    ):
+        from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody
+
+        body_builder = (
+            ReplyMessageRequestBody.builder()
+            .msg_type(message_type)
+            .content(content)
+        )
+        if sdk_uuid:
+            body_builder = body_builder.uuid(sdk_uuid)
+        request = (
+            ReplyMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(body_builder.build())
+            .build()
+        )
+        response = await client.im.v1.message.areply(request)
+        if not response.success():
+            raise self._sdk_error("reply message", response)
+        return response
+
+    @staticmethod
+    def _sdk_error(operation: str, response) -> LarkApiError:
+        code = getattr(response, "code", "")
+        message = getattr(response, "msg", "") or "unknown error"
+        return LarkApiError(f"Lark {operation} failed: code={code} message={message}")
 
     async def close(self) -> None:
         """Shutdown adapter — stop all WS listeners."""
@@ -738,10 +1375,30 @@ class LarkAdapter(ImChannelAdapter):
             return ""
         app_id, app_secret, brand = creds
         try:
-            token = await self._api.get_tenant_token(app_id, app_secret, brand)
-            reaction_id = await self._api.add_reaction(token, message_id, reaction, brand=brand)
+            from lark_oapi.api.im.v1 import (
+                CreateMessageReactionRequest,
+                CreateMessageReactionRequestBody,
+                Emoji,
+            )
+
+            client = self._get_sdk_client(app_id, app_secret, brand)
+            body = (
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(Emoji.builder().emoji_type(reaction).build())
+                .build()
+            )
+            request = (
+                CreateMessageReactionRequest.builder()
+                .message_id(message_id)
+                .request_body(body)
+                .build()
+            )
+            response = await client.im.v1.message_reaction.acreate(request)
+            if not response.success():
+                raise self._sdk_error("add reaction", response)
+            reaction_id = getattr(getattr(response, "data", None), "reaction_id", "")
             logger.info("[Lark-adapter] Reaction added: msg=%s type=%s id=%s", message_id, reaction, reaction_id)
-            return reaction_id
+            return str(reaction_id or "")
         except Exception:
             logger.warning("[Lark-adapter] add_reaction failed", exc_info=True)
             return ""
@@ -758,8 +1415,18 @@ class LarkAdapter(ImChannelAdapter):
         if not app_id or not app_secret:
             return
         try:
-            token = await self._api.get_tenant_token(app_id, app_secret, brand)
-            await self._api.delete_reaction(token, message_id, reaction_id, brand=brand)
+            from lark_oapi.api.im.v1 import DeleteMessageReactionRequest
+
+            client = self._get_sdk_client(app_id, app_secret, brand)
+            request = (
+                DeleteMessageReactionRequest.builder()
+                .message_id(message_id)
+                .reaction_id(reaction_id)
+                .build()
+            )
+            response = await client.im.v1.message_reaction.adelete(request)
+            if not response.success():
+                raise self._sdk_error("remove reaction", response)
             logger.info("[Lark-adapter] Reaction removed: msg=%s id=%s", message_id, reaction_id)
         except Exception:
             logger.warning("[Lark-adapter] remove_reaction failed", exc_info=True)

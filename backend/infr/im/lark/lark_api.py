@@ -3,19 +3,16 @@
 Covers:
 - App Registration device flow (QR code binding)
 - Tenant access token management (auto-refresh)
-- IM message send / reply
+
+Message, media, card, and reaction APIs are handled by the official
+``lark-oapi`` SDK in ``lark_adapter.py``.
 """
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
 import time
-import uuid
 
 import httpx
-
-logger = logging.getLogger(__name__)
 
 # ── Brand endpoints (mirrors cli/internal/core/types.go) ──
 
@@ -172,152 +169,6 @@ class LarkApiClient:
             expire = data.get("expire", 7200)
             self._token_cache[app_id] = (token, time.time() + expire)
             return token
-
-    # ── Messaging ───────────────────────────────────────────────
-
-    async def send_message(
-        self,
-        token: str,
-        receive_id: str,
-        content: str,
-        msg_type: str = "text",
-        receive_id_type: str = "chat_id",
-        brand: str = "feishu",
-        idempotency_key: str = "",
-    ) -> dict:
-        """Send a message to a chat or user.
-
-        For text messages, content should be the raw text (will be JSON-wrapped).
-        *receive_id_type* can be ``"chat_id"`` (default) or ``"open_id"``.
-        """
-        endpoint = (
-            _ep(brand, "open")
-            + f"/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
-        )
-        if idempotency_key:
-            request_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
-            endpoint += f"&uuid={request_uuid}"
-        if msg_type == "text":
-            content_body = json.dumps({"text": content})
-        else:
-            content_body = content
-
-        body = {
-            "receive_id": receive_id,
-            "msg_type": msg_type,
-            "content": content_body,
-        }
-
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                endpoint,
-                json=body,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            data = resp.json()
-
-        if data.get("code") != 0:
-            msg = data.get("msg", "Unknown error")
-            logger.warning("[Lark-api] send_message failed: %s", msg)
-            raise LarkApiError(f"Send message failed: {msg}")
-
-        return data.get("data", {})
-
-    async def reply_message(
-        self,
-        token: str,
-        message_id: str,
-        content: str,
-        msg_type: str = "text",
-        brand: str = "feishu",
-        idempotency_key: str = "",
-    ) -> dict:
-        """Reply to a specific message."""
-        endpoint = (
-            _ep(brand, "open")
-            + f"/open-apis/im/v1/messages/{message_id}/reply"
-        )
-        if idempotency_key:
-            request_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
-            endpoint += f"?uuid={request_uuid}"
-        if msg_type == "text":
-            content_body = json.dumps({"text": content})
-        else:
-            content_body = content
-
-        body = {
-            "msg_type": msg_type,
-            "content": content_body,
-        }
-
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                endpoint,
-                json=body,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            data = resp.json()
-
-        if data.get("code") != 0:
-            msg = data.get("msg", "Unknown error")
-            logger.warning("[Lark-api] reply_message failed: %s", msg)
-            raise LarkApiError(f"Reply message failed: {msg}")
-
-        return data.get("data", {})
-
-    async def add_reaction(
-        self,
-        token: str,
-        message_id: str,
-        reaction_type: str,
-        brand: str = "feishu",
-    ) -> str:
-        """Add an emoji reaction to a message. Returns reaction_id."""
-        endpoint = (
-            _ep(brand, "open")
-            + f"/open-apis/im/v1/messages/{message_id}/reactions"
-        )
-        body = {"reaction_type": {"emoji_type": reaction_type}}
-
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                endpoint,
-                json=body,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            data = resp.json()
-
-        if data.get("code") != 0:
-            msg = data.get("msg", "Unknown error")
-            logger.warning("[Lark-api] add_reaction failed: %s", msg)
-            raise LarkApiError(f"Add reaction failed: {msg}")
-
-        return data.get("data", {}).get("reaction_id", "")
-
-    async def delete_reaction(
-        self,
-        token: str,
-        message_id: str,
-        reaction_id: str,
-        brand: str = "feishu",
-    ) -> None:
-        """Remove an emoji reaction from a message."""
-        endpoint = (
-            _ep(brand, "open")
-            + f"/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}"
-        )
-
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.delete(
-                endpoint,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            data = resp.json()
-
-        if data.get("code") != 0:
-            msg = data.get("msg", "Unknown error")
-            logger.warning("[Lark-api] delete_reaction failed: %s", msg)
-            raise LarkApiError(f"Delete reaction failed: {msg}")
 
 
 class LarkApiError(Exception):

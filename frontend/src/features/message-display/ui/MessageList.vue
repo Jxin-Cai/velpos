@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useSession } from '@entities/session'
+import { visibleUserText } from '../lib/userMessageText'
 import MessageItem from './MessageItem.vue'
 
 const props = defineProps({
@@ -32,9 +33,13 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  projectId: {
+    type: String,
+    default: '',
+  },
 })
 
-const emit = defineEmits(['load-more', 'load-through', 'open-trace'])
+const emit = defineEmits(['load-more', 'load-through', 'open-trace', 'open-file'])
 
 const {
   currentSessionId,
@@ -97,6 +102,9 @@ const loadingMore = ref(false)
 const activeUserMessageIndex = ref(-1)
 const jumpingToMessageIndex = ref(null)
 const conversationRail = ref(null)
+const activeMarkerTooltip = ref(null)
+const markerTooltip = ref(null)
+const markerTooltipStyle = ref({})
 let historyPagingEnabled = false
 
 const markerSourceMessages = computed(() => props.allMessages || props.messages)
@@ -133,15 +141,50 @@ function checkNearBottom() {
 }
 
 function userMessagePreview(message) {
-  const text = String(message?.content?.text || '')
+  const content = message?.content || {}
+  const text = visibleUserText(content)
     .replace(/\u001b\[[0-9;]*m/g, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   if (text) return text
-  const attachments = message?.content?.attachments || []
+  const attachments = content.attachments || []
   if (attachments.length) return attachments.map((item) => item.filename || item.name || 'attachment').join(', ')
   return 'User message'
+}
+
+async function showMarkerTooltip(marker, event) {
+  const trigger = event.currentTarget
+  if (!(trigger instanceof HTMLElement)) return
+
+  const triggerRect = trigger.getBoundingClientRect()
+  activeMarkerTooltip.value = marker
+  markerTooltipStyle.value = {
+    left: `${triggerRect.right + 3}px`,
+    top: `${triggerRect.top + triggerRect.height / 2}px`,
+  }
+
+  await nextTick()
+  if (activeMarkerTooltip.value?.key !== marker.key || !markerTooltip.value) return
+
+  const tooltipRect = markerTooltip.value.getBoundingClientRect()
+  const viewportPadding = 8
+  const minCenter = viewportPadding + tooltipRect.height / 2
+  const maxCenter = window.innerHeight - viewportPadding - tooltipRect.height / 2
+  const centeredTop = triggerRect.top + triggerRect.height / 2
+  markerTooltipStyle.value = {
+    left: `${Math.min(
+      triggerRect.right + 3,
+      window.innerWidth - viewportPadding - tooltipRect.width,
+    )}px`,
+    top: `${Math.max(minCenter, Math.min(centeredTop, maxCenter))}px`,
+  }
+}
+
+function hideMarkerTooltip(marker) {
+  if (activeMarkerTooltip.value?.key === marker.key) {
+    activeMarkerTooltip.value = null
+  }
 }
 
 function updateActiveUserMessage() {
@@ -317,6 +360,7 @@ onMounted(() => {
 watch(currentSessionId, () => {
   historyPagingEnabled = false
   jumpingToMessageIndex.value = null
+  activeMarkerTooltip.value = null
 })
 
 onBeforeUnmount(() => {
@@ -357,7 +401,13 @@ onBeforeUnmount(() => {
         :aria-label="jumpingToMessageIndex === marker.index
           ? `Loading prompt: ${marker.preview}`
           : `Jump to prompt: ${marker.preview}`"
-        :title="marker.preview"
+        :aria-describedby="activeMarkerTooltip?.key === marker.key
+          ? 'conversation-marker-tooltip'
+          : undefined"
+        @mouseenter="showMarkerTooltip(marker, $event)"
+        @mouseleave="hideMarkerTooltip(marker)"
+        @focus="showMarkerTooltip(marker, $event)"
+        @blur="hideMarkerTooltip(marker)"
         @click="scrollToUserMessage(marker.index)"
       >
         <span
@@ -366,13 +416,24 @@ onBeforeUnmount(() => {
           aria-hidden="true"
         ></span>
         <span v-else class="marker-dash" aria-hidden="true"></span>
-        <span class="marker-tooltip" role="tooltip">
-          <span>
-            {{ jumpingToMessageIndex === marker.index ? 'Loading earlier messages…' : marker.preview }}
-          </span>
-        </span>
       </button>
     </nav>
+    <Teleport to="body">
+      <Transition name="marker-tooltip">
+        <div
+          v-if="activeMarkerTooltip"
+          id="conversation-marker-tooltip"
+          ref="markerTooltip"
+          class="marker-tooltip"
+          role="tooltip"
+          :style="markerTooltipStyle"
+        >
+          {{ jumpingToMessageIndex === activeMarkerTooltip.index
+            ? 'Loading earlier messages…'
+            : activeMarkerTooltip.preview }}
+        </div>
+      </Transition>
+    </Teleport>
     <div
       v-if="jumpingToMessageIndex !== null"
       class="jump-loading-status"
@@ -422,7 +483,10 @@ onBeforeUnmount(() => {
             :trace-run-id="traceRunIdFor(msg)"
             :trace-summary="traceSummaryFor(msg)"
             :interactive-answered="Boolean(msg.content?.interaction_answered)"
+            :project-id="projectId"
+            :session-id="currentSessionId"
             @open-trace="emit('open-trace', $event)"
+            @open-file="emit('open-file', $event)"
             @interactive-answered="markInteractiveAnsweredFor(currentSessionId, msg)"
           />
         </div>
@@ -460,6 +524,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 3px;
   width: 22px;
   padding: 4px 0;
@@ -541,10 +606,11 @@ onBeforeUnmount(() => {
 }
 
 .marker-tooltip {
-  position: absolute;
-  top: 50%;
-  left: 25px;
+  position: fixed;
+  z-index: 100;
   width: min(288px, calc(100vw - 68px));
+  max-height: min(240px, calc(100vh - 16px));
+  overflow-y: auto;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -554,23 +620,26 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.45;
   text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.marker-tooltip-enter-active,
+.marker-tooltip-leave-active {
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.marker-tooltip-enter-from,
+.marker-tooltip-leave-to {
   opacity: 0;
-  visibility: hidden;
   transform: translate(3px, -50%);
-  transition: opacity var(--transition-fast), transform var(--transition-fast), visibility var(--transition-fast);
 }
 
-.marker-tooltip span {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
-.conversation-marker:hover .marker-tooltip,
-.conversation-marker:focus-visible .marker-tooltip {
+.marker-tooltip-enter-to,
+.marker-tooltip-leave-from {
   opacity: 1;
-  visibility: visible;
   transform: translate(0, -50%);
 }
 

@@ -58,6 +58,33 @@ const overallStatus = computed(() => {
 
 const SLOW_THRESHOLD_MS = 5000
 
+// Live status: derive current activity from running spans
+const liveStatus = computed(() => {
+  if (!stats.value.runningCount) return null
+  const spans = traceTree.value || []
+  const flatSpans = flattenSpans(spans)
+  const running = flatSpans.filter(s => s.status === 'running')
+  if (!running.length) return null
+  const latestTool = running
+    .filter(s => s.span_type === 'tool_call')
+    .sort((a, b) => (b.started_time || '').localeCompare(a.started_time || ''))[0]
+  const turnCount = flatSpans.filter(s => s.span_type === 'llm_turn').length
+  return {
+    stepNumber: turnCount,
+    currentTool: latestTool?.name || null,
+    isRunning: true,
+  }
+})
+
+function flattenSpans(nodes) {
+  const result = []
+  for (const node of nodes) {
+    result.push(node)
+    if (node.children?.length) result.push(...flattenSpans(node.children))
+  }
+  return result
+}
+
 const filteredTree = computed(() => {
   if (spanFilter.value === 'all') return traceTree.value
   return traceTree.value.filter(node => matchesFilter(node, spanFilter.value))
@@ -168,6 +195,15 @@ function exportTrace() {
           </nav>
 
           <main class="trace-body" :class="{ 'trace-body--execution': viewMode === ViewMode.EXECUTION }">
+            <!-- Live status bar -->
+            <div v-if="liveStatus" class="live-status-bar" role="status" aria-live="polite">
+              <span class="live-dot" aria-hidden="true"></span>
+              <span class="live-text">
+                Step {{ liveStatus.stepNumber }}
+                <span v-if="liveStatus.currentTool"> &mdash; {{ liveStatus.currentTool }}</span>
+              </span>
+            </div>
+
             <template v-if="viewMode === ViewMode.EXECUTION">
               <ExecutionTreePanel :run-id="selectedRunId" />
             </template>
@@ -392,8 +428,32 @@ function exportTrace() {
 }
 .trace-body--execution {
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
+.live-status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-accent) 25%, var(--border-subtle));
+  background: color-mix(in srgb, var(--text-accent) 5%, var(--bg-secondary));
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-accent);
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+.live-text {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .trace-empty {
   min-height: 320px;
   display: flex;

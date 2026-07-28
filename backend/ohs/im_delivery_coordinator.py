@@ -7,9 +7,13 @@ import os
 import uuid
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
-from application.im_binding.im_channel_application_service import ImChannelApplicationService
+from application.im_binding.im_channel_application_service import (
+    ImChannelApplicationService,
+    RetryableInboundError,
+)
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.im_binding.model.channel_type import ImChannelType
@@ -23,6 +27,7 @@ from infr.repository.im_delivery_repository_impl import (
     ImInboxRepositoryImpl,
     ImOutboxRepositoryImpl,
 )
+from infr.repository.session_repository_impl import SessionRepositoryImpl
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +97,7 @@ class ImDeliveryCoordinator:
         content: str,
         sender_id: str,
         group_id: str,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> bool:
         if not message_id:
             raise ValueError("IM inbound message_id must not be empty")
@@ -105,6 +111,7 @@ class ImDeliveryCoordinator:
             content=content,
             sender_id=sender_id,
             group_id=group_id,
+            attachments=list(attachments or []),
         )
         async with async_session_factory() as db:
             accepted = await ImInboxRepositoryImpl(db).accept(event)
@@ -124,11 +131,12 @@ class ImDeliveryCoordinator:
         session_id: str,
         content: str,
         *,
+        attachments: list[dict[str, Any]] | None = None,
         deduplication_key: str | None = None,
         reply_context: dict[str, Any] | None = None,
         binding: ImBinding | None = None,
     ) -> int | None:
-        if not content.strip():
+        if not content.strip() and not attachments:
             return None
         async with async_session_factory() as db:
             if binding is None:
@@ -142,6 +150,7 @@ class ImDeliveryCoordinator:
                 channel_id=binding.channel_id or binding.id,
                 channel_type=binding.channel_type.value,
                 content=content,
+                attachments=list(attachments or []),
                 deduplication_key=self._normalize_deduplication_key(
                     deduplication_key or f"im:{session_id}:{uuid.uuid4().hex}"
                 ),
@@ -205,6 +214,7 @@ class ImDeliveryCoordinator:
                     get_claude_agent_gateway,
                     get_connection_manager,
                     get_create_session_service_factory,
+                    _stage_inbound_attachments,
                 )
 
                 gateway = get_claude_agent_gateway()
@@ -217,6 +227,7 @@ class ImDeliveryCoordinator:
                     get_pending_request_context_fn=gateway.get_pending_request_context,
                     resolve_user_response_fn=gateway.resolve_user_response,
                     enqueue_outbound_fn=self.enqueue_outbound,
+                    stage_inbound_attachments_fn=_stage_inbound_attachments,
                 )
                 await service.process_inbound_event(
                     binding,
@@ -224,6 +235,7 @@ class ImDeliveryCoordinator:
                     event.content,
                     event.sender_id,
                     event.group_id,
+                    event.attachments,
                 )
                 await db.commit()
             await self._finish_inbox(event, _InboxOutcome.PROCESSED)
@@ -233,6 +245,21 @@ class ImDeliveryCoordinator:
                 event.id,
                 event.attempt_count,
             )
+        except RetryableInboundError as exc:
+            logger.info(
+                "IM inbox deferred: inbox_id=%s attempt=%s reason=%s",
+                event.id,
+                event.attempt_count,
+                exc,
+            )
+            try:
+                await self._finish_inbox(event, _InboxOutcome.RETRY, str(exc))
+            except ImDeliveryLeaseLostError:
+                logger.info(
+                    "IM inbox retry skipped after lease loss: inbox_id=%s attempt=%s",
+                    event.id,
+                    event.attempt_count,
+                )
         except Exception as exc:
             logger.error(
                 "IM inbox processing failed: inbox_id=%s attempt=%s",
@@ -277,11 +304,16 @@ class ImDeliveryCoordinator:
                 adapter = self._registry.get_adapter_factory(
                     ImChannelType(message.channel_type)
                 )()
+                attachments = await self._resolve_outbound_attachments(
+                    db,
+                    message,
+                )
                 external_message_id = await adapter.send_message(
                     binding,
                     message.content,
                     reply_context=message.reply_context,
                     idempotency_key=message.deduplication_key,
+                    attachments=attachments,
                 )
             await self._finish_outbox(
                 message,
@@ -361,6 +393,35 @@ class ImDeliveryCoordinator:
     def _build_reply_context(self, binding: ImBinding) -> dict[str, Any]:
         adapter = self._registry.get_adapter_factory(binding.channel_type)()
         return adapter.build_reply_context(binding) or {}
+
+    @staticmethod
+    async def _resolve_outbound_attachments(
+        db,
+        message: ImOutboxMessage,
+    ) -> list[dict[str, Any]]:
+        if not message.attachments:
+            return []
+        session = await SessionRepositoryImpl(db).find_by_id(message.session_id)
+        project_root = (
+            Path(session.project_dir).expanduser().resolve()
+            if session is not None and session.project_dir
+            else None
+        )
+        resolved: list[dict[str, Any]] = []
+        for attachment in message.attachments:
+            item = dict(attachment)
+            raw_path = str(item.get("path") or "")
+            if raw_path and not Path(raw_path).is_absolute():
+                if project_root is None:
+                    raise ValueError(
+                        "Cannot resolve relative outbound attachment without project directory"
+                    )
+                absolute_path = (project_root / raw_path).resolve()
+                if absolute_path != project_root and project_root not in absolute_path.parents:
+                    raise ValueError("Outbound attachment path escapes project workspace")
+                item["path"] = str(absolute_path)
+            resolved.append(item)
+        return resolved
 
     @staticmethod
     def _retry_delay(attempt_count: int) -> int:

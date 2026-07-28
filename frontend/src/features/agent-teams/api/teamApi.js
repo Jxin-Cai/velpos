@@ -6,10 +6,9 @@ export function listTeamTemplates(language = 'en', mode = '') {
   return get(`/agents/teams/templates?${params.toString()}`)
 }
 
-export function createTeamProject(name, dirPath, teamConfig) {
+export function createTeamProject(name, teamConfig) {
   return post('/projects/teams', {
     name,
-    dir_path: dirPath,
     team_config: teamConfig,
   })
 }

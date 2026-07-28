@@ -13,7 +13,7 @@ from application.session.session_query_engine import QueueMessageOutcome
 
 os.environ.setdefault("CLAUDE_CLI_PATH", "/usr/bin/true")
 
-from ohs.ws.session_ws import _handle_send_prompt
+from ohs.ws.session_ws import _handle_send_prompt, _prompt_started_event
 
 
 def _context(session) -> SimpleNamespace:
@@ -41,6 +41,28 @@ def _session(messages: list[Message], *, is_running: bool) -> SimpleNamespace:
         project_id="project1",
         project_dir="/tmp/project",
     )
+
+
+def test_includes_workspace_path_when_prompt_started_contains_attachment():
+    # Arrange
+    command = SimpleNamespace(
+        client_message_id="message-attachment",
+        image_paths=[],
+        attachments=[{
+            "id": "attachment-1",
+            "filename": "report.md",
+            "mime_type": "text/markdown",
+            "size_bytes": 128,
+            "path": ".upload-file/session1/report.md",
+            "sha256": "abc123",
+        }],
+    )
+
+    # Act
+    event = _prompt_started_event(command, "review")
+
+    # Assert
+    assert event["attachments"][0]["path"] == ".upload-file/session1/report.md"
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
@@ -56,11 +57,13 @@ class ImChannelAdapter(ABC):
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
         idempotency_key: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """向 IM 渠道发送消息.
 
-        reply_context 携带回复路由信息；支持的平台应使用 idempotency_key
-        抑制网络超时后的重复投递。返回渠道侧消息标识，不提供时返回空串。
+        reply_context 携带回复路由信息；attachments 携带已落盘的 Web
+        会话附件。支持的平台应使用 idempotency_key 抑制网络超时后的
+        重复投递。返回渠道侧消息标识，不提供时返回空串。
         """
         ...
 
@@ -81,12 +84,16 @@ class ImChannelAdapter(ABC):
     async def start_listening(
         self,
         binding: ImBinding,
-        on_message: Callable[[str, str, str, str], Awaitable[None]] | None = None,
+        on_message: Callable[
+            [str, str, str, str, list[dict[str, Any]]],
+            Awaitable[None],
+        ] | None = None,
     ) -> None:
         """开始接收消息.
 
-        *on_message* 回调签名: ``(msg_id, content, sender_id, group_id)``
-        -- 4 个字符串, 覆盖所有 IM 场景.  Prompt 模式适配器无需实现.
+        *on_message* 回调签名:
+        ``(msg_id, content, sender_id, group_id, attachments)``。
+        不支持附件的渠道传递空列表。Prompt 模式适配器无需实现。
         """
 
     async def stop_listening(self, binding: ImBinding) -> None:

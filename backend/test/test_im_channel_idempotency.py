@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -40,9 +41,18 @@ def _binding(channel_type: ImChannelType, config: dict) -> ImBinding:
 async def test_forwards_idempotency_key_when_lark_message_is_sent():
     # Arrange
     adapter = LarkAdapter()
-    adapter._api = SimpleNamespace(
-        get_tenant_token=AsyncMock(return_value="token"),
-        send_message=AsyncMock(return_value={"message_id": "lark-message"}),
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            success=lambda: True,
+            data=SimpleNamespace(message_id="lark-message"),
+        )
+    )
+    adapter._get_sdk_client = Mock(
+        return_value=SimpleNamespace(
+            im=SimpleNamespace(
+                v1=SimpleNamespace(message=SimpleNamespace(acreate=create)),
+            )
+        )
     )
     binding = _binding(
         ImChannelType.LARK,
@@ -58,17 +68,26 @@ async def test_forwards_idempotency_key_when_lark_message_is_sent():
 
     # Assert
     assert message_id == "lark-message"
-    assert adapter._api.send_message.await_args.kwargs["idempotency_key"] == "stable-key"
+    request = create.await_args.args[0]
+    assert request.body.uuid == str(
+        uuid.uuid5(uuid.NAMESPACE_URL, "stable-key")
+    )
 
 
 @pytest.mark.asyncio
 async def test_does_not_fallback_when_lark_reply_outcome_is_ambiguous():
     # Arrange
     adapter = LarkAdapter()
-    adapter._api = SimpleNamespace(
-        get_tenant_token=AsyncMock(return_value="token"),
-        reply_message=AsyncMock(side_effect=TimeoutError("timed out")),
-        send_message=AsyncMock(),
+    reply = AsyncMock(side_effect=TimeoutError("timed out"))
+    create = AsyncMock()
+    adapter._get_sdk_client = Mock(
+        return_value=SimpleNamespace(
+            im=SimpleNamespace(
+                v1=SimpleNamespace(
+                    message=SimpleNamespace(areply=reply, acreate=create),
+                )
+            )
+        )
     )
     binding = _binding(
         ImChannelType.LARK,
@@ -83,17 +102,28 @@ async def test_does_not_fallback_when_lark_reply_outcome_is_ambiguous():
             {"msg_id": "source-message"},
             idempotency_key="stable-key",
         )
-    adapter._api.send_message.assert_not_awaited()
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_falls_back_when_lark_reply_is_explicitly_rejected():
     # Arrange
     adapter = LarkAdapter()
-    adapter._api = SimpleNamespace(
-        get_tenant_token=AsyncMock(return_value="token"),
-        reply_message=AsyncMock(side_effect=LarkApiError("message expired")),
-        send_message=AsyncMock(return_value={"message_id": "fallback-message"}),
+    reply = AsyncMock(side_effect=LarkApiError("message expired"))
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            success=lambda: True,
+            data=SimpleNamespace(message_id="fallback-message"),
+        )
+    )
+    adapter._get_sdk_client = Mock(
+        return_value=SimpleNamespace(
+            im=SimpleNamespace(
+                v1=SimpleNamespace(
+                    message=SimpleNamespace(areply=reply, acreate=create),
+                )
+            )
+        )
     )
     binding = _binding(
         ImChannelType.LARK,

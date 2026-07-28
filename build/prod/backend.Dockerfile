@@ -2,6 +2,7 @@ FROM nikolaik/python-nodejs:python3.12-nodejs22-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ffmpeg \
     git \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*

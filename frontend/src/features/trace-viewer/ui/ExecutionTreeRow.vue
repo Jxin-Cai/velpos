@@ -85,6 +85,7 @@ const errorTooltip = computed(() => {
   const summary = props.node.error_summary
   if (!summary || !summary.total) return ''
   const parts = [`${summary.total} error${summary.total > 1 ? 's' : ''}`]
+  if (summary.runtime_errors) parts.push(`${summary.runtime_errors} runtime`)
   if (summary.permission_errors) parts.push(`${summary.permission_errors} denied`)
   if (summary.failed_tools?.length) parts.push(summary.failed_tools.join(', '))
   return parts.join(' · ')
@@ -103,8 +104,19 @@ const meta = computed(() => {
     const events = props.node.event_count || 0
     if (props.node.duration_ms > 0) parts.push(formatDuration(props.node.duration_ms))
     if (events > 0) parts.push(`${events} events`)
-    const tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0)
-    if (tokens > 0) parts.push(`${formatTokens(tokens)} tok`)
+    const inputTokens = usage.input_tokens || 0
+    const outputTokens = usage.output_tokens || 0
+    const cacheRead = usage.cache_read_input_tokens || 0
+    const tokens = inputTokens + outputTokens
+    if (tokens > 0) {
+      // Total input context = new input + cache-served tokens
+      const totalInput = inputTokens + cacheRead
+      const cacheHitPct = totalInput > 0 ? Math.round(cacheRead / totalInput * 100) : 0
+      const label = cacheHitPct > 0
+        ? `${formatTokens(tokens)} tok (${cacheHitPct}% cached)`
+        : `${formatTokens(tokens)} tok`
+      parts.push(label)
+    }
     const subagentCount = props.node.subagent_count || 0
     if (subagentCount > 0) parts.push(`${subagentCount} subagent${subagentCount > 1 ? 's' : ''}`)
   }

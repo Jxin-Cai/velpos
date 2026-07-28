@@ -27,6 +27,15 @@ class ProjectionProvenance:
     warnings: tuple[str, ...] = ()
 
 
+class ErrorCategory(str, Enum):
+    PERMISSION_DENIED = "permission_denied"
+    TIMEOUT = "timeout"
+    INVALID_INPUT = "invalid_input"
+    EXECUTION_FAILURE = "execution_failure"
+    NETWORK_ERROR = "network_error"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class ExecutionEvent:
     type: ExecutionEventType
@@ -37,6 +46,8 @@ class ExecutionEvent:
     is_error: bool = False
     error_message: str | None = None
     error_source: str | None = None
+    error_category: str | None = None
+    retry_of_tool_use_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime | None = None
 
@@ -102,13 +113,17 @@ class AgentLoop:
 
     @property
     def error_count(self) -> int:
-        return sum(1 for e in self.events if e.is_error)
+        event_errors = sum(1 for e in self.events if e.is_error)
+        return event_errors or (1 if self.error_message else 0)
 
     @property
     def error_summary(self) -> dict[str, Any]:
         errors = [e for e in self.events if e.is_error]
         if not errors:
-            return {"total": 0}
+            return {
+                "total": 1,
+                "runtime_errors": 1,
+            } if self.error_message else {"total": 0}
         tool_errors = [e for e in errors if e.type == ExecutionEventType.TOOL_RESULT]
         permission_errors = [e for e in errors if e.error_source == "permission"]
         failed_tools = list(dict.fromkeys(
@@ -172,3 +187,5 @@ class ExecutionAgent:
     subagents: tuple[SubagentPlaceholder, ...]
     provenance: ProjectionProvenance
     request: Any = None
+    status: str = "unknown"
+    error_message: str | None = None

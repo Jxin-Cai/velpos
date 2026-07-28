@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+from pathlib import Path
 from typing import Any, Protocol
 
 from domain.message.model.attachment import Attachment
@@ -67,6 +68,18 @@ class AttachmentApplicationService:
         await self._attachment_repository.save(attachment)
         return attachment
 
+    @staticmethod
+    def to_workspace_message_ref(attachment: Attachment, project_dir: str) -> dict[str, Any]:
+        ref = attachment.to_message_ref()
+        if not project_dir:
+            return ref
+        root = Path(project_dir).resolve()
+        stored_path = Path(attachment.storage_path).resolve()
+        if stored_path != root and root not in stored_path.parents:
+            raise BusinessException("Attachment path is outside project workspace")
+        ref["path"] = stored_path.relative_to(root).as_posix()
+        return ref
+
     async def link_message(self, message_id: str, attachment_ids: list[str]) -> None:
         for attachment_id in attachment_ids:
             await self._attachment_repository.link_message(message_id, attachment_id)
@@ -82,6 +95,28 @@ class AttachmentApplicationService:
         if not os.path.isfile(attachment.storage_path):
             raise BusinessException("Attachment file not found")
         return attachment.storage_path, attachment.filename, attachment.mime_type
+
+    @staticmethod
+    def get_workspace_preview_path(
+        project_dir: str,
+        relative_path: str,
+        mime_type: str,
+    ) -> tuple[str, str]:
+        root = Path(project_dir).expanduser().resolve()
+        file_path = (root / relative_path).resolve()
+        if file_path != root and root not in file_path.parents:
+            raise BusinessException(
+                "Attachment path is outside session workspace",
+                "INVALID_ATTACHMENT_PATH",
+            )
+        if not mime_type.startswith("image/"):
+            raise BusinessException(
+                "Only image attachments support inline preview",
+                "ATTACHMENT_PREVIEW_UNSUPPORTED",
+            )
+        if not file_path.is_file():
+            raise BusinessException("Attachment file not found", "ATTACHMENT_FILE_NOT_FOUND")
+        return str(file_path), mime_type
 
     @staticmethod
     def attachment_to_dict(attachment: Attachment) -> dict[str, Any]:

@@ -74,6 +74,50 @@ def test_creates_slot_and_execution_layout_when_source_configuration_exists(
     assert _manifest(workspace)["agent_profile_ref"] == "profiles/backend"
 
 
+def test_creates_workspace_when_team_name_contains_only_non_ascii_characters(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    project = tmp_path / "project"
+    team_root = tmp_path / "teams"
+    _create_project(project)
+    gateway = FilesystemWorkspaceGateway()
+
+    # Act
+    workspace = Path(
+        gateway.create_independent_workspace(
+            str(team_root), "产品团队", "agent-1", str(project)
+        )
+    )
+
+    # Assert
+    assert workspace.parent == team_root
+    assert workspace.name.startswith("ref-")
+    assert workspace.name.endswith("-agent-1")
+
+
+def test_creates_workspace_when_team_name_exceeds_slug_length(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    project = tmp_path / "project"
+    team_root = tmp_path / "teams"
+    _create_project(project)
+    gateway = FilesystemWorkspaceGateway()
+
+    # Act
+    workspace = Path(
+        gateway.create_independent_workspace(
+            str(team_root), "a" * 200, "agent-1", str(project)
+        )
+    )
+    team_slug = workspace.name.removesuffix("-agent-1")
+
+    # Assert
+    assert workspace.parent == team_root
+    assert len(team_slug) == 64
+
+
 def test_isolates_execution_workspaces_when_created_concurrently(tmp_path: Path) -> None:
     # Arrange
     project = tmp_path / "project"

@@ -57,6 +57,12 @@ class ExecutionTraceProjector:
         warnings: list[str] = []
         previous_timestamp: datetime | None = None
         request: Any = None
+        # Retry chain tracking: {task_id: {tool_name: [failed_tool_use_id, ...]}}
+        failed_tools: dict[str, dict[str, list[str]]] = {}
+        # tool_use_id -> tool_name mapping for result processing
+        tool_use_names: dict[str, str] = {}
+        # tool_use_id -> task_id mapping for result processing
+        tool_use_tasks: dict[str, str] = {}
 
         for record in normalized_records:
             message = record.get("message")
@@ -72,11 +78,13 @@ class ExecutionTraceProjector:
                 input_timestamp = turn_input.get("timestamp") if turn_input else None
                 task_id = self._task_for_blocks(blocks, tasks, warnings)
                 has_explicit_tasks = any(task.explicit for task in tasks.values())
+                input_summary = self._compute_input_summary(turn_input)
                 events = [
                     ExecutionEvent(
                         ExecutionEventType.MODEL_INPUT,
                         source_uuid,
                         input_content,
+                        metadata={"input_summary": input_summary} if input_summary else {},
                         timestamp=input_timestamp or previous_timestamp,
                     ),
                     ExecutionEvent(
@@ -103,15 +111,25 @@ class ExecutionTraceProjector:
                     if not tool_id:
                         warnings.append("tool_use_missing_id")
                         continue
+                    # Detect retry: same tool_name failed previously in same task
+                    retry_of = None
+                    task_failures = failed_tools.get(task_id, {}).get(tool_name or "", [])
+                    if task_failures:
+                        retry_of = task_failures[-1]
+
                     events.append(ExecutionEvent(
                         ExecutionEventType.TOOL_USE,
                         source_uuid,
                         block.get("input"),
                         tool_id,
                         tool_name,
+                        retry_of_tool_use_id=retry_of,
                         timestamp=record_timestamp,
                     ))
                     pending[tool_id] = loop_index
+                    if tool_name:
+                        tool_use_names[tool_id] = tool_name
+                    tool_use_tasks[tool_id] = task_id
                     task_operation = self._task_operation(tool_name, block.get("input"))
                     if task_operation:
                         affected_task_id = self._apply_task_tool(
@@ -190,13 +208,31 @@ class ExecutionTraceProjector:
                         warnings.append(f"unmatched_tool_result:{tool_id or 'missing'}")
                         continue
                     index = pending.pop(tool_id)
+                    is_error = bool(block.get("is_error"))
+                    error_msg = self._error_message(block.get("content")) if is_error else None
+                    error_cat = self._classify_error(error_msg, None) if is_error else None
+                    result_tool_name = tool_use_names.get(tool_id)
+                    result_task_id = tool_use_tasks.get(tool_id, self.IMPLICIT_TASK_ID)
+
+                    # Track failure for retry detection
+                    if is_error and result_tool_name:
+                        failed_tools.setdefault(result_task_id, {}).setdefault(
+                            result_tool_name, []
+                        ).append(tool_id)
+                    elif not is_error and result_tool_name:
+                        # Success clears the failure chain for this tool
+                        task_fail_map = failed_tools.get(result_task_id, {})
+                        task_fail_map.pop(result_tool_name, None)
+
                     result = ExecutionEvent(
                         ExecutionEventType.TOOL_RESULT,
                         source_uuid,
                         block.get("content"),
                         tool_id,
-                        is_error=bool(block.get("is_error")),
-                        error_message=self._error_message(block.get("content")) if block.get("is_error") else None,
+                        tool_name=result_tool_name,
+                        is_error=is_error,
+                        error_message=error_msg,
+                        error_category=error_cat,
                         timestamp=record_timestamp,
                     )
                     ended_time = record_timestamp or loops[index].ended_time
@@ -533,6 +569,59 @@ class ExecutionTraceProjector:
     @staticmethod
     def _text(value: Any) -> str | None:
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _classify_error(error_message: str | None, error_source: str | None) -> str | None:
+        """Classify an error into a category by pattern matching."""
+        if not error_message and not error_source:
+            return None
+        if error_source == "permission":
+            return "permission_denied"
+        msg = (error_message or "").lower()
+        if any(w in msg for w in ("permission", "denied", "not allowed", "forbidden", "unauthorized")):
+            return "permission_denied"
+        if any(w in msg for w in ("timeout", "timed out", "deadline exceeded", "took too long")):
+            return "timeout"
+        if any(w in msg for w in ("invalid", "validation", "missing required", "bad request", "malformed")):
+            return "invalid_input"
+        if any(w in msg for w in ("network", "connection", "dns", "unreachable", "econnrefused", "enotfound")):
+            return "network_error"
+        return "execution_failure"
+
+    @staticmethod
+    def _compute_input_summary(turn_input: dict[str, Any] | None) -> dict[str, Any]:
+        """Compute a structural summary of a model turn's input for quick scanning."""
+        if not turn_input:
+            return {}
+        content = turn_input.get("content", [])
+        blocks = content if isinstance(content, list) else []
+        total_chars = 0
+        tool_result_count = 0
+        text_block_count = 0
+        has_images = False
+        for block in blocks:
+            if not isinstance(block, dict):
+                total_chars += len(str(block))
+                continue
+            block_type = block.get("type", "")
+            if block_type == "tool_result":
+                tool_result_count += 1
+                total_chars += len(str(block.get("content", "")))
+            elif block_type == "text":
+                text_block_count += 1
+                total_chars += len(block.get("text", ""))
+            elif block_type == "image":
+                has_images = True
+            else:
+                total_chars += len(str(block.get("text", "") or block.get("content", "")))
+        result: dict[str, Any] = {
+            "message_count": len(blocks),
+            "total_chars": total_chars,
+            "tool_result_count": tool_result_count,
+        }
+        if has_images:
+            result["has_images"] = True
+        return result
 
     @classmethod
     def _error_message(cls, value: Any) -> str | None:

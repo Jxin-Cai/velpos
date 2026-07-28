@@ -53,6 +53,12 @@ export function useSendMessage(wsConnection) {
           filename: item.name,
           mime_type: item.mime_type,
           size_bytes: item.size || 0,
+          preview: (
+            item.mime_type?.startsWith('image/')
+            || item.mime_type?.startsWith('video/')
+          )
+            ? `data:${item.mime_type};base64,${item.data}`
+            : '',
         })) } : {}),
       },
     }

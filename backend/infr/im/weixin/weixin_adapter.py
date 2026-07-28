@@ -346,6 +346,7 @@ class WeixinAdapter(ImChannelAdapter):
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
         idempotency_key: str = "",
+        attachments: list[dict] | None = None,
     ) -> str:
         bot_token = binding.config.get("bot_token", "")
         if not bot_token:

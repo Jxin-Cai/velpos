@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 
 const props = defineProps({
   src: { type: String, required: true },
+  zoom: { type: Number, default: 1 },
 })
 
 const loading = ref(true)
@@ -88,7 +89,7 @@ watch(() => props.src, async () => {
     <div v-else-if="error" class="excel-status excel-error">{{ error }}</div>
     <div v-else-if="rows.length === 0" class="excel-status">Empty sheet</div>
     <div v-else class="table-container">
-      <table>
+      <table :style="{ fontSize: `${12 * zoom}px` }">
         <thead>
           <tr>
             <th v-for="(h, i) in headers" :key="i">{{ h }}</th>

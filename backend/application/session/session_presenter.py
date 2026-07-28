@@ -108,7 +108,9 @@ class SessionPresenter:
             if message.message_type.value != "user":
                 continue
             content = message.content if isinstance(message.content, dict) else {}
-            text = " ".join(str(content.get("text") or "").split())
+            text = " ".join(
+                str(content.get("raw_prompt", content.get("text") or "")).split()
+            )
             if not text:
                 attachments = content.get("attachments") or []
                 text = ", ".join(

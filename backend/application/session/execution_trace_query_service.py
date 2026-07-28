@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -16,6 +17,25 @@ from domain.session.service.execution_trace_projector import ExecutionTraceProje
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
+
+_TREE_CACHE_TTL_S = 30.0
+_TREE_CACHE_MAX_ENTRIES = 64
+_tree_cache: dict[str, tuple[float, ExecutionAgent]] = {}
+
+
+def _prune_expired_cache() -> None:
+    """Remove expired entries to prevent unbounded growth."""
+    now = time.monotonic()
+    expired = [
+        key for key, (ts, _) in _tree_cache.items()
+        if now - ts > _TREE_CACHE_TTL_S
+    ]
+    for key in expired:
+        del _tree_cache[key]
+    if len(_tree_cache) > _TREE_CACHE_MAX_ENTRIES:
+        sorted_keys = sorted(_tree_cache, key=lambda k: _tree_cache[k][0])
+        for key in sorted_keys[: len(_tree_cache) - _TREE_CACHE_MAX_ENTRIES]:
+            del _tree_cache[key]
 
 _CONTINUATION_REQUEST_PATTERN = re.compile(
     r"^\s*(?:"
@@ -147,11 +167,84 @@ class ExecutionTraceQueryService:
             agent_id,
             default_model=default_model,
         )
+        outcome_span = agent_span or self._run_outcome_span(spans)
+        agent = self._apply_trace_outcome(agent, outcome_span)
         if agent_span is None:
             request = self._request_for_run(session, spans)
             if request is not None:
                 agent = replace(agent, request=request)
         return agent
+
+    @staticmethod
+    def _run_outcome_span(spans: list[Any]) -> Any | None:
+        run_span = next((
+            span for span in spans if span.span_type == span.SPAN_TYPE_RUN
+        ), None)
+        if run_span is not None:
+            return run_span
+        return next((
+            span for span in spans
+            if span.span_type == span.SPAN_TYPE_AGENT
+            and span.metadata.get("role") == "main"
+        ), None)
+
+    @staticmethod
+    def _apply_trace_outcome(agent: ExecutionAgent, outcome_span: Any | None) -> ExecutionAgent:
+        if outcome_span is None:
+            return agent
+
+        status = str(outcome_span.status or "unknown")
+        metadata = outcome_span.metadata if isinstance(outcome_span.metadata, dict) else {}
+        error_message = next((
+            str(metadata[key]).strip()
+            for key in ("error", "cancel_reason", "abandon_reason", "deny_reason")
+            if metadata.get(key) and str(metadata[key]).strip()
+        ), None)
+        if not error_message:
+            return replace(agent, status=status)
+
+        candidates: list[tuple[int, int, int, AgentLoop]] = []
+        ordinal = 0
+        for task_index, task in enumerate(agent.tasks):
+            for loop_index, loop in enumerate(task.loops):
+                ordinal += 1
+                candidates.append((
+                    loop.sequence or ordinal,
+                    task_index,
+                    loop_index,
+                    loop,
+                ))
+
+        if not candidates:
+            return replace(agent, status=status, error_message=error_message)
+
+        _, task_index, loop_index, loop = max(candidates, key=lambda item: item[0])
+        updated_loop = replace(
+            loop,
+            error_message=loop.error_message or error_message,
+        )
+        task = agent.tasks[task_index]
+        updated_loops = (
+            *task.loops[:loop_index],
+            updated_loop,
+            *task.loops[loop_index + 1:],
+        )
+        updated_task = replace(
+            task,
+            status="failed" if status == "failed" else task.status,
+            loops=updated_loops,
+        )
+        updated_tasks = (
+            *agent.tasks[:task_index],
+            updated_task,
+            *agent.tasks[task_index + 1:],
+        )
+        return replace(
+            agent,
+            tasks=updated_tasks,
+            status=status,
+            error_message=error_message,
+        )
 
     async def _continuation_spans(
         self,
@@ -263,6 +356,25 @@ class ExecutionTraceQueryService:
             and candidate.tool_use_id == span.tool_use_id
         ), None)
 
+    async def _get_cached_tree(
+        self,
+        session_id: str,
+        run_id: str,
+        agent_span_id: str | None = None,
+    ) -> ExecutionAgent:
+        """Return cached execution tree or build and cache a fresh one."""
+        cache_key = f"{session_id}:{run_id}:{agent_span_id or 'main'}"
+        now = time.monotonic()
+        cached = _tree_cache.get(cache_key)
+        if cached is not None:
+            ts, agent = cached
+            if now - ts <= _TREE_CACHE_TTL_S:
+                return agent
+        _prune_expired_cache()
+        agent = await self.get_execution_tree(session_id, run_id, agent_span_id)
+        _tree_cache[cache_key] = (now, agent)
+        return agent
+
     async def get_loop_detail(
         self,
         session_id: str,
@@ -273,7 +385,7 @@ class ExecutionTraceQueryService:
         limit: int = 100,
     ) -> LoopDetailPage:
         """Return a paginated detail page for a specific loop within a run."""
-        agent = await self.get_execution_tree(session_id, run_id, agent_span_id)
+        agent = await self._get_cached_tree(session_id, run_id, agent_span_id)
         loop = self._find_loop(agent, loop_id)
         if loop is None:
             raise BusinessException("loop not found")

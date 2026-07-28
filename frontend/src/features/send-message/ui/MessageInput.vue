@@ -75,7 +75,7 @@ function handleSend() {
 
   if (pendingAttachments.value.length > 0) {
     emit('send', {
-      text: text || 'Please review the attached files.',
+      text,
       attachments: pendingAttachments.value.map(item => ({
         name: item.name,
         mime_type: item.mime_type,

@@ -10,6 +10,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const props = defineProps({
   src: { type: String, required: true },
+  zoom: { type: Number, default: 1 },
 })
 
 const containerEl = ref(null)
@@ -17,7 +18,6 @@ const loading = ref(true)
 const error = ref('')
 const pageCount = ref(0)
 const currentPage = ref(1)
-const scale = ref(1.5)
 
 let pdfDoc = null
 let renderTask = null
@@ -57,7 +57,7 @@ async function renderPage(num) {
   }
 
   const page = await pdfDoc.getPage(num)
-  const viewport = page.getViewport({ scale: scale.value })
+  const viewport = page.getViewport({ scale: 1.5 * props.zoom })
 
   let canvas = containerEl.value.querySelector('canvas')
   if (!canvas) {
@@ -92,6 +92,7 @@ function nextPage() {
 }
 
 watch(() => props.src, loadPdf, { immediate: true })
+watch(() => props.zoom, () => renderPage(currentPage.value))
 
 onBeforeUnmount(() => {
   if (renderTask) renderTask.cancel()

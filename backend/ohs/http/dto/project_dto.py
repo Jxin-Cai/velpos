@@ -9,7 +9,7 @@ from ohs.assembler.project_assembler import ProjectAssembler
 
 
 class CreateProjectRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200, description="Project name")
+    name: str = Field(default="", max_length=200, description="Optional agent display name")
     github_url: str = Field(default="", max_length=500, description="Optional GitHub repository URL to clone")
 
 

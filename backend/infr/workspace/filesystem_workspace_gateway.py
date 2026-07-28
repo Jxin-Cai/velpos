@@ -15,6 +15,8 @@ from infr.agent.catalog import get_agent_by_id, read_prompt
 
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_SLUG_MAX_LENGTH = 64
+_SLUG_HASH_LENGTH = 12
 _MANIFEST_PATH = Path(".velpos/agent-manifest.json")
 _SCHEMA_VERSION = 1
 
@@ -168,8 +170,15 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
     def _normalize_slug(value: str, name: str) -> str:
         if not value or Path(value).is_absolute() or "/" in value or "\\" in value:
             raise ValueError(f"invalid {name}")
-        normalized = re.sub(r"[^a-z0-9._-]+", "-", value.strip().lower())
-        normalized = normalized.strip(".-")
+        source = value.strip().lower()
+        normalized = re.sub(r"[^a-z0-9._-]+", "-", source)
+        normalized = normalized.strip("._-")
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:_SLUG_HASH_LENGTH]
+        if not normalized:
+            normalized = f"ref-{digest}"
+        elif len(normalized) > _SLUG_MAX_LENGTH:
+            prefix_length = _SLUG_MAX_LENGTH - _SLUG_HASH_LENGTH - 1
+            normalized = f"{normalized[:prefix_length].rstrip('._-')}-{digest}"
         if not _SLUG_PATTERN.fullmatch(normalized):
             raise ValueError(f"invalid {name}")
         return normalized

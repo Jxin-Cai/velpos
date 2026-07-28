@@ -475,7 +475,7 @@ class SessionQueryEngine:
                 {
                     "event": "status_change",
                     "status": "running",
-                    "prompt": actual_prompt,
+                    "prompt": command.prompt,
                     "message_id": ctx.message_id,
                     "run_id": run_id,
                     "attachments": command.attachments,
@@ -484,8 +484,12 @@ class SessionQueryEngine:
             if self._on_user_message:
                 await self._fire_user_outbound(
                     session.session_id,
-                    actual_prompt,
+                    command.prompt,
                     f"session:{session.session_id}:user:{ctx.message_id}",
+                    self._resolve_outbound_attachments(
+                        command.attachments,
+                        session.project_dir,
+                    ),
                 )
 
         async def _prepare_sdk_connection():
@@ -1123,9 +1127,12 @@ class SessionQueryEngine:
                     "image_count": len(queued.image_paths),
                     "attachments": [
                         {
+                            "id": item.get("id", ""),
                             "filename": item.get("filename", "attachment"),
                             "mime_type": item.get("mime_type", "application/octet-stream"),
                             "size_bytes": item.get("size_bytes", 0),
+                            "path": item.get("path", ""),
+                            "sha256": item.get("sha256", ""),
                         }
                         for item in queued.attachments
                     ],
@@ -1171,12 +1178,14 @@ class SessionQueryEngine:
         session_id: str,
         text: str,
         deduplication_key: str,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         try:
             await self._on_user_message(
                 session_id,
                 text,
                 deduplication_key=deduplication_key,
+                attachments=attachments,
             )
         except Exception:
             logger.warning(
@@ -1490,17 +1499,30 @@ class SessionQueryEngine:
                 session_id,
                 exc_info=True,
             )
+        if self._on_user_message:
+            await self._fire_user_outbound(
+                session_id,
+                queued.prompt,
+                f"session:{session_id}:user:{message_id}",
+                self._resolve_outbound_attachments(
+                    queued.attachments,
+                    ctx.session.project_dir,
+                ),
+            )
         logger.info("[session=%s] 排队消息已引导到当前执行", session_id)
         return {
             "message_id": message_id,
             "run_id": ctx.run_id,
-            "prompt": actual_prompt,
+            "prompt": queued.prompt,
             "image_count": len(queued.image_paths),
             "attachments": [
                 {
+                    "id": item.get("id", ""),
                     "filename": item.get("filename", "attachment"),
                     "mime_type": item.get("mime_type", "application/octet-stream"),
                     "size_bytes": item.get("size_bytes", 0),
+                    "path": item.get("path", ""),
+                    "sha256": item.get("sha256", ""),
                 }
                 for item in queued.attachments
             ],
@@ -1522,7 +1544,32 @@ class SessionQueryEngine:
                 attachment_refs.append(f"[Attachment: {filename} path={path}]")
         if not attachment_refs:
             return command.prompt
-        return f"{command.prompt}\n\n" + "\n".join(attachment_refs)
+        references = "\n".join(attachment_refs)
+        if not command.prompt:
+            return references
+        return f"{command.prompt}\n\n{references}"
+
+    @staticmethod
+    def _resolve_outbound_attachments(
+        attachments: list[dict[str, Any]],
+        project_dir: str,
+    ) -> list[dict[str, Any]]:
+        resolved: list[dict[str, Any]] = []
+        project_root = Path(project_dir).expanduser().resolve() if project_dir else None
+        for attachment in attachments:
+            item = dict(attachment)
+            raw_path = str(item.get("path") or "")
+            if raw_path and not Path(raw_path).is_absolute():
+                if project_root is None:
+                    raise ValueError(
+                        "Cannot resolve relative attachment path without project directory"
+                    )
+                absolute_path = (project_root / raw_path).resolve()
+                if absolute_path != project_root and project_root not in absolute_path.parents:
+                    raise ValueError("Attachment path escapes project workspace")
+                item["path"] = str(absolute_path)
+            resolved.append(item)
+        return resolved
 
     async def _set_cancel_requested(self, session_id: str, requested: bool) -> None:
         session = await self._session_repository.find_by_id(session_id)

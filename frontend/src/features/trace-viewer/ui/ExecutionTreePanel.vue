@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useSession } from '@entities/session'
 import { useExecutionTree } from '../model/useExecutionTree'
+import { useTimelineWaterfall } from '../model/useTimelineWaterfall'
 import ExecutionTreeRow from './ExecutionTreeRow.vue'
 import ExecutionDetailViewer from './ExecutionDetailViewer.vue'
 import InlineSubagentTree from './InlineSubagentTree.vue'
@@ -35,6 +36,8 @@ const {
   NodeStatus,
 } = useExecutionTree()
 
+const execFilter = ref('all')
+
 const selectedLoop = computed(() => {
   if (!selectedLoopId.value) return null
   for (const task of tasks.value) {
@@ -44,7 +47,17 @@ const selectedLoop = computed(() => {
   return null
 })
 
-const displayTasks = computed(() => tasks.value.map((task, index) => ({ ...task, sequence: index + 1 })))
+const filteredTasks = computed(() => {
+  if (execFilter.value !== 'errors') return tasks.value
+  return tasks.value
+    .filter(task => (task.error_count || 0) > 0 || (task.loops || []).some(loop => (loop.error_count || 0) > 0))
+    .map(task => ({
+      ...task,
+      loops: (task.loops || []).filter(loop => (loop.error_count || 0) > 0),
+    }))
+})
+const displayTasks = computed(() => filteredTasks.value.map((task, index) => ({ ...task, sequence: index + 1 })))
+const waterfall = useTimelineWaterfall(filteredTasks)
 const plannedTaskCount = computed(() => tasks.value.filter(task => task.explicit).length)
 const totalSteps = computed(() => tasks.value.reduce((count, task) => count + (task.loops?.length || 0), 0))
 const totalSubagents = computed(() => tasks.value.reduce((count, task) => (
@@ -61,12 +74,56 @@ const requestSummary = computed(() => {
   try { return JSON.stringify(value, null, 2) } catch { return String(value) }
 })
 
+const totalErrors = computed(() => tasks.value.reduce((count, task) => count + (task.error_count || 0), 0))
+
 function subagentsForLoop(loop) {
   if (loop?.subagents?.length) return loop.subagents
   const toolUseIds = new Set(loop?.subagent_tool_use_ids || [])
   if (!toolUseIds.size) return []
   return (tree.value?.subagents || []).filter(subagent => toolUseIds.has(subagent.tool_use_id))
 }
+
+function causalityLabel(loops, index) {
+  if (index === 0) return null
+  const prev = loops[index - 1]
+  const names = prev?.tool_names || []
+  if (!names.length) return null
+  const display = names.slice(0, 3).join(', ')
+  return names.length > 3 ? `Receives results from: ${display} +${names.length - 3}` : `Receives results from: ${display}`
+}
+
+function formatTokensK(n) {
+  if (!n) return '0'
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function waterfallTooltip(seg) {
+  const parts = [`Step ${seg.sequence}: ${seg.name}`]
+  if (seg.durationMs > 0) parts.push(formatWaterfallDuration(seg.durationMs))
+  if (seg.tokens > 0) parts.push(`${formatTokensK(seg.tokens)} tokens`)
+  if (seg.errorCount > 0) parts.push(`${seg.errorCount} error${seg.errorCount > 1 ? 's' : ''}`)
+  if (seg.model) parts.push(seg.model.replace(/^claude-/, ''))
+  return parts.join(' · ')
+}
+
+function formatWaterfallDuration(ms) {
+  if (!ms || ms <= 0) return '0ms'
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  const minutes = Math.floor(ms / 60000)
+  const seconds = Math.round((ms % 60000) / 1000)
+  return `${minutes}m ${seconds}s`
+}
+
+// When switching to errors filter, expand all error tasks
+watch(execFilter, (filter) => {
+  if (filter === 'errors') {
+    for (const task of filteredTasks.value) {
+      expandedTasks.add(task.id)
+    }
+  }
+})
 
 watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
   if (runId && sessionId) {
@@ -97,20 +154,28 @@ watch(selectedLoopId, async (loopId) => {
       <span>{{ error }}</span>
     </div>
 
-    <div v-else-if="!tree || tasks.length === 0" class="exec-empty">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-        <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
-        <rect x="9" y="3" width="6" height="4" rx="1"/>
-        <path d="M9 12h6M9 16h4"/>
-      </svg>
-      <p>No execution tasks found for this run</p>
-    </div>
-
     <template v-else>
       <div v-if="error" class="exec-refresh-warning" role="status">
         {{ error }}. Showing the last available data.
       </div>
-      <div class="exec-tree-body" :class="{ 'has-detail': selectedLoopId }">
+      <div v-if="tree?.error_message" class="exec-run-error" role="alert">
+        <div class="exec-run-error-title">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="10" cy="10" r="7.25"/><path d="M10 6.5v4.25M10 13.5h.01"/>
+          </svg>
+          <strong>Execution failed</strong>
+        </div>
+        <p>{{ tree.error_message }}</p>
+      </div>
+      <div v-if="!tree || tasks.length === 0" class="exec-empty">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+          <rect x="9" y="3" width="6" height="4" rx="1"/>
+          <path d="M9 12h6M9 16h4"/>
+        </svg>
+        <p>No execution tasks found for this run</p>
+      </div>
+      <div v-else class="exec-tree-body" :class="{ 'has-detail': selectedLoopId }">
         <div class="exec-tree-section">
           <section class="message-scope" aria-label="Current user message execution summary">
             <div class="message-scope-mark" aria-hidden="true">
@@ -126,6 +191,38 @@ watch(selectedLoopId, async (loopId) => {
               </div>
             </div>
           </section>
+          <!-- Filter bar -->
+          <nav v-if="totalErrors > 0" class="exec-filter-bar" aria-label="Execution filter">
+            <button type="button" class="exec-filter-chip" :class="{ active: execFilter === 'all' }" @click="execFilter = 'all'">All</button>
+            <button type="button" class="exec-filter-chip exec-filter-chip--error" :class="{ active: execFilter === 'errors' }" @click="execFilter = 'errors'">
+              Errors only
+              <span class="filter-count">{{ totalErrors }}</span>
+            </button>
+          </nav>
+
+          <!-- Waterfall timeline (width = time duration) -->
+          <div v-if="waterfall.segments.length > 1" class="timeline-waterfall-wrapper">
+            <div class="timeline-waterfall-legend">
+              <span class="legend-label">Timeline</span>
+              <span class="legend-duration">{{ formatWaterfallDuration(waterfall.totalMs) }}</span>
+              <span class="legend-hint">
+                <span class="legend-swatch legend-swatch--model"></span>model
+                <span class="legend-swatch legend-swatch--tool"></span>tool
+              </span>
+            </div>
+            <div class="timeline-waterfall" aria-label="Step duration waterfall">
+              <div
+                v-for="seg in waterfall.segments"
+                :key="seg.id"
+                class="waterfall-segment"
+                :class="[`waterfall--${seg.type}`, { 'waterfall--error': seg.hasError, 'is-active': selectedLoopId === seg.id }]"
+                :style="{ left: seg.startPct + '%', width: seg.widthPct + '%' }"
+                :data-tooltip="waterfallTooltip(seg)"
+                @click="selectLoop(seg.id)"
+              />
+            </div>
+          </div>
+
           <div class="tree-caption tree-caption--sticky">
             <span>{{ plannedTaskCount ? 'Tasks created for this message' : 'Direct execution for this message' }}</span>
             <span class="tree-count">{{ plannedTaskCount || totalSteps }}</span>
@@ -141,18 +238,22 @@ watch(selectedLoopId, async (loopId) => {
             :expanded="expandedTasks.has(task.id)"
             @toggle="toggleTask(task.id)"
           >
-            <ExecutionTreeRow
-              v-for="loop in task.loops"
-              :key="loop.id"
-              :node="loop"
-              node-type="loop"
-              :depth="1"
-              :expanded="expandedLoops.has(loop.id)"
-              :selected="selectedLoopId === loop.id"
-              :load-state="getLoopLoadState(loop.id)"
-              @select-loop="selectLoop"
-              @toggle="toggleLoop"
-            >
+            <template v-for="(loop, loopIndex) in task.loops" :key="loop.id">
+              <!-- Causality label between loops -->
+              <div v-if="causalityLabel(task.loops, loopIndex)" class="causality-label">
+                <span class="causality-arrow" aria-hidden="true">&#x2190;</span>
+                {{ causalityLabel(task.loops, loopIndex) }}
+              </div>
+              <ExecutionTreeRow
+                :node="loop"
+                node-type="loop"
+                :depth="1"
+                :expanded="expandedLoops.has(loop.id)"
+                :selected="selectedLoopId === loop.id"
+                :load-state="getLoopLoadState(loop.id)"
+                @select-loop="selectLoop"
+                @toggle="toggleLoop"
+              >
               <ExecutionTreeRow
                 v-for="subagent in subagentsForLoop(loop)"
                 :key="subagent.tool_use_id"
@@ -176,6 +277,7 @@ watch(selectedLoopId, async (loopId) => {
                 />
               </ExecutionTreeRow>
             </ExecutionTreeRow>
+            </template>
           </ExecutionTreeRow>
         </div>
 
@@ -238,9 +340,76 @@ watch(selectedLoopId, async (loopId) => {
   color: var(--text-secondary);
   font-size: 11px;
 }
+.exec-run-error {
+  flex: 0 0 auto;
+  margin: 8px 14px 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-error, #ef4444) 35%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-error, #ef4444) 8%, var(--bg-primary));
+  color: var(--color-error, #ef4444);
+}
+.exec-run-error-title { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.exec-run-error-title svg { flex: 0 0 auto; }
+.exec-run-error p {
+  margin: 5px 0 0 22px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .exec-empty p { margin: 0; color: var(--text-secondary); font-size: 13px; }
 .subagent-inline-state { padding: 10px 14px 10px 60px; color: var(--text-tertiary); font-size: 11px; }
 .subagent-inline-state--error { color: var(--color-error, #ef4444); }
+.exec-filter-bar { display: flex; gap: 4px; padding: 6px 10px 2px; }
+.exec-filter-chip { min-height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-primary); color: var(--text-tertiary); font-size: 11px; font-weight: 500; cursor: pointer; transition: all 120ms ease; }
+.exec-filter-chip:hover { border-color: var(--text-accent); color: var(--text-primary); }
+.exec-filter-chip.active { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 8%, var(--bg-primary)); color: var(--text-accent); font-weight: 600; }
+.exec-filter-chip--error.active { border-color: var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error) 8%, var(--bg-primary)); color: var(--color-error, #ef4444); }
+.filter-count { padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+.timeline-waterfall-wrapper { margin: 8px 10px 4px; }
+.timeline-waterfall-legend { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; padding: 0 2px; }
+.legend-label { color: var(--text-tertiary); font-size: 9px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.legend-duration { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; font-weight: 500; }
+.legend-hint { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 9px; }
+.legend-swatch { display: inline-block; width: 10px; height: 6px; margin-right: 3px; border-radius: 2px; }
+.legend-swatch--model { background: var(--text-accent); opacity: 0.7; }
+.legend-swatch--tool { background: var(--color-success, #22c55e); opacity: 0.7; }
+.timeline-waterfall { position: relative; height: 22px; border-radius: 4px; background: var(--bg-secondary); }
+.waterfall-segment { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; cursor: pointer; transition: opacity 120ms ease, box-shadow 120ms ease; }
+.waterfall-segment:hover { opacity: 1; box-shadow: 0 0 0 1.5px var(--text-primary); z-index: 10; }
+.waterfall-segment.is-active { box-shadow: 0 0 0 2px var(--text-accent); z-index: 11; }
+.waterfall--model { background: var(--text-accent); opacity: 0.7; }
+.waterfall--tool { background: var(--color-success, #22c55e); opacity: 0.7; }
+.waterfall--error { background: var(--color-error, #ef4444); opacity: 0.85; }
+/* Custom CSS tooltip for waterfall segments */
+.waterfall-segment[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: var(--text-primary, #1a1a1a);
+  color: var(--bg-primary, #fff);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+  z-index: 100;
+}
+.waterfall-segment[data-tooltip]:hover::after { opacity: 1; }
+/* Prevent tooltip from overflowing left/right on edge segments */
+.waterfall-segment[data-tooltip]:first-child::after { left: 0; transform: none; }
+.waterfall-segment[data-tooltip]:last-child::after { left: auto; right: 0; transform: none; }
+.causality-label { display: flex; align-items: center; gap: 5px; padding: 2px 10px 2px 52px; color: var(--text-tertiary); font-size: 10px; font-style: italic; }
+.causality-arrow { color: var(--text-accent); font-style: normal; font-weight: 600; }
 .exec-spinner { width: 16px; height: 16px; border: 1.5px solid var(--border); border-top-color: var(--text-secondary); border-radius: 50%; animation: exec-panel-spin 700ms linear infinite; }
 .exec-tree-body {
   display: grid;

@@ -72,6 +72,15 @@ function pairedEvents(items = []) {
     </div>
 
     <div class="inline-subagent-body">
+      <!-- Context card: parent's prompt -->
+      <div v-if="tree.request" class="subagent-context-card context-input">
+        <div class="context-card-label">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 8h9M8 4l4 4-4 4"/></svg>
+          Input from parent
+        </div>
+        <SpanPayloadViewer :payload="tree.request" label="Parent prompt" />
+      </div>
+
       <ExecutionTreeRow
         v-for="task in tree.tasks"
         :key="task.id"
@@ -110,6 +119,16 @@ function pairedEvents(items = []) {
           </div>
         </ExecutionTreeRow>
       </ExecutionTreeRow>
+
+      <!-- Context card: return to parent -->
+      <div v-if="tree.status && tree.status !== 'unknown'" class="subagent-context-card context-output">
+        <div class="context-card-label">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M13 8H4M8 4 4 8l4 4"/></svg>
+          Returned to parent
+        </div>
+        <span class="context-status" :class="`context-status--${tree.status}`">{{ tree.status }}</span>
+        <span v-if="tree.error_message" class="context-error">{{ tree.error_message }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -152,6 +171,16 @@ function pairedEvents(items = []) {
   color: var(--text-tertiary);
 }
 .inline-subagent-body { padding: 4px; }
+.subagent-context-card { margin: 6px 8px; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-primary); }
+.subagent-context-card.context-input { border-color: color-mix(in srgb, var(--text-accent) 28%, var(--border-subtle)); }
+.subagent-context-card.context-output { border-color: color-mix(in srgb, var(--color-success, #22c55e) 28%, var(--border-subtle)); }
+.context-card-label { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--text-tertiary); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.context-card-label svg { color: var(--text-accent); }
+.context-output .context-card-label svg { color: var(--color-success, #22c55e); }
+.context-status { padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 500; background: var(--bg-secondary); color: var(--text-secondary); }
+.context-status--completed { color: var(--color-success, #22c55e); }
+.context-status--failed { color: var(--color-error, #ef4444); }
+.context-error { display: block; margin-top: 5px; color: var(--color-error, #ef4444); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .inline-step-detail {
   display: grid;
   gap: 6px;

@@ -167,6 +167,7 @@ class QqAdapter(ImChannelAdapter):
         self, binding: ImBinding, content: str,
         reply_context: dict | None = None,
         idempotency_key: str = "",
+        attachments: list[dict] | None = None,
     ) -> str:
         ctx = reply_context or {}
         msg_id = ctx.get("msg_id", "")

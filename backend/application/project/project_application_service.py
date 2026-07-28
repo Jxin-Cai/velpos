@@ -11,6 +11,11 @@ from application.git_helpers import run_git
 
 from application.project.command.create_project_command import CreateProjectCommand
 from application.project.command.reorder_projects_command import ReorderProjectsCommand
+from application.project.workspace_directory import (
+    create_workspace_directory,
+    default_agent_workspace_root,
+    github_repository_name,
+)
 from domain.session.acl.connection_manager import ConnectionManager
 from application.session.session_application_service import SessionApplicationService
 from domain.project.model.project import Project
@@ -40,16 +45,17 @@ class ProjectApplicationService:
     # ------------------------------------------------------------------
 
     async def create_project(self, command: CreateProjectCommand) -> Project:
-        projects_root = os.getenv(
-            "PROJECTS_ROOT_DIR", os.path.expanduser("~/.velpos/agents")
+        workspace = await asyncio.to_thread(
+            create_workspace_directory,
+            str(default_agent_workspace_root()),
         )
-        dir_path = os.path.join(projects_root, command.name.strip())
+        dir_path = str(workspace)
 
         if command.github_url:
             # Clone from GitHub — relies on local Git auth (SSH key / credential helper)
-            await asyncio.to_thread(os.makedirs, projects_root, exist_ok=True)
             proc = await asyncio.create_subprocess_exec(
-                "git", "clone", command.github_url, dir_path,
+                "git", "clone", command.github_url, ".",
+                cwd=dir_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -61,7 +67,6 @@ class ProjectApplicationService:
                     "GIT_CLONE_FAILED",
                 )
         else:
-            await asyncio.to_thread(os.makedirs, dir_path, exist_ok=True)
             # Auto git init + initial commit so branch exists immediately
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -98,7 +103,12 @@ class ProjectApplicationService:
             except Exception:
                 logger.warning("git init failed for %s", dir_path, exc_info=True)
 
-        project = Project.create(name=command.name.strip(), dir_path=dir_path)
+        project_name = (
+            command.name.strip()
+            or github_repository_name(command.github_url)
+            or workspace.name
+        )
+        project = Project.create(name=project_name, dir_path=dir_path)
         await self._project_repository.save(project)
         logger.info("Project created: id=%s, name=%s", project.id, project.name)
         return project

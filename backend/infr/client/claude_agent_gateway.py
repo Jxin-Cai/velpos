@@ -86,6 +86,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         # process a mode change concurrently with a query, so keep one
         # deferred operation per session.
         self._pending_permission_tasks: dict[str, asyncio.Task] = {}
+        # The SDK uses one control/data channel per client.  Query writes and
+        # permission-mode control requests must not race on that channel.
+        self._client_operation_locks: dict[str, asyncio.Lock] = {}
         # session_id -> asyncio.Future for pending user responses (choices/permissions)
         self._pending_user_responses: dict[str, asyncio.Future] = {}
         # session_id -> pending request context (questions list for AskUserQuestion)
@@ -292,6 +295,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         """Check if a session is actively running a query."""
         return session_id in self._active_sessions
 
+    def _client_operation_lock(self, session_id: str) -> asyncio.Lock:
+        lock = self._client_operation_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._client_operation_locks[session_id] = lock
+        return lock
+
     def _touch(self, session_id: str) -> None:
         """Update last activity time and cancel any pending idle disconnect."""
         self._last_activity[session_id] = time.monotonic()
@@ -440,21 +450,22 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         if pump is None:
             raise RuntimeError(f"No event pump for session {session_id}")
 
-        self._touch(session_id)
-        turn = await pump.begin_turn()
-        try:
-            await client.query(prompt=prompt)
-        except Exception as exc:
-            await pump.fail_turn(turn, exc)
-            raise
+        async with self._client_operation_lock(session_id):
+            self._touch(session_id)
+            turn = await pump.begin_turn()
+            try:
+                await client.query(prompt=prompt)
+            except Exception as exc:
+                await pump.fail_turn(turn, exc)
+                raise
 
-        try:
-            async for info in self._iter_response(session_id, turn):
-                yield info
-        finally:
-            await pump.abandon_turn(turn)
-            if self._clients.get(session_id) is client:
-                self._set_state(session_id, "connected")
+            try:
+                async for info in self._iter_response(session_id, turn):
+                    yield info
+            finally:
+                await pump.abandon_turn(turn)
+                if self._clients.get(session_id) is client:
+                    self._set_state(session_id, "connected")
 
     async def send_query(
         self,
@@ -637,6 +648,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._session_cwds.pop(session_id, None)
         self._session_permission_modes.pop(session_id, None)
         self._session_states.pop(session_id, None)
+        self._client_operation_locks.pop(session_id, None)
         self._last_activity.pop(session_id, None)
         self._active_sessions.discard(session_id)
         timer = self._idle_timers.pop(session_id, None)
@@ -785,7 +797,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         client = self._clients.get(session_id)
         if client is None:
             raise RuntimeError(f"No active connection for session {session_id}")
-        await client.set_model(model)
+        async with self._client_operation_lock(session_id):
+            if self._clients.get(session_id) is client:
+                await client.set_model(model)
 
     async def set_permission_mode(self, session_id: str, mode: str) -> None:
         # Always persist the choice so it's used on next connect
@@ -799,10 +813,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         # control-request deadline and report a timeout.  Defer the request
         # until the query has finished; the selected mode is already persisted
         # and will also be used when reconnecting.
-        if self.get_state(session_id) in self._QUERY_ACTIVE_STATES:
-            previous = self._pending_permission_tasks.pop(session_id, None)
+        if (
+            self.is_active(session_id)
+            or self.get_state(session_id) in self._QUERY_ACTIVE_STATES
+        ):
+            previous = self._pending_permission_tasks.get(session_id)
             if previous is not None and not previous.done():
-                previous.cancel()
+                return
             task = safe_create_task(
                 self._apply_permission_mode_when_idle(session_id, client, mode),
                 name=f"apply_permission_mode_{session_id}",
@@ -811,7 +828,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             return
 
         try:
-            await client.set_permission_mode(mode)
+            async with self._client_operation_lock(session_id):
+                if self._clients.get(session_id) is not client:
+                    return
+                await client.set_permission_mode(
+                    self._session_permission_modes.get(session_id, mode)
+                )
         except Exception as exc:
             # The mode remains persisted and will be applied on the next
             # connection.  A transient SDK control timeout must not turn a
@@ -839,12 +861,20 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         try:
             while (
                 self._clients.get(session_id) is client
-                and self.get_state(session_id) in self._QUERY_ACTIVE_STATES
+                and (
+                    self.is_active(session_id)
+                    or self.get_state(session_id) in self._QUERY_ACTIVE_STATES
+                )
             ):
                 await asyncio.sleep(0.1)
             if self._clients.get(session_id) is not client:
                 return
-            await client.set_permission_mode(mode)
+            async with self._client_operation_lock(session_id):
+                if self._clients.get(session_id) is not client:
+                    return
+                await client.set_permission_mode(
+                    self._session_permission_modes.get(session_id, mode)
+                )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -937,14 +967,20 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
 
         public_method = getattr(client, "get_context_usage", None)
         try:
-            if public_method:
-                raw = await public_method()
-            else:
-                query = getattr(client, "_query", None)
-                send_control = getattr(query, "_send_control_request", None)
-                if send_control is None:
+            async with self._client_operation_lock(session_id):
+                if self._clients.get(session_id) is not client:
                     return None
-                raw = await send_control({"subtype": "get_context_usage"}, timeout=10.0)
+                if public_method:
+                    raw = await public_method()
+                else:
+                    query = getattr(client, "_query", None)
+                    send_control = getattr(query, "_send_control_request", None)
+                    if send_control is None:
+                        return None
+                    raw = await send_control(
+                        {"subtype": "get_context_usage"},
+                        timeout=10.0,
+                    )
         except Exception:
             logger.debug("get_context_usage unavailable: session=%s", session_id, exc_info=True)
             return None

@@ -73,13 +73,13 @@ function persistPinnedSessions() {
   }
 }
 
-function projectHasAgent(project) {
-  return Boolean(project?.agents?.current)
+function directoryName(path) {
+  const normalized = String(path || '').replace(/[\\/]+$/, '')
+  return normalized.split(/[\\/]/).pop() || ''
 }
 
 function projectDisplayName(project) {
-  if (project?.project_type === 'team' || !projectHasAgent(project)) return project?.name || ''
-  return `${project.name} (agent)`
+  return project?.name || directoryName(project?.dir_path)
 }
 
 function scheduleCount(projectId) {
@@ -305,6 +305,7 @@ const projectGroups = computed(() => {
       id: project.id,
       name: project.name,
       displayName: projectDisplayName(project),
+      dir_path: project.dir_path,
       sessions: projectSessions,
       pinned: isProjectPinned(project.id),
       project_type: project.project_type,
@@ -530,7 +531,7 @@ defineExpose({ scrollToSession })
           <line x1="12" y1="5" x2="12" y2="19"/>
           <line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
-        {{ sidebarMode === 'teams' ? 'New Team' : 'New Project' }}
+        {{ sidebarMode === 'teams' ? 'New Team' : 'New Agent' }}
       </button>
       <button
         class="select-mode-btn"
@@ -770,8 +771,8 @@ defineExpose({ scrollToSession })
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
           </svg>
         </div>
-        <p class="empty-text">{{ sidebarMode === 'teams' ? 'No teams yet' : 'No projects yet' }}</p>
-        <p class="empty-hint">{{ sidebarMode === 'teams' ? 'Create a team to coordinate multiple agents' : 'Create a new project to get started' }}</p>
+        <p class="empty-text">{{ sidebarMode === 'teams' ? 'No teams yet' : 'No agents yet' }}</p>
+        <p class="empty-hint">{{ sidebarMode === 'teams' ? 'Create a team to coordinate multiple agents' : 'Create a new agent to get started' }}</p>
       </div>
     </div>
       <div class="sidebar-list-fade sidebar-list-fade--bottom"></div>

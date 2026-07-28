@@ -84,3 +84,30 @@ async def test_rejects_client_message_id_when_prompt_content_changes():
         await engine._acknowledge_terminal_duplicate(command)
     assert error.value.code == "CLIENT_MESSAGE_ID_CONFLICT"
 
+
+def test_composes_attachment_reference_without_placeholder_when_prompt_is_empty():
+    # Arrange
+    command = RunQueryCommand(
+        session_id="session1",
+        prompt="",
+        image_paths=[".upload-file/example.png"],
+        attachments=[
+            {
+                "filename": "example.png",
+                "mime_type": "image/png",
+                "path": ".upload-file/example.png",
+            }
+        ],
+    )
+
+    # Act
+    prompt = SessionQueryEngine._compose_prompt(command)
+
+    # Assert
+    assert prompt == "[Image: .upload-file/example.png]"
+
+
+def test_rejects_empty_query_when_no_prompt_or_attachment_is_provided():
+    # Arrange / Act / Assert
+    with pytest.raises(ValueError):
+        RunQueryCommand(session_id="session1")

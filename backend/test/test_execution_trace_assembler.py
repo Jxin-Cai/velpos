@@ -48,3 +48,22 @@ def test_maps_loop_error_message_when_assembling_tree() -> None:
 
     # Assert
     assert response.tasks[0].loops[0].error_message == "Permission denied"
+
+
+def test_maps_agent_failure_when_assembling_tree() -> None:
+    # Arrange
+    agent = ExecutionAgent(
+        "main",
+        (),
+        (),
+        (),
+        ProjectionProvenance(),
+        status="failed",
+        error_message="API Error: 503 NO_AVAILABLE_CHANNEL",
+    )
+
+    # Act
+    response = ExecutionTraceAssembler.to_tree_response(agent)
+
+    # Assert
+    assert response.error_message == "API Error: 503 NO_AVAILABLE_CHANNEL"

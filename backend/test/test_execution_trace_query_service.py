@@ -38,6 +38,49 @@ async def test_returns_execution_tree_when_repositories_are_async() -> None:
     project_repository.find_by_id.assert_awaited_once_with("project-1")
 
 
+@pytest.mark.asyncio
+async def test_returns_terminal_failure_when_run_span_contains_error() -> None:
+    # Arrange
+    session = SimpleNamespace(
+        project_id="project-1",
+        model="claude-test",
+        messages=[],
+    )
+    project = SimpleNamespace(dir_path="/workspace")
+    run = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_RUN,
+        name="Agent run",
+    )
+    run.fail(error="API Error: 503 NO_AVAILABLE_CHANNEL")
+    transcript_reader = Mock()
+    transcript_reader.read.return_value = SimpleNamespace(
+        records=(
+            {
+                "type": "assistant",
+                "uuid": "assistant-1",
+                "message": {"role": "assistant", "content": "Upstream request failed"},
+            },
+        ),
+        has_more=False,
+        next_cursor=0,
+    )
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(find_by_id=AsyncMock(return_value=session)),
+        project_repository=Mock(find_by_id=AsyncMock(return_value=project)),
+        trace_span_repository=Mock(find_by_run=AsyncMock(return_value=[run])),
+        transcript_reader=transcript_reader,
+    )
+
+    # Act
+    result = await service.get_execution_tree("session-1", "run-1")
+
+    # Assert
+    assert result.error_message == "API Error: 503 NO_AVAILABLE_CHANNEL"
+    assert result.tasks[0].loops[0].error_message == result.error_message
+
+
 def test_filters_transcript_records_to_selected_run_window() -> None:
     start = datetime(2026, 7, 20, 1, 0, 0, tzinfo=timezone.utc)
     span = SimpleNamespace(started_time=start, ended_time=start.replace(minute=2))

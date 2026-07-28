@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,9 @@ from domain.project.repository.project_repository import ProjectRepository
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
+
+HIDDEN_WORKSPACE_DIRS = {".git", ".claude", "node_modules", "__pycache__", ".venv", "dist"}
+HIDDEN_WORKSPACE_FILES = {"claude.md"}
 
 
 class WorkspaceApplicationService:
@@ -42,12 +46,16 @@ class WorkspaceApplicationService:
         keyword = keyword.strip().lower()
         files: list[dict[str, Any]] = []
 
-        paths = [root / p for p in statuses] if changed_only else [p for p in root.rglob("*") if p.is_file()]
+        paths = (
+            [root / path for path in statuses]
+            if changed_only
+            else await asyncio.to_thread(lambda: list(self._iter_workspace_files(root)))
+        )
         for path in paths:
             resolved = path.resolve()
             if not self._is_inside_project(root, resolved):
                 continue
-            if any(part in {".git", "node_modules", "__pycache__", ".venv", "dist"} for part in resolved.relative_to(root).parts):
+            if self._should_skip_workspace_path(root, resolved):
                 continue
             rel_path = resolved.relative_to(root).as_posix()
             if keyword and keyword not in rel_path.lower():
@@ -212,7 +220,35 @@ class WorkspaceApplicationService:
         return f"{safe_name}-export.zip", content
 
     def _should_skip_workspace_path(self, root: Path, path: Path) -> bool:
-        return any(part in {".git", "node_modules", "__pycache__", ".venv", "dist"} for part in path.relative_to(root).parts)
+        relative_path = path.relative_to(root)
+        return (
+            any(part.lower() in HIDDEN_WORKSPACE_DIRS for part in relative_path.parts)
+            or relative_path.name.lower() in HIDDEN_WORKSPACE_FILES
+        )
+
+    def _iter_workspace_files(self, root: Path) -> Iterator[Path]:
+        def handle_walk_error(error: OSError) -> None:
+            logger.warning(
+                "Skipping unreadable workspace directory",
+                extra={"path": error.filename, "error_type": type(error).__name__},
+            )
+
+        for directory, dir_names, file_names in os.walk(
+            root,
+            topdown=True,
+            onerror=handle_walk_error,
+            followlinks=False,
+        ):
+            current_dir = Path(directory)
+            dir_names[:] = [
+                name
+                for name in dir_names
+                if not self._should_skip_workspace_path(root, current_dir / name)
+            ]
+            for file_name in file_names:
+                path = current_dir / file_name
+                if not self._should_skip_workspace_path(root, path):
+                    yield path
 
     def _write_workspace_zip_file(
         self,
@@ -270,4 +306,6 @@ class WorkspaceApplicationService:
         target = (root / path).resolve()
         if not self._is_inside_project(root, target):
             raise BusinessException("Path is outside project", "INVALID_WORKSPACE_PATH")
+        if self._should_skip_workspace_path(root, target):
+            raise BusinessException("Workspace path is hidden", "HIDDEN_WORKSPACE_PATH")
         return target

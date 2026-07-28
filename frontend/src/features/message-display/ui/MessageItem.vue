@@ -1,8 +1,7 @@
 <script setup>
 import { ref, shallowRef, watch, onMounted, nextTick, inject } from 'vue'
 import { cachedParse } from '../lib/markdownConfig'
-import { formatFileSize } from '@shared/lib/textParsers'
-import { openPath } from '@features/terminal'
+import { visibleUserText } from '../lib/userMessageText'
 import AssistantBlock from './AssistantBlock.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolUseBlock from './ToolUseBlock.vue'
@@ -13,6 +12,7 @@ import UserChoiceBlock from './UserChoiceBlock.vue'
 import PermissionRequestBlock from './PermissionRequestBlock.vue'
 import TodoProgressBlock from './TodoProgressBlock.vue'
 import ArtifactBlock from './ArtifactBlock.vue'
+import MessageAttachmentCard from './MessageAttachmentCard.vue'
 import { TraceButton } from '@features/trace-viewer'
 
 const props = defineProps({
@@ -23,9 +23,11 @@ const props = defineProps({
   traceRunId: { type: String, default: '' },
   traceSummary: { type: Object, default: null },
   interactiveAnswered: { type: Boolean, default: false },
+  projectId: { type: String, default: '' },
+  sessionId: { type: String, default: '' },
 })
 
-const emit = defineEmits(['open-trace', 'interactive-answered'])
+const emit = defineEmits(['open-trace', 'open-file', 'interactive-answered'])
 
 const wsConnection = inject('wsConnection')
 
@@ -79,7 +81,7 @@ watch(
     if (msg.type === 'user') {
       renderedBlocks.value = [{
         type: 'user',
-        html: cachedParse(content.text || ''),
+        html: cachedParse(visibleUserText(content)),
         attachments: content.attachments || [],
       }]
       return
@@ -191,19 +193,6 @@ watch(
   { immediate: true },
 )
 
-function attachmentHref(attachment) {
-  if (!attachment?.id) return '#'
-  return `/api/attachments/${encodeURIComponent(attachment.id)}/download`
-}
-
-function attachmentName(attachment) {
-  return attachment?.filename || attachment?.name || 'attachment'
-}
-
-function attachmentSize(attachment) {
-  return formatFileSize(attachment?.size_bytes || attachment?.size || 0)
-}
-
 // Event delegation for code copy buttons and file path links
 function handleDelegatedClick(e) {
   // Handle code copy button
@@ -228,7 +217,7 @@ function handleDelegatedClick(e) {
     e.stopPropagation()
     const filePath = fileLink.getAttribute('data-file-path')
     if (filePath) {
-      openPath(filePath).catch(() => {})
+      emit('open-file', filePath)
     }
   }
 }
@@ -266,19 +255,14 @@ function handleDelegatedClick(e) {
             v-html="block.html"
           ></div>
           <div v-if="block.attachments?.length" class="user-attachments">
-            <a
+            <MessageAttachmentCard
               v-for="attachment in block.attachments"
               :key="attachment.id || attachment.filename"
-              class="user-attachment"
-              :href="attachmentHref(attachment)"
-              target="_blank"
-              rel="noreferrer"
-              :title="attachmentName(attachment)"
-            >
-              <span class="user-attachment-icon">FILE</span>
-              <span class="user-attachment-name">{{ attachmentName(attachment) }}</span>
-              <span class="user-attachment-size">{{ attachmentSize(attachment) }}</span>
-            </a>
+              :attachment="attachment"
+              :project-id="projectId"
+              :session-id="sessionId"
+              @open-file="emit('open-file', $event)"
+            />
           </div>
           <button
             v-if="isUserMsgOverflow"
@@ -318,6 +302,7 @@ function handleDelegatedClick(e) {
       <ArtifactBlock
         v-else-if="['artifact', 'attachment', 'file', 'image', 'output_file'].includes(block.type)"
         :block="block"
+        @open-file="emit('open-file', $event)"
       />
       <SystemBlock
         v-else-if="block.type === 'system'"
@@ -432,45 +417,8 @@ function handleDelegatedClick(e) {
 .user-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.user-attachment {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 260px;
-  padding: 5px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  text-decoration: none;
-  font-size: 12px;
-}
-
-.user-attachment:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.user-attachment-icon {
-  flex-shrink: 0;
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.user-attachment-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.user-attachment-size {
-  flex-shrink: 0;
-  color: var(--text-muted);
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .user-expand-btn {

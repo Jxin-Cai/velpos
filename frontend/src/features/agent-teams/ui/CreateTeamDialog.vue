@@ -1,6 +1,5 @@
 <script setup>
 import { computed, ref, watch, onMounted } from 'vue'
-import { pickProjectDirectory } from '@entities/project'
 import { createTeamProject, listTeamTemplates } from '../api/teamApi'
 import { useAgentManager } from '@features/agent-manager/model/useAgentManager'
 import { useEscapeToClose } from '@shared/lib/useDialogManager'
@@ -14,12 +13,9 @@ const emit = defineEmits(['created', 'cancel'])
 useEscapeToClose(() => props.visible, () => handleCancel())
 
 const { categories: agentCategories, fetchAgents } = useAgentManager()
-const isMac = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform || window.navigator.userAgent)
 
 const teamName = ref('')
-const dirPath = ref('')
 const creating = ref(false)
-const picking = ref(false)
 const error = ref('')
 const activeSlotIndex = ref(0)
 const workflowTemplates = ref([])
@@ -88,23 +84,12 @@ watch(() => props.visible, (val) => {
   }
   if (!val) {
     teamName.value = ''
-    dirPath.value = ''
     creating.value = false
     error.value = ''
     activeSlotIndex.value = 0
     slots.value = [{ agent_profile_id: '', display_name: '' }]
   }
 })
-
-async function handlePickDirectory() {
-  if (!isMac || picking.value) return
-  picking.value = true
-  try {
-    const result = await pickProjectDirectory()
-    if (result?.dir_path) dirPath.value = result.dir_path
-  } catch (_) {}
-  finally { picking.value = false }
-}
 
 async function handleCreate() {
   if (!canConfirm.value) return
@@ -121,7 +106,7 @@ async function handleCreate() {
   }
 
   try {
-    const project = await createTeamProject(teamName.value.trim(), dirPath.value.trim(), config)
+    const project = await createTeamProject(teamName.value.trim(), config)
     emit('created', project)
   } catch (err) {
     error.value = err.message || 'Failed to create team project'
@@ -160,16 +145,7 @@ onMounted(() => {
             <div class="form-group">
               <label class="form-label">Team Name <span class="required">*</span></label>
               <input v-model="teamName" type="text" class="form-input" placeholder="e.g. My Dev Team" />
-            </div>
-
-            <div class="form-group form-group--wide">
-              <label class="form-label">Working Directory</label>
-              <div class="path-row">
-                <input v-model="dirPath" type="text" class="form-input" placeholder="~/.velpos/teams/my-team" />
-                <button v-if="isMac" class="btn-ghost" @click="handlePickDirectory" :disabled="picking">
-                  {{ picking ? '...' : 'Choose' }}
-                </button>
-              </div>
+              <div class="form-hint">The team workspace will be created under ~/.velpos/teams.</div>
             </div>
           </section>
 
@@ -337,7 +313,7 @@ onMounted(() => {
 
 .basic-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 0.8fr) minmax(320px, 1.4fr);
+  grid-template-columns: 1fr;
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -593,17 +569,11 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.path-row {
-  display: flex;
-  gap: 8px;
-}
-
 .form-group { margin-bottom: 12px; }
-.form-group--wide { min-width: 0; }
 .form-label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
+.form-hint { margin-top: 4px; color: var(--text-muted); font-size: 11px; }
 .required { color: var(--red); }
 .form-error { font-size: 11px; color: var(--red); margin-top: 10px; }
-.path-row .form-input { flex: 1; }
 
 .form-input {
   width: 100%;

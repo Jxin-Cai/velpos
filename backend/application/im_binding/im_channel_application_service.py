@@ -28,7 +28,7 @@ from domain.shared.business_exception import BusinessException
 logger = logging.getLogger(__name__)
 
 
-class _RetryableInboundError(RuntimeError):
+class RetryableInboundError(RuntimeError):
     pass
 
 
@@ -46,6 +46,10 @@ class ImChannelApplicationService:
         resolve_user_response_fn: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None,
         accept_inbound_fn: Callable[..., Awaitable[bool]] | None = None,
         enqueue_outbound_fn: Callable[..., Awaitable[int | None]] | None = None,
+        stage_inbound_attachments_fn: Callable[
+            [Any, list[dict[str, Any]]],
+            Awaitable[list[dict[str, Any]]],
+        ] | None = None,
     ) -> None:
         self._registry = registry
         self._binding_repo = binding_repo
@@ -56,6 +60,7 @@ class ImChannelApplicationService:
         self._resolve_user_response = resolve_user_response_fn
         self._accept_inbound = accept_inbound_fn
         self._enqueue_outbound = enqueue_outbound_fn
+        self._stage_inbound_attachments = stage_inbound_attachments_fn
 
     # ── 渠道发现 ──
 
@@ -400,7 +405,12 @@ class ImChannelApplicationService:
 
     # ── 出站消息同步 ──
 
-    async def sync_outbound(self, session_id: str, content: str) -> None:
+    async def sync_outbound(
+        self,
+        session_id: str,
+        content: str,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
         binding = await self._binding_repo.find_by_session_id(session_id)
         if binding is None or binding.binding_status != BindingStatus.BOUND:
             return
@@ -409,12 +419,18 @@ class ImChannelApplicationService:
             await self._enqueue_outbound(
                 session_id,
                 content,
+                attachments=attachments,
                 reply_context=reply_ctx,
                 binding=binding,
             )
             return
         adapter = self._create_adapter(binding.channel_type)
-        await adapter.send_message(binding, content, reply_context=reply_ctx)
+        await adapter.send_message(
+            binding,
+            content,
+            reply_context=reply_ctx,
+            attachments=attachments,
+        )
 
     # ── 同步会话上下文到 IM ──
 
@@ -536,6 +552,7 @@ class ImChannelApplicationService:
         content: str,
         sender_id: str,
         group_id: str,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         if not self._session_service_factory:
             logger.error("[IM-process] No session_service_factory — cannot process inbound")
@@ -574,12 +591,18 @@ class ImChannelApplicationService:
                 except BusinessException:
                     logger.warning("[IM-process] Session %s no longer exists, skipping", binding.session_id)
                     return
+                attachment_refs = list(attachments or [])
+                if attachment_refs and self._stage_inbound_attachments:
+                    attachment_refs = await self._stage_inbound_attachments(
+                        session,
+                        attachment_refs,
+                    )
                 if session.is_running:
                     # Check if waiting for user input (AskUserQuestion / permission)
                     if await self._try_resolve_pending_response(binding.session_id, content):
                         logger.info("[IM-process] Resolved pending user response via IM: session=%s", binding.session_id)
                         return
-                    raise _RetryableInboundError("Session is busy")
+                    raise RetryableInboundError("Session is busy")
 
                 existing_index = next(
                     (
@@ -620,6 +643,7 @@ class ImChannelApplicationService:
                             "message_id": source_message_id,
                             "text": content,
                             "source": binding.channel_type.value,
+                            "attachments": attachment_refs,
                         },
                     )
                     await self._connection_manager.broadcast(
@@ -627,10 +651,11 @@ class ImChannelApplicationService:
                         {"event": "message", "data": {"type": user_msg.message_type.value, "content": user_msg.content}},
                     )
 
-                command = RunQueryCommand(
-                    session_id=binding.session_id,
-                    prompt=content,
-                    client_message_id=source_message_id,
+                command = self._build_inbound_query_command(
+                    binding,
+                    content,
+                    source_message_id,
+                    attachment_refs,
                 )
                 msg_count_before = session.message_count
                 await session_service.run_claude_query(command)
@@ -681,7 +706,7 @@ class ImChannelApplicationService:
                         msg_count_before,
                         session.message_count,
                     )
-                    raise _RetryableInboundError(
+                    raise RetryableInboundError(
                         "Inbound query did not produce an assistant response"
                     )
 
@@ -695,7 +720,7 @@ class ImChannelApplicationService:
             else:
                 logger.warning("[IM-process] No response extracted: session=%s", binding.session_id)
 
-        except _RetryableInboundError:
+        except RetryableInboundError:
             raise
         except Exception as exc:
             logger.error("[IM-process] Failed to process inbound: session=%s", binding.session_id, exc_info=True)
@@ -725,6 +750,27 @@ class ImChannelApplicationService:
                 if text:
                     return text
         return ""
+
+    @staticmethod
+    def _build_inbound_query_command(
+        binding: ImBinding,
+        content: str,
+        source_message_id: str,
+        attachments: list[dict[str, Any]] | None,
+    ) -> RunQueryCommand:
+        attachment_refs = list(attachments or [])
+        return RunQueryCommand(
+            session_id=binding.session_id,
+            prompt=content,
+            client_message_id=source_message_id,
+            image_paths=[
+                str(item.get("path", ""))
+                for item in attachment_refs
+                if str(item.get("mime_type", "")).startswith("image/")
+                and item.get("path")
+            ],
+            attachments=attachment_refs,
+        )
 
     @staticmethod
     def _extract_response_after(session: Any, message_index: int) -> str:
@@ -763,8 +809,16 @@ class ImChannelApplicationService:
         content: str,
         sender_id: str,
         group_id: str,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
-        await self._process_inbound(binding, message_id, content, sender_id, group_id)
+        await self._process_inbound(
+            binding,
+            message_id,
+            content,
+            sender_id,
+            group_id,
+            attachments,
+        )
 
     async def _send_inbound_reply(
         self,
@@ -803,7 +857,11 @@ class ImChannelApplicationService:
         session_id = binding.session_id
 
         async def on_message(
-            msg_id: str, content: str, sender_id: str, group_id: str | None,
+            msg_id: str,
+            content: str,
+            sender_id: str,
+            group_id: str | None,
+            attachments: list[dict[str, Any]] | None = None,
         ) -> None:
             logger.info(
                 "[IM-listener] Message received: channel=%s session=%s msg_id=%s",
@@ -818,6 +876,7 @@ class ImChannelApplicationService:
                             content,
                             sender_id,
                             group_id or "",
+                            attachments or [],
                         )
                         break
                     except Exception:
@@ -841,7 +900,14 @@ class ImChannelApplicationService:
                         await asyncio.sleep(min(8, 2 ** attempt))
             else:
                 safe_create_task(
-                    self._process_inbound(binding, msg_id, content, sender_id, group_id or "")
+                    self._process_inbound(
+                        binding,
+                        msg_id,
+                        content,
+                        sender_id,
+                        group_id or "",
+                        attachments,
+                    )
                 )
 
         try:

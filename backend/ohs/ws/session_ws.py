@@ -84,9 +84,12 @@ def _prompt_started_event(
         "image_count": len(command.image_paths),
         "attachments": [
             {
+                "id": item.get("id", ""),
                 "filename": item.get("filename", "attachment"),
                 "mime_type": item.get("mime_type", "application/octet-stream"),
                 "size_bytes": item.get("size_bytes", 0),
+                "path": item.get("path", ""),
+                "sha256": item.get("sha256", ""),
             }
             for item in command.attachments
         ],
@@ -95,7 +98,7 @@ def _prompt_started_event(
 
 async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
     prompt = data.get("prompt", "")
-    effective_prompt = prompt or "Please review the attached files."
+    effective_prompt = prompt
     client_message_id = str(data.get("message_id", ""))[:64] or uuid.uuid4().hex
     images = data.get("images", [])
     incoming_attachments = list(data.get("attachments") or [])
@@ -196,7 +199,10 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
                     mime_type=mime_type,
                     data_base64=raw_data,
                 )
-                ref = attachment.to_message_ref()
+                ref = ctx.attachment_service.to_workspace_message_ref(
+                    attachment,
+                    current_session.project_dir,
+                )
                 saved_attachments.append(ref)
                 if mime_type.startswith("image/"):
                     image_paths.append(ref["path"])

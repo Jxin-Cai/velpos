@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,6 +130,61 @@ _im_channel_registry.register(WEIXIN_CHANNEL_SPEC, lambda: _weixin_adapter)
 
 _im_delivery_coordinator = ImDeliveryCoordinator(_im_channel_registry)
 
+
+async def _stage_inbound_attachments(
+    session: Any,
+    attachments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    project_dir = str(getattr(session, "project_dir", "") or "")
+    if not project_dir:
+        return attachments
+
+    project_root = Path(project_dir).resolve()
+    storage = AttachmentStorageGateway()
+
+    def stage() -> list[dict[str, Any]]:
+        staged: list[dict[str, Any]] = []
+        for attachment in attachments:
+            item = dict(attachment)
+            raw_path = str(item.get("path") or "")
+            if not raw_path:
+                staged.append(item)
+                continue
+
+            source = Path(raw_path).expanduser().resolve()
+            if source == project_root or project_root in source.parents:
+                item["path"] = source.relative_to(project_root).as_posix()
+                staged.append(item)
+                continue
+
+            if str(item.get("source") or "").lower() not in {"lark", "feishu"}:
+                staged.append(item)
+                continue
+
+            filename = str(
+                item.get("filename")
+                or item.get("name")
+                or source.name
+                or "attachment.bin"
+            )
+            stored_path, digest = storage.stage_file(
+                project_dir,
+                session.session_id,
+                filename,
+                str(source),
+            )
+            item.update(
+                {
+                    "filename": filename,
+                    "path": Path(stored_path).relative_to(project_root).as_posix(),
+                    "sha256": str(item.get("sha256") or digest),
+                }
+            )
+            staged.append(item)
+        return staged
+
+    return await asyncio.to_thread(stage)
+
 # ── Session Event Coordinator (broadcast, IM sync, audit, timeline, usage) ──
 _session_coordinator = SessionEventCoordinator(
     connection_manager=_connection_manager,
@@ -173,6 +231,7 @@ async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
             connection_manager=_connection_manager,
             accept_inbound_fn=_im_delivery_coordinator.accept_inbound,
             enqueue_outbound_fn=_im_delivery_coordinator.enqueue_outbound,
+            stage_inbound_attachments_fn=_stage_inbound_attachments,
         )
         result = await svc.bind(session_id, channel_id, {})
         await db_session.commit()
@@ -375,6 +434,7 @@ async def get_im_channel_application_service(
         resolve_user_response_fn=_claude_agent_gateway.resolve_user_response,
         accept_inbound_fn=_im_delivery_coordinator.accept_inbound,
         enqueue_outbound_fn=_im_delivery_coordinator.enqueue_outbound,
+        stage_inbound_attachments_fn=_stage_inbound_attachments,
     )
 
 
