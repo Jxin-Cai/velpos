@@ -1037,6 +1037,7 @@ function openWithApp(appName) {
 // Close menus on click outside
 function handleClickOutside() {
   showModelMenu.value = false
+  showEffortMenu.value = false
   showPermMenu.value = false
   showHistory.value = false
   showProjectCopyMenu.value = false

@@ -42,6 +42,7 @@ const emit = defineEmits([
   'select-project',
   'mode-change',
   'open-wish-card',
+  'refresh',
 ])
 
 const { projects, sidebarMode, setSidebarMode, addProject, setCurrentProjectId } = useProject()
@@ -403,6 +404,7 @@ function handleCreateCancel() {
 function handleTeamCreated(project) {
   showCreateTeamDialog.value = false
   addProject(project)
+  emit('refresh')
   if (project?.id) {
     setCurrentProjectId(project.id)
     emit('select-project', project.id)

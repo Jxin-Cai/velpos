@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, AsyncContextManager
 
-from domain.shared.async_utils import KeyedLockPool, safe_create_task
+from domain.shared.async_utils import safe_create_task
 from application.session.session_execution_state import SessionExecutionState
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_observability_recorder import SessionObservabilityRecorder
@@ -1401,6 +1401,9 @@ class SessionQueryEngine:
             logger.info("[session=%s] 已清除排队消息", session_id)
 
     async def steer_queued_message(self, session_id: str) -> dict[str, Any]:
+        # Phase 1: validate preconditions and atomically claim the queued message.
+        # Popping under the guard acts as an exclusive steer token — concurrent
+        # callers will see queued=None and get a BusinessException immediately.
         async with _shared_state.queue_guard:
             queued = _shared_state.queued_messages.get(session_id)
             ctx = _shared_state.active_contexts.get(session_id)
@@ -1414,8 +1417,13 @@ class SessionQueryEngine:
                 raise BusinessException(
                     "The current run has already finished; the message remains queued"
                 )
-
             actual_prompt = self._compose_prompt(queued)
+            # Atomically remove so no concurrent steer can claim the same command.
+            _shared_state.queued_messages.pop(session_id)
+
+        # Phase 2: call gateway.steer() without holding the process-wide guard so
+        # other sessions are not blocked during a potentially-slow I/O call.
+        try:
             try:
                 await self._claude_agent_gateway.steer(session_id, actual_prompt)
             except RuntimeError as exc:
@@ -1423,21 +1431,25 @@ class SessionQueryEngine:
                     "The current run has already finished; the message remains queued"
                 ) from exc
 
-            if _shared_state.queued_messages.get(session_id) is not queued:
-                raise BusinessException("The queued message changed; please try again")
-            _shared_state.queued_messages.pop(session_id, None)
-
             message_id = queued.client_message_id or uuid.uuid4().hex[:12]
-            ctx.session.add_message(Message.create(
-                message_type=MessageType.USER,
-                content={
-                    "message_id": message_id,
-                    "run_id": ctx.run_id,
-                    "text": actual_prompt,
-                    "attachments": queued.attachments,
-                    "steered": True,
-                },
-            ))
+            async with _shared_state.queue_guard:
+                ctx.session.add_message(Message.create(
+                    message_type=MessageType.USER,
+                    content={
+                        "message_id": message_id,
+                        "run_id": ctx.run_id,
+                        "text": actual_prompt,
+                        "attachments": queued.attachments,
+                        "steered": True,
+                    },
+                ))
+        except BusinessException:
+            # steer() failed — restore the queued command so the finalizer can
+            # dispatch it normally when the current run completes.
+            async with _shared_state.queue_guard:
+                if session_id not in _shared_state.queued_messages:
+                    _shared_state.queued_messages[session_id] = queued
+            raise
 
         try:
             await self._set_queued_command(session_id, None)

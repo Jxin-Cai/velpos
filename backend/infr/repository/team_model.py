@@ -66,7 +66,7 @@ class AgentSlotModel(Base):
         String(36), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(String(255), nullable=False)
     workspace_ref: Mapped[str] = mapped_column(String(512), nullable=False)
     availability: Mapped[str] = mapped_column(String(16), nullable=False, default="available", server_default="available")
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
@@ -74,6 +74,7 @@ class AgentSlotModel(Base):
 
     __table_args__ = (
         UniqueConstraint("team_id", "name", name="uq_team_agent_slots_name"),
+        UniqueConstraint("team_id", "role", name="uq_team_agent_slots_role"),
         UniqueConstraint("team_id", "workspace_ref", name="uq_team_agent_slots_workspace"),
         Index("idx_team_agent_slots_team", "team_id", "created_time"),
     )

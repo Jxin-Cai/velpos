@@ -227,7 +227,7 @@ async function loadScheduleCounts() {
 }
 
 async function handleGlobalEvent(data) {
-  if (data?.event === 'scheduled_session_created') {
+  if (data?.event === 'scheduled_session_created' || data?.event === 'team_session_created') {
     await loadSessions()
     if (data.session_id) {
       ensureConnection(data.session_id)
@@ -906,6 +906,7 @@ useGlobalHotkeys({
           @select-project="handleProjectSelect"
           @mode-change="handleSidebarModeChange"
           @open-wish-card="handleOpenWishCard"
+          @refresh="loadSessions"
         />
         <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }">
           <div class="sidebar-hover-zone"></div>

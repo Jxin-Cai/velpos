@@ -75,10 +75,6 @@ class SessionAssembler:
         }
 
     @staticmethod
-    def message_to_dict(message: Message, index: int | None = None) -> dict[str, Any]:
-        return SessionPresenter.message_to_dict(message, index)
-
-    @staticmethod
     def message_page(
         messages: list[Message],
         *,

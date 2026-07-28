@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
 from application.git_helpers import get_current_git_branch as _get_current_git_branch
-from domain.shared.async_utils import safe_create_task
 from collections.abc import Awaitable, Callable
 from typing import Any, AsyncContextManager
 
@@ -407,8 +407,11 @@ class SessionApplicationService:
         await self._claude_agent_gateway.disconnect(session_id)
 
         if project_dir:
-            self._claude_agent_gateway.delete_session_files(
-                session_id, project_dir, sdk_session_id=session.sdk_session_id,
+            await asyncio.to_thread(
+                self._claude_agent_gateway.delete_session_files,
+                session_id,
+                project_dir,
+                sdk_session_id=session.sdk_session_id,
             )
 
         if self._trace_collector is not None:

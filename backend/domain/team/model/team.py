@@ -39,6 +39,8 @@ class Team:
     ) -> AgentSlot:
         if any(slot.name == name for slot in self.agent_slots):
             raise TeamDomainError(f"agent slot name already exists: {name}")
+        if any(slot.role == role for slot in self.agent_slots):
+            raise TeamDomainError(f"agent already exists in team: {role}")
         if any(slot.workspace_ref == workspace_ref for slot in self.agent_slots):
             raise TeamDomainError(
                 f"workspace must be independent for each agent slot: {workspace_ref}"

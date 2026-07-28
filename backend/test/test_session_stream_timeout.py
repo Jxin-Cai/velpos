@@ -67,6 +67,50 @@ def test_disables_silence_limit_when_not_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancels_and_awaits_next_msg_task_when_process_exits(monkeypatch):
+    # Arrange — process dies on the first timeout so the except branch cancels
+    # next_msg_task; the finally block must also await it to avoid task leaks.
+    monkeypatch.setenv("CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS", "0.01")
+    recorder = SimpleNamespace(
+        start_run_step=AsyncMock(return_value=SimpleNamespace()),
+        record_audit_event=AsyncMock(),
+        record_timeline_event=AsyncMock(),
+        fail_run_step=AsyncMock(),
+    )
+    gateway = SimpleNamespace(
+        update_trace_run_id=Mock(),
+        is_process_alive=Mock(return_value=False),
+        is_waiting_for_user_input=Mock(return_value=False),
+        is_waiting_for_background_tasks=Mock(return_value=False),
+        disconnect=AsyncMock(),
+    )
+    consumer = SessionStreamConsumer(
+        recorder=recorder,
+        claude_agent_gateway=gateway,
+        connection_manager=SimpleNamespace(broadcast=AsyncMock()),
+        save_session_fn=AsyncMock(),
+        accept_sdk_session_id_fn=AsyncMock(),
+        cancelled_sessions=set(),
+    )
+    session = SimpleNamespace(session_id="session-1")
+
+    async def silent_stream():
+        await asyncio.Event().wait()
+        yield {}
+
+    tasks_before = set(asyncio.all_tasks())
+
+    # Act
+    with pytest.raises(RuntimeError, match="process exited"):
+        await consumer.consume(session, silent_stream(), "run-1")
+
+    # Assert — finalised next_msg_task must not remain in the running task set
+    await asyncio.sleep(0)
+    leaked = asyncio.all_tasks() - tasks_before
+    assert not leaked, f"Leaked tasks after consume: {leaked}"
+
+
+@pytest.mark.asyncio
 async def test_keeps_stream_open_when_waiting_for_background_tasks(monkeypatch):
     # Arrange
     monkeypatch.setenv("CLAUDE_STREAM_MAX_SILENT_TIMEOUTS", "1")
@@ -108,3 +152,46 @@ async def test_keeps_stream_open_when_waiting_for_background_tasks(monkeypatch):
     # Assert
     assert still_waiting is True
     gateway.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_awaits_cancelled_stream_task_when_process_dies_during_timeout(monkeypatch):
+    # Arrange
+    monkeypatch.setenv("CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS", "0.01")
+    recorder = SimpleNamespace(
+        start_run_step=AsyncMock(return_value=SimpleNamespace()),
+        record_audit_event=AsyncMock(),
+        record_timeline_event=AsyncMock(),
+        fail_run_step=AsyncMock(),
+    )
+    gateway = SimpleNamespace(
+        update_trace_run_id=Mock(),
+        is_process_alive=Mock(return_value=False),
+    )
+    consumer = SessionStreamConsumer(
+        recorder=recorder,
+        claude_agent_gateway=gateway,
+        connection_manager=SimpleNamespace(broadcast=AsyncMock()),
+        save_session_fn=AsyncMock(),
+        accept_sdk_session_id_fn=AsyncMock(),
+        cancelled_sessions=set(),
+    )
+    session = SimpleNamespace(session_id="session-1")
+
+    cancel_acked = False
+
+    async def hanging_stream():
+        nonlocal cancel_acked
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancel_acked = True
+            raise
+        yield {}
+
+    # Act
+    with pytest.raises(RuntimeError, match="exited unexpectedly"):
+        await consumer.consume(session, hanging_stream(), "run-1")
+
+    # Assert: finally block awaited the task so CancelledError was consumed in-process
+    assert cancel_acked, "next_msg_task was not properly awaited after cancel in finally"

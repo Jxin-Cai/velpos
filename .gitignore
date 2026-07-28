@@ -60,7 +60,9 @@ image_output/
 
 .playwright-cli
 
-
 .claude/*
 !.claude/rules/
 !.claude/rules/**
+
+/output/
+/backend/11/

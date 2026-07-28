@@ -421,3 +421,4 @@ class SessionStreamConsumer:
         finally:
             if next_msg_task is not None and not next_msg_task.done():
                 next_msg_task.cancel()
+                await asyncio.gather(next_msg_task, return_exceptions=True)

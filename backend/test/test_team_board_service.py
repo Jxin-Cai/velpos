@@ -16,6 +16,27 @@ from application.team_board.stage_output_builder import StageOutputBuilder
 
 
 @pytest.mark.asyncio
+async def test_agent_project_uses_full_slot_name_when_project_is_missing() -> None:
+    # Arrange
+    service = object.__new__(TeamBoardApplicationService)
+    service._project_repo = SimpleNamespace(
+        find_by_dir_path=AsyncMock(return_value=None),
+        save=AsyncMock(),
+    )
+    slot = SimpleNamespace(
+        name="Software architect",
+        role="software-architect",
+        workspace_ref="/teams/delivery-agent-2",
+    )
+
+    # Act
+    project = await service._ensure_agent_project("delivery", slot)
+
+    # Assert
+    assert project.name == "delivery-Software architect"
+
+
+@pytest.mark.asyncio
 async def test_move_rejected_when_route_team_does_not_own_card() -> None:
     # Arrange
     card = WishCard.create(team_id="team-owner", title="Private card")
@@ -87,12 +108,68 @@ async def test_default_model_used_when_team_execution_session_is_created(
         team=team,
         card=card,
         execution=execution,
+        agent_project_id="agent-project-1",
         workspace_path="/workspace/execution-1",
         handoff=None,
     )
 
     # Assert
     assert captured_commands[0].model == "team-default-model"
+
+
+@pytest.mark.asyncio
+async def test_agent_project_used_when_team_execution_session_is_created() -> None:
+    # Arrange
+    captured_commands: list[CreateSessionCommand] = []
+
+    async def create_session(command: CreateSessionCommand) -> SimpleNamespace:
+        captured_commands.append(command)
+        return SimpleNamespace(session_id="session-1")
+
+    service = object.__new__(TeamBoardApplicationService)
+    service._session_service = SimpleNamespace(create_session=create_session)
+
+    # Act
+    await service._create_execution_session(
+        team=SimpleNamespace(name="Delivery"),
+        card=SimpleNamespace(title="Implement API", description="Build the endpoint"),
+        execution=SimpleNamespace(id="execution-1", agent_slot_id="slot-1"),
+        agent_project_id="agent-project-1",
+        workspace_path="/workspace/execution-1",
+        handoff=None,
+    )
+
+    # Assert
+    assert captured_commands[0].project_id == "agent-project-1"
+
+
+@pytest.mark.asyncio
+async def test_frontend_notified_when_team_execution_session_is_created() -> None:
+    # Arrange
+    connection_manager = SimpleNamespace(broadcast_global=AsyncMock())
+    service = object.__new__(TeamBoardApplicationService)
+    service._session_service = SimpleNamespace(
+        create_session=AsyncMock(return_value=SimpleNamespace(session_id="session-1"))
+    )
+    service._connection_manager = connection_manager
+
+    # Act
+    await service._create_execution_session(
+        team=SimpleNamespace(id="team-1", name="Delivery"),
+        card=SimpleNamespace(title="Implement API", description="Build the endpoint"),
+        execution=SimpleNamespace(id="execution-1", agent_slot_id="slot-1"),
+        agent_project_id="agent-project-1",
+        workspace_path="/workspace/execution-1",
+        handoff=None,
+    )
+
+    # Assert
+    connection_manager.broadcast_global.assert_awaited_once_with({
+        "event": "team_session_created",
+        "team_id": "team-1",
+        "project_id": "agent-project-1",
+        "session_id": "session-1",
+    })
 
 
 @pytest.mark.asyncio
@@ -142,6 +219,7 @@ async def test_snapshot_used_when_execution_session_is_created_from_previous_sta
         team=SimpleNamespace(project_id="project-1", name="Delivery"),
         card=card,
         execution=SimpleNamespace(id="execution-2", agent_slot_id="slot-2"),
+        agent_project_id="agent-project-2",
         workspace_path="/workspace/execution-2",
         handoff=None,
         input_stage_output=stage_output,

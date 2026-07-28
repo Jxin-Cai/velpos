@@ -605,6 +605,7 @@ async def get_team_board_service(
         workspace_gateway=FilesystemWorkspaceGateway(),
         session_service=session_service,
         session_service_factory=_create_session_service,
+        project_repo=ProjectRepositoryImpl(db_session),
         plugin_manager=_claude_plugin_manager,
         connection_manager=_connection_manager,
         session_repo=SessionRepositoryImpl(db_session),

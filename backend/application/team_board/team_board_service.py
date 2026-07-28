@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 
 from application.session.command.create_session_command import CreateSessionCommand
 from application.session.command.run_query_command import RunQueryCommand
+from domain.project.model.project import Project
 from domain.shared.async_utils import KeyedLockPool, safe_create_task
 from domain.shared.business_exception import BusinessException
 from domain.team.acl.workspace_gateway import WorkspaceUnavailableError
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from domain.team.model.stage_output import StageOutput
     from domain.session.repository.session_repository import SessionRepository
     from domain.project.acl.plugin_manager import PluginManager
+    from domain.project.repository.project_repository import ProjectRepository
     from domain.session.acl.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,7 @@ class TeamBoardApplicationService:
         workspace_gateway: WorkspaceGateway,
         session_service: SessionApplicationService,
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
+        project_repo: ProjectRepository,
         plugin_manager: PluginManager | None = None,
         connection_manager: ConnectionManager | None = None,
         session_repo: SessionRepository | None = None,
@@ -86,6 +89,7 @@ class TeamBoardApplicationService:
         self._workspace = workspace_gateway
         self._session_service = session_service
         self._session_service_factory = session_service_factory
+        self._project_repo = project_repo
         self._plugin_manager = plugin_manager
         self._connection_manager = connection_manager
         self._session_repo = session_repo
@@ -106,11 +110,12 @@ class TeamBoardApplicationService:
                 )
                 workspace_refs.append(workspace_ref)
                 await self._load_agent_profile(slot_cfg.agent_profile_id, workspace_ref)
-                team.add_agent_slot(
+                slot = team.add_agent_slot(
                     name=slot_cfg.display_name,
                     role=slot_cfg.agent_profile_id,
                     workspace_ref=workspace_ref,
                 )
+                await self._ensure_agent_project(team.name, slot)
             await self._team_repo.save(team)
         except Exception:
             logger.exception("workspace preparation failed for team %s", team.id)
@@ -160,6 +165,28 @@ class TeamBoardApplicationService:
                     agent_profile_id,
                     exc_info=True,
                 )
+
+    async def _ensure_agent_project(self, team_name: str, slot: AgentSlot) -> Project:
+        project_name = f"{team_name}-{slot.name}"
+        project = await self._project_repo.find_by_dir_path(slot.workspace_ref)
+        if project is None:
+            project = Project.create(name=project_name, dir_path=slot.workspace_ref)
+        elif project.project_type == "team":
+            raise TeamDomainError(
+                f"Agent workspace is already owned by a team project: {slot.workspace_ref}"
+            )
+
+        changed = False
+        if project.name != project_name:
+            project.rename(project_name)
+            changed = True
+        current_agent = project.get_current_agent()
+        if not current_agent or current_agent.get("id") != slot.role:
+            project.load_agent(slot.role, "zh")
+            changed = True
+        if changed:
+            await self._project_repo.save(project)
+        return project
 
     async def list_teams(self, project_id: str) -> list[Team]:
         team = await self._team_repo.find_by_project_id(project_id)
@@ -460,10 +487,12 @@ class TeamBoardApplicationService:
         card.start_execution(execution.id)
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
+        agent_project = await self._ensure_agent_project(team.name, target_slot)
         session, prompt = await self._create_execution_session(
             team=team,
             card=card,
             execution=execution,
+            agent_project_id=agent_project.id,
             workspace_path=workspace_path,
             handoff=handoff,
             input_stage_output=input_stage_output,
@@ -517,10 +546,12 @@ class TeamBoardApplicationService:
         card.start_execution(new_execution.id)
         await self._card_repo.save(card)
         await self._execution_repo.save(new_execution)
+        agent_project = await self._ensure_agent_project(team.name, target_slot)
         session, prompt = await self._create_execution_session(
             team=team,
             card=card,
             execution=new_execution,
+            agent_project_id=agent_project.id,
             workspace_path=workspace_path,
             handoff=None,
             input_stage_output=input_stage_output,
@@ -574,8 +605,10 @@ class TeamBoardApplicationService:
         card.start_execution(execution.id)
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
+        agent_project = await self._ensure_agent_project(team.name, target_slot)
         session, prompt = await self._create_execution_session(
             team=team, card=card, execution=execution,
+            agent_project_id=agent_project.id,
             workspace_path=workspace_path, handoff=None,
         )
         execution.session_id = session.session_id
@@ -721,6 +754,7 @@ class TeamBoardApplicationService:
         team: Team,
         card: WishCard,
         execution: CardExecution,
+        agent_project_id: str,
         workspace_path: str,
         handoff: Handoff | None,
         input_stage_output: StageOutput | None = None,
@@ -748,13 +782,21 @@ class TeamBoardApplicationService:
 
         session_cmd = CreateSessionCommand(
             model=os.getenv("DEFAULT_MODEL", "default"),
-            project_id=team.project_id,
+            project_id=agent_project_id,
             project_dir=workspace_path,
             name=f"[{team.name}] {card.title}",
             card_execution_id=execution.id,
             agent_slot_id=execution.agent_slot_id,
         )
         session = await self._session_service.create_session(session_cmd)
+        connection_manager = getattr(self, "_connection_manager", None)
+        if connection_manager is not None:
+            await connection_manager.broadcast_global({
+                "event": "team_session_created",
+                "team_id": team.id,
+                "project_id": agent_project_id,
+                "session_id": session.session_id,
+            })
         return session, "\n\n".join(prompt_parts)
 
     async def _dispatch_execution_query(self, session_id: str, prompt: str) -> None:

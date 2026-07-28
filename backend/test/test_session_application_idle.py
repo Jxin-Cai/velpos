@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -153,3 +155,51 @@ async def test_does_not_send_hidden_query_when_session_is_created(tmp_path) -> N
 
     # Assert
     gateway.send_query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invokes_delete_session_files_via_to_thread_when_project_dir_exists(
+    monkeypatch,
+) -> None:
+    # Arrange
+    delete_calls: list = []
+    to_thread_funcs: list = []
+
+    def sync_delete(sid, pdir, *, sdk_session_id):
+        delete_calls.append((sid, pdir, sdk_session_id))
+
+    async def fake_to_thread(func, *args, **kwargs):
+        to_thread_funcs.append(func)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("asyncio.to_thread", fake_to_thread)
+
+    session = Mock(
+        session_id="session-1",
+        project_dir="/some/project",
+        sdk_session_id="sdk-abc",
+    )
+    gateway = SimpleNamespace(
+        disconnect=AsyncMock(),
+        cleanup_session=AsyncMock(),
+        delete_session_files=sync_delete,
+    )
+    service = SessionApplicationService.__new__(SessionApplicationService)
+    service._session_repository = SimpleNamespace(
+        find_by_id=AsyncMock(return_value=session),
+        remove=AsyncMock(return_value=True),
+        commit=AsyncMock(),
+    )
+    service._claude_agent_gateway = gateway
+    service._im_unbind_fn = None
+    service._trace_collector = None
+    service._query_engine = SimpleNamespace(cleanup_session_state=AsyncMock())
+
+    # Act
+    await service.delete_session("session-1")
+
+    # Assert
+    assert sync_delete in to_thread_funcs, (
+        "delete_session_files was not dispatched via asyncio.to_thread"
+    )
+    assert delete_calls == [("session-1", "/some/project", "sdk-abc")]

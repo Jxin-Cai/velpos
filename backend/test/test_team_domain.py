@@ -42,6 +42,28 @@ def test_agent_slot_rejected_when_workspace_is_shared() -> None:
         add_shared_workspace()
 
 
+def test_agent_slot_rejected_when_agent_is_duplicated() -> None:
+    # Arrange
+    team = Team.create(project_id="project-1", name="Delivery team")
+    team.add_agent_slot(
+        name="backend-primary",
+        role="backend-architect",
+        workspace_ref="workspace/backend-primary",
+    )
+
+    # Act
+    def add_duplicate_agent() -> None:
+        team.add_agent_slot(
+            name="backend-secondary",
+            role="backend-architect",
+            workspace_ref="workspace/backend-secondary",
+        )
+
+    # Assert
+    with pytest.raises(TeamDomainError, match="agent already exists"):
+        add_duplicate_agent()
+
+
 def test_multiple_cards_assigned_when_agent_slot_is_same() -> None:
     # Arrange
     first_card = WishCard.create(team_id="team-1", title="First card")
