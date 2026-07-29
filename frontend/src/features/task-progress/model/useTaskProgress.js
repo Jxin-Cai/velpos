@@ -14,6 +14,8 @@ function toTaskId(value) {
   return String(value)
 }
 
+const TASK_CREATED_PATTERN = /Task\s+#?([A-Za-z0-9_-]+)\s+created/i
+
 function parseToolResultContent(content) {
   if (content == null) return null
   if (Array.isArray(content) || typeof content === 'object') return content
@@ -28,6 +30,20 @@ function parseToolResultContent(content) {
   } catch {
     return null
   }
+}
+
+function extractCreatedTaskId(content) {
+  if (typeof content === 'string') {
+    const match = content.match(TASK_CREATED_PATTERN)
+    if (match) return match[1]
+  }
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      const id = extractCreatedTaskId(item?.text ?? item)
+      if (id) return id
+    }
+  }
+  return null
 }
 
 function normalizeTaskRecord(rawTask, fallback = {}) {
@@ -200,6 +216,7 @@ export function useTaskProgress() {
     let order = []
     const toolUseById = {}
     const pendingCreatesByUseId = {}
+    const deferredUpdates = []
 
     for (const msg of messages.value) {
       if (msg.type === 'assistant' && msg.content?.blocks) {
@@ -221,12 +238,21 @@ export function useTaskProgress() {
           if (block.name === 'TaskUpdate') {
             const taskId = toTaskId(block.input?.taskId ?? block.input?.task_id)
             if (!taskId) continue
-            upsertTask(tasks, order, taskId, {
-              subject: block.input?.subject,
-              status: block.input?.status,
-              description: block.input?.description,
-              activeForm: block.input?.activeForm,
-            })
+            if (tasks[taskId]) {
+              upsertTask(tasks, order, taskId, {
+                subject: block.input?.subject,
+                status: block.input?.status,
+                description: block.input?.description,
+                activeForm: block.input?.activeForm,
+              })
+            } else {
+              deferredUpdates.push({ taskId, patch: {
+                subject: block.input?.subject,
+                status: block.input?.status,
+                description: block.input?.description,
+                activeForm: block.input?.activeForm,
+              }})
+            }
           }
         }
       }
@@ -243,7 +269,7 @@ export function useTaskProgress() {
             const pendingTask = pendingCreatesByUseId[result.tool_use_id]
             let createdTask = normalizeTaskRecord(parsed, pendingTask)
             if (!createdTask && pendingTask) {
-              const createdTaskId = toTaskId(parsed)
+              const createdTaskId = toTaskId(parsed) || extractCreatedTaskId(result.content)
               if (createdTaskId) {
                 createdTask = { ...pendingTask, id: createdTaskId }
               }
@@ -285,6 +311,12 @@ export function useTaskProgress() {
             }
           }
         }
+      }
+    }
+
+    for (const { taskId, patch } of deferredUpdates) {
+      if (tasks[taskId]) {
+        upsertTask(tasks, order, taskId, patch)
       }
     }
 
