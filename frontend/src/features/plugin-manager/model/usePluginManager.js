@@ -1,10 +1,20 @@
 import { ref } from 'vue'
-import { listPlugins, installPlugin, uninstallPlugin } from '../api/pluginApi'
+import {
+  listPlugins,
+  installPlugin,
+  uninstallPlugin,
+  upgradePlugin,
+  upgradeAllPlugins as apiUpgradeAll,
+  listMarketplaces as apiListMarketplaces,
+  updateMarketplace as apiUpdateMarketplace,
+  removeMarketplace as apiRemoveMarketplace,
+} from '../api/pluginApi'
 
 export function usePluginManager() {
   const plugins = ref([])
+  const marketplaces = ref([])
   const loading = ref(false)
-  const operating = ref(null) // plugin key currently being operated on
+  const operating = ref(null) // plugin key or marketplace name currently being operated on
   const error = ref(null)
   let _loadSeq = 0
 
@@ -22,6 +32,16 @@ export function usePluginManager() {
       error.value = e.message
     } finally {
       if (seq === _loadSeq) loading.value = false
+    }
+  }
+
+  async function loadMarketplaces() {
+    error.value = null
+    try {
+      const data = await apiListMarketplaces()
+      marketplaces.value = data.marketplaces || []
+    } catch (e) {
+      error.value = e.message
     }
   }
 
@@ -46,13 +66,63 @@ export function usePluginManager() {
     return withPluginOp(pluginKey, uninstallPlugin, projectDir)
   }
 
+  function handleUpgradePlugin(pluginKey, projectDir) {
+    return withPluginOp(pluginKey, upgradePlugin, projectDir)
+  }
+
+  async function handleUpgradeAllPlugins(projectDir) {
+    if (!projectDir) return
+    operating.value = '__upgrade_all__'
+    error.value = null
+    try {
+      await apiUpgradeAll(projectDir)
+      await loadPlugins(projectDir)
+    } catch (e) {
+      error.value = e.message
+    } finally {
+      operating.value = null
+    }
+  }
+
+  async function handleUpdateMarketplace(name) {
+    operating.value = name || '__update_all_marketplaces__'
+    error.value = null
+    try {
+      await apiUpdateMarketplace(name)
+      await loadMarketplaces()
+    } catch (e) {
+      error.value = e.message
+    } finally {
+      operating.value = null
+    }
+  }
+
+  async function handleRemoveMarketplace(name) {
+    operating.value = name
+    error.value = null
+    try {
+      await apiRemoveMarketplace(name)
+      await loadMarketplaces()
+    } catch (e) {
+      error.value = e.message
+    } finally {
+      operating.value = null
+    }
+  }
+
   return {
     plugins,
+    marketplaces,
     loading,
     operating,
     error,
     loadPlugins,
+    loadMarketplaces,
     handleInstall,
     handleUninstall,
+    handleUpgradePlugin,
+    handleUpgradeAllPlugins,
+    handleUpdateMarketplace,
+    handleRemoveMarketplace,
   }
 }

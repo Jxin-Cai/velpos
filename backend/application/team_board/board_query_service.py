@@ -71,7 +71,10 @@ class BoardQueryService:
     async def execution_needs_user_action(self, execution: CardExecution | None) -> bool:
         if execution is None or execution.status is not CardExecutionStatus.RUNNING or not execution.session_id:
             return False
-        session = await self._session_service.get_session(execution.session_id)
+        try:
+            session = await self._session_service.get_session(execution.session_id)
+        except BusinessException:
+            return False
         return bool(session.pending_request_context)
 
     async def get_card_history(self, execution_id: str) -> list[dict[str, object]]:

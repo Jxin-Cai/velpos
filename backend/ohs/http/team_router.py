@@ -94,11 +94,12 @@ async def get_board(team_id: str, service: ServiceDep) -> ApiResponse[dict]:
     user_action_map: dict[str, bool] = {}
     summary_map: dict[str, str] = {}
     for card in cards:
+        if not card.executions:
+            continue
         latest = card.latest_execution
         readiness_map[card.id] = await service.get_handoff_readiness(latest)
         user_action_map[card.id] = await service.execution_needs_user_action(latest)
-        if card.executions:
-            summary_map[card.id] = await service.get_latest_stage_summary(card.id)
+        summary_map[card.id] = await service.get_latest_stage_summary(card.id)
 
     return ApiResponse.success(
         TeamBoardAssembler.to_board_response(

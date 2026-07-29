@@ -31,3 +31,14 @@ class PluginApplicationService:
     async def upgrade_all_plugins(self, project_dir: str) -> str:
         logger.info("Upgrading all plugins (project=%s)", project_dir)
         return await self._plugin_manager.upgrade_all_plugins(project_dir)
+
+    async def update_marketplace(self, name: str | None = None) -> str:
+        logger.info("Updating marketplace: %s", name or "all")
+        return await self._plugin_manager.update_marketplace(name)
+
+    async def remove_marketplace(self, name: str) -> str:
+        logger.info("Removing marketplace: %s", name)
+        return await self._plugin_manager.remove_marketplace(name)
+
+    async def list_marketplaces(self) -> list[dict[str, Any]]:
+        return await self._plugin_manager.list_marketplaces()

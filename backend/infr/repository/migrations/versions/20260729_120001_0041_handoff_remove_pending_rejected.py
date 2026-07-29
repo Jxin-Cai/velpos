@@ -8,8 +8,8 @@ before being persisted), but this migration ensures safety.
 from alembic import op
 
 
-revision = "0041"
-down_revision = "0040"
+revision = "0041_handoff_cleanup"
+down_revision = "0040_wish_card_version_column"
 
 
 def upgrade() -> None:

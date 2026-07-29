@@ -21,14 +21,21 @@ useEscapeToClose(() => props.visible, () => emit('close'))
 
 const {
   plugins,
+  marketplaces,
   loading,
   operating,
   error,
   loadPlugins,
+  loadMarketplaces,
   handleInstall,
   handleUninstall,
+  handleUpgradePlugin,
+  handleUpgradeAllPlugins,
+  handleUpdateMarketplace,
+  handleRemoveMarketplace,
 } = usePluginManager()
 
+const activeTab = ref('plugins')
 const searchQuery = ref('')
 
 const filteredPlugins = computed(() => {
@@ -51,10 +58,20 @@ const filteredPlugins = computed(() => {
 })
 
 watch(() => props.visible, (val) => {
-  if (val && props.projectDir) {
-    loadPlugins(props.projectDir)
+  if (val) {
+    activeTab.value = 'plugins'
+    if (props.projectDir) {
+      loadPlugins(props.projectDir)
+    }
   }
 })
+
+function switchTab(tab) {
+  activeTab.value = tab
+  if (tab === 'marketplaces' && marketplaces.value.length === 0) {
+    loadMarketplaces()
+  }
+}
 
 function onInstall(pluginKey) {
   handleInstall(pluginKey, props.projectDir)
@@ -62,6 +79,30 @@ function onInstall(pluginKey) {
 
 function onUninstall(pluginKey) {
   handleUninstall(pluginKey, props.projectDir)
+}
+
+function onUpgrade(pluginKey) {
+  handleUpgradePlugin(pluginKey, props.projectDir)
+}
+
+function onUpgradeAll() {
+  handleUpgradeAllPlugins(props.projectDir)
+}
+
+function onUpdateMarketplace(name) {
+  handleUpdateMarketplace(name)
+}
+
+function onRemoveMarketplace(name) {
+  handleRemoveMarketplace(name)
+}
+
+function onRefresh() {
+  if (activeTab.value === 'plugins') {
+    loadPlugins(props.projectDir)
+  } else {
+    loadMarketplaces()
+  }
 }
 
 function handleClose() {
@@ -83,87 +124,185 @@ function handleClose() {
       <div class="dialog">
         <div class="dialog-header">
           <h2 id="plugin-dialog-title" class="dialog-title">Plugin Manager</h2>
-          <button class="close-btn" type="button" aria-label="Close Plugin Manager" @click="handleClose">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
-          </button>
+          <div class="header-actions">
+            <button
+              class="header-btn"
+              type="button"
+              aria-label="Refresh"
+              title="Refresh"
+              @click="onRefresh"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+              </svg>
+            </button>
+            <button class="close-btn" type="button" aria-label="Close Plugin Manager" @click="handleClose">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab bar -->
+        <div class="tab-bar">
+          <button
+            class="tab-btn"
+            :class="{ 'tab-btn--active': activeTab === 'plugins' }"
+            @click="switchTab('plugins')"
+          >Plugins</button>
+          <button
+            class="tab-btn"
+            :class="{ 'tab-btn--active': activeTab === 'marketplaces' }"
+            @click="switchTab('marketplaces')"
+          >Marketplaces</button>
         </div>
 
         <div v-if="error" class="error-banner">
           {{ error }}
         </div>
 
-        <div class="search-bar">
-          <input
-            v-model="searchQuery"
-            type="text"
-            class="search-input"
-            placeholder="Search plugins..."
-          />
-        </div>
+        <!-- Plugins Tab -->
+        <template v-if="activeTab === 'plugins'">
+          <div class="search-bar">
+            <input
+              v-model="searchQuery"
+              type="text"
+              class="search-input"
+              placeholder="Search plugins..."
+            />
+          </div>
 
-        <div v-if="loading" class="loading-state">
-          <div class="spinner"></div>
-          <span>Loading plugins...</span>
-        </div>
+          <div v-if="loading" class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading plugins...</span>
+          </div>
 
-        <div v-else-if="filteredPlugins.length === 0" class="empty-state">
-          {{ searchQuery.trim() ? 'No matching plugins' : 'No plugins available' }}
-        </div>
+          <div v-else-if="filteredPlugins.length === 0" class="empty-state">
+            {{ searchQuery.trim() ? 'No matching plugins' : 'No plugins available' }}
+          </div>
 
-        <div v-else class="plugin-list">
-          <div
-            v-for="plugin in filteredPlugins"
-            :key="plugin.key"
-            class="plugin-item"
-          >
-            <div class="plugin-info">
-              <div class="plugin-name-row">
-                <span class="plugin-name">{{ plugin.name }}</span>
-                <span class="plugin-marketplace">@{{ plugin.marketplace }}</span>
-                <span v-if="plugin.version" class="plugin-version">v{{ plugin.version }}</span>
-                <span
-                  v-if="plugin.scope === 'user'"
-                  class="scope-badge scope-user"
-                >global</span>
-                <span
-                  v-else-if="plugin.scope === 'project'"
-                  class="scope-badge scope-project"
-                >project</span>
+          <div v-else class="plugin-list">
+            <div
+              v-for="plugin in filteredPlugins"
+              :key="plugin.key"
+              class="plugin-item"
+            >
+              <div class="plugin-info">
+                <div class="plugin-name-row">
+                  <span class="plugin-name">{{ plugin.name }}</span>
+                  <span class="plugin-marketplace">@{{ plugin.marketplace }}</span>
+                  <span v-if="plugin.version" class="plugin-version">v{{ plugin.version }}</span>
+                  <span
+                    v-if="plugin.scope === 'user'"
+                    class="scope-badge scope-user"
+                  >global</span>
+                  <span
+                    v-else-if="plugin.scope === 'project'"
+                    class="scope-badge scope-project"
+                  >project</span>
+                </div>
+                <div v-if="plugin.description" class="plugin-desc">
+                  {{ plugin.description }}
+                </div>
+                <div v-if="plugin.updated_at" class="plugin-time">
+                  Updated {{ formatRelativeTime(plugin.updated_at) }}
+                </div>
               </div>
-              <div v-if="plugin.description" class="plugin-desc">
-                {{ plugin.description }}
+              <div class="plugin-actions">
+                <template v-if="plugin.scope === 'user'">
+                  <span class="status-text installed-text">Installed (Global)</span>
+                </template>
+                <template v-else-if="plugin.installed && plugin.scope === 'project'">
+                  <button
+                    class="btn-upgrade"
+                    :disabled="!!operating"
+                    @click="onUpgrade(plugin.key)"
+                  >
+                    <span v-if="operating === plugin.key" class="spinner-sm"></span>
+                    {{ operating === plugin.key ? 'Upgrading...' : 'Upgrade' }}
+                  </button>
+                  <button
+                    class="btn-uninstall"
+                    :disabled="!!operating"
+                    @click="onUninstall(plugin.key)"
+                  >
+                    <span v-if="operating === plugin.key" class="spinner-sm"></span>
+                    {{ operating === plugin.key ? 'Removing...' : 'Uninstall' }}
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    class="btn-install"
+                    :disabled="!!operating"
+                    @click="onInstall(plugin.key)"
+                  >
+                    <span v-if="operating === plugin.key" class="spinner-sm"></span>
+                    {{ operating === plugin.key ? 'Installing...' : 'Install' }}
+                  </button>
+                </template>
               </div>
-              <div v-if="plugin.updated_at" class="plugin-time">
-                Updated {{ formatRelativeTime(plugin.updated_at) }}
-              </div>
-            </div>
-            <div class="plugin-actions">
-              <template v-if="plugin.scope === 'user'">
-                <span class="status-text installed-text">Installed (Global)</span>
-              </template>
-              <template v-else-if="plugin.installed && plugin.scope === 'project'">
-                <button
-                  class="btn-uninstall"
-                  :disabled="operating === plugin.key"
-                  @click="onUninstall(plugin.key)"
-                >
-                  <span v-if="operating === plugin.key" class="spinner-sm"></span>
-                  {{ operating === plugin.key ? 'Removing...' : 'Uninstall' }}
-                </button>
-              </template>
-              <template v-else>
-                <button
-                  class="btn-install"
-                  :disabled="operating === plugin.key"
-                  @click="onInstall(plugin.key)"
-                >
-                  <span v-if="operating === plugin.key" class="spinner-sm"></span>
-                  {{ operating === plugin.key ? 'Installing...' : 'Install' }}
-                </button>
-              </template>
             </div>
           </div>
-        </div>
+
+          <!-- Upgrade All button -->
+          <div v-if="plugins.some(p => p.installed && p.scope === 'project')" class="action-bar">
+            <button
+              class="btn-upgrade-all"
+              :disabled="!!operating"
+              @click="onUpgradeAll"
+            >
+              <span v-if="operating === '__upgrade_all__'" class="spinner-sm"></span>
+              {{ operating === '__upgrade_all__' ? 'Upgrading all...' : 'Upgrade All Plugins' }}
+            </button>
+          </div>
+        </template>
+
+        <!-- Marketplaces Tab -->
+        <template v-if="activeTab === 'marketplaces'">
+          <div v-if="loading" class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading marketplaces...</span>
+          </div>
+
+          <div v-else-if="marketplaces.length === 0" class="empty-state">
+            No marketplaces configured
+          </div>
+
+          <div v-else class="plugin-list">
+            <div
+              v-for="mkt in marketplaces"
+              :key="mkt.name"
+              class="plugin-item"
+            >
+              <div class="plugin-info">
+                <div class="plugin-name-row">
+                  <span class="plugin-name">{{ mkt.name }}</span>
+                </div>
+                <div v-if="mkt.source" class="plugin-desc">
+                  {{ mkt.source }}
+                </div>
+              </div>
+              <div class="plugin-actions marketplace-actions">
+                <button
+                  class="btn-upgrade"
+                  :disabled="!!operating"
+                  @click="onUpdateMarketplace(mkt.name)"
+                >
+                  <span v-if="operating === mkt.name" class="spinner-sm"></span>
+                  {{ operating === mkt.name ? 'Updating...' : 'Update' }}
+                </button>
+                <button
+                  class="btn-uninstall"
+                  :disabled="!!operating"
+                  @click="onRemoveMarketplace(mkt.name)"
+                >
+                  <span v-if="operating === mkt.name" class="spinner-sm"></span>
+                  {{ operating === mkt.name ? 'Removing...' : 'Remove' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
 
         <div class="dialog-footer">
           <span class="footer-hint">
@@ -187,6 +326,68 @@ function handleClose() {
   box-shadow: var(--dialog-shadow);
   display: flex;
   flex-direction: column;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  flex-shrink: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.header-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .error-banner {
@@ -323,6 +524,13 @@ function handleClose() {
 
 .plugin-actions {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.marketplace-actions {
+  gap: 6px;
 }
 
 .status-text {
@@ -336,7 +544,8 @@ function handleClose() {
 }
 
 .btn-install,
-.btn-uninstall {
+.btn-uninstall,
+.btn-upgrade {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -359,6 +568,16 @@ function handleClose() {
   filter: brightness(1.1);
 }
 
+.btn-upgrade {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+}
+
+.btn-upgrade:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
 .btn-uninstall {
   border: 1px solid var(--red);
   background: transparent;
@@ -370,7 +589,40 @@ function handleClose() {
 }
 
 .btn-install:disabled,
-.btn-uninstall:disabled {
+.btn-uninstall:disabled,
+.btn-upgrade:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-bar {
+  padding: 8px 20px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.btn-upgrade-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.btn-upgrade-all:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.btn-upgrade-all:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

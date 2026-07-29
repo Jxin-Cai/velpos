@@ -8,10 +8,14 @@ from application.plugin.plugin_application_service import PluginApplicationServi
 from ohs.dependencies import get_plugin_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.plugin_dto import (
+    MarketplaceInfo,
+    MarketplaceListResponse,
+    MarketplaceUpdateRequest,
     PluginActionRequest,
     PluginActionResponse,
     PluginInfo,
     PluginListResponse,
+    PluginUpgradeAllRequest,
 )
 
 router = APIRouter(prefix="/api/plugins", tags=["Plugin"])
@@ -47,4 +51,49 @@ async def uninstall_plugin(
     service: ServiceDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.uninstall_plugin(request.plugin, request.project_dir)
+    return ApiResponse.success(PluginActionResponse(message=message))
+
+
+@router.post("/upgrade", summary="Upgrade a single plugin")
+async def upgrade_plugin(
+    request: PluginActionRequest,
+    service: ServiceDep,
+) -> ApiResponse[PluginActionResponse]:
+    message = await service.upgrade_plugin(request.plugin, request.project_dir)
+    return ApiResponse.success(PluginActionResponse(message=message))
+
+
+@router.post("/upgrade-all", summary="Upgrade all project plugins")
+async def upgrade_all_plugins(
+    request: PluginUpgradeAllRequest,
+    service: ServiceDep,
+) -> ApiResponse[PluginActionResponse]:
+    message = await service.upgrade_all_plugins(request.project_dir)
+    return ApiResponse.success(PluginActionResponse(message=message))
+
+
+@router.get("/marketplaces", summary="List configured marketplaces")
+async def list_marketplaces(
+    service: ServiceDep,
+) -> ApiResponse[MarketplaceListResponse]:
+    result = await service.list_marketplaces()
+    marketplaces = [MarketplaceInfo(**m) for m in result]
+    return ApiResponse.success(MarketplaceListResponse(marketplaces=marketplaces))
+
+
+@router.post("/marketplaces/update", summary="Update marketplace(s)")
+async def update_marketplace(
+    request: MarketplaceUpdateRequest,
+    service: ServiceDep,
+) -> ApiResponse[PluginActionResponse]:
+    message = await service.update_marketplace(request.name)
+    return ApiResponse.success(PluginActionResponse(message=message))
+
+
+@router.delete("/marketplaces/{name}", summary="Remove a marketplace")
+async def remove_marketplace(
+    name: str,
+    service: ServiceDep,
+) -> ApiResponse[PluginActionResponse]:
+    message = await service.remove_marketplace(name)
     return ApiResponse.success(PluginActionResponse(message=message))

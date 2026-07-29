@@ -92,6 +92,27 @@ class PluginManager(ABC):
         ...
 
     @abstractmethod
+    async def remove_marketplace(self, name: str) -> str:
+        """Remove a plugin marketplace by name.
+
+        Args:
+            name: Marketplace name to remove (e.g. "thoughtworks").
+
+        Returns:
+            CLI output message.
+        """
+        ...
+
+    @abstractmethod
+    async def list_marketplaces(self) -> list[dict[str, Any]]:
+        """List all configured plugin marketplaces.
+
+        Returns:
+            A list of dicts with 'name' and 'source' fields.
+        """
+        ...
+
+    @abstractmethod
     def is_marketplace_added(self, name: str) -> bool:
         """Check if a marketplace is already configured.
 

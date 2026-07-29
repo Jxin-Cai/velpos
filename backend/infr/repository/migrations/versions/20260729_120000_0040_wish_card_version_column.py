@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0040"
-down_revision = "0039"
+revision = "0040_wish_card_version_column"
+down_revision = "0039_repair_outbox_attachments"
 
 
 def upgrade() -> None:

@@ -66,7 +66,13 @@ class ExecutionReconciliationService:
             await self._reconcile_stuck_execution(execution)
             return
         card = await self._card_repo.find_by_id(execution.card_id)
+        if card is None:
+            logger.warning("reconcile: card %s not found for execution %s, skipping", execution.card_id, execution.id)
+            return
         team = await self._team_repo.find_by_id(card.team_id)
+        if team is None:
+            logger.warning("reconcile: team %s not found for card %s, skipping", card.team_id, card.id)
+            return
         target_slot = team.find_agent_slot(execution.agent_slot_id)
         if target_slot is None:
             execution.fail("Target slot no longer exists")

@@ -10,6 +10,7 @@ const props = defineProps({
 const expanded = ref(false)
 const enlarged = ref(false)
 const copied = ref(false)
+const wrapLines = ref(true)
 const PREVIEW_LIMIT = 1600
 
 const normalizedPayload = computed(() => {
@@ -110,13 +111,29 @@ async function copyPayload() {
             <span>{{ formattedPayload.length.toLocaleString() }} chars · {{ formattedPayload.split('\n').length }} lines</span>
           </div>
           <div class="payload-modal-actions">
+            <button
+              type="button"
+              class="payload-action payload-action--strong"
+              :aria-pressed="wrapLines"
+              :title="wrapLines ? 'Disable automatic line wrapping' : 'Enable automatic line wrapping'"
+              @click="wrapLines = !wrapLines"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+                <path d="M2.5 4h8M2.5 8h9.25a2 2 0 0 1 0 4H9.5"/>
+                <path d="m11 10-1.75 2L11 14"/>
+              </svg>
+              <span>{{ wrapLines ? 'No wrap' : 'Wrap lines' }}</span>
+            </button>
             <button type="button" class="payload-action payload-action--strong" @click="copyPayload">
               <span>{{ copied ? 'Copied' : 'Copy JSON' }}</span>
             </button>
             <button type="button" class="payload-close" aria-label="Close JSON viewer" @click="enlarged = false">×</button>
           </div>
         </header>
-        <pre class="payload-modal-content"><code v-html="fullHighlightedPayload"></code></pre>
+        <pre
+          class="payload-modal-content"
+          :class="{ 'payload-modal-content--wrapped': wrapLines }"
+        ><code v-html="fullHighlightedPayload"></code></pre>
       </section>
     </div>
   </Teleport>
@@ -228,8 +245,9 @@ async function copyPayload() {
 .payload-action--strong { border-color: var(--border-subtle); background: var(--bg-primary); color: var(--text-secondary); font-family: inherit; font-size: 11px; }
 .payload-close { width: 30px; height: 30px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-tertiary); font-size: 22px; line-height: 1; cursor: pointer; }
 .payload-close:hover { background: var(--bg-hover); color: var(--text-primary); }
-.payload-modal-content { flex: 1; min-height: 0; margin: 0; overflow: auto; padding: 20px 22px 32px; background: color-mix(in srgb, var(--bg-primary) 94%, #0b1220); color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; line-height: 1.7; tab-size: 2; white-space: pre; }
-.payload-modal-content code { font: inherit; }
+.payload-modal-content { flex: 1; min-width: 0; min-height: 0; margin: 0; overflow: auto; padding: 20px 22px 32px; background: color-mix(in srgb, var(--bg-primary) 94%, #0b1220); color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; line-height: 1.7; tab-size: 2; white-space: pre; }
+.payload-modal-content--wrapped { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.payload-modal-content code { max-width: 100%; font: inherit; }
 .payload-modal-content :deep(.hljs-attr) { color: var(--text-accent); }
 .payload-modal-content :deep(.hljs-string) { color: var(--color-success, #22c55e); }
 .payload-modal-content :deep(.hljs-number), .payload-modal-content :deep(.hljs-literal) { color: var(--color-warning, #d97706); }

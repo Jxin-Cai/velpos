@@ -26,7 +26,7 @@ watch(() => props.visible, async (isVisible) => {
   loading.value = true
   try {
     const res = await getExecutionHistory(executionId)
-    history.value = Array.isArray(res?.data) ? res.data : []
+    history.value = Array.isArray(res) ? res : []
   } catch {
     history.value = []
   } finally {

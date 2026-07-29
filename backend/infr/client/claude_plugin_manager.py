@@ -185,6 +185,36 @@ class ClaudePluginManager(PluginManagerPort):
 
         return "\n".join(results)
 
+    async def remove_marketplace(self, name: str) -> str:
+        return await self._run_cli(
+            ["plugin", "marketplace", "remove", name],
+            cwd=str(Path.home()),
+        )
+
+    async def list_marketplaces(self) -> list[dict[str, Any]]:
+        marketplaces_json = self._plugins_dir / "known_marketplaces.json"
+        if not marketplaces_json.exists():
+            return []
+        try:
+            data = json.loads(marketplaces_json.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+        if not isinstance(data, dict):
+            return []
+        results: list[dict[str, Any]] = []
+        for name, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            source_info = info.get("source", {})
+            if isinstance(source_info, dict):
+                # source is {"source": "github", "repo": "owner/repo"}
+                # or {"source": "git", "url": "https://..."}
+                source = source_info.get("repo") or source_info.get("url") or ""
+            else:
+                source = str(source_info) if source_info else ""
+            results.append({"name": name, "source": source})
+        return results
+
     def is_marketplace_added(self, name: str) -> bool:
         marketplaces_json = self._plugins_dir / "known_marketplaces.json"
         if not marketplaces_json.exists():

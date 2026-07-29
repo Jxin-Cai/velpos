@@ -45,3 +45,20 @@ class PluginUpgradeAllRequest(BaseModel):
         max_length=500,
         description="Project directory path for scope=project",
     )
+
+
+class MarketplaceUpdateRequest(BaseModel):
+    name: str | None = Field(
+        None,
+        max_length=200,
+        description="Marketplace name to update. If null, updates all marketplaces.",
+    )
+
+
+class MarketplaceInfo(BaseModel):
+    name: str
+    source: str
+
+
+class MarketplaceListResponse(BaseModel):
+    marketplaces: list[MarketplaceInfo]
