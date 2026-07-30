@@ -17,6 +17,22 @@ from infr.agent.catalog import get_agent_by_id, read_prompt
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SLUG_MAX_LENGTH = 64
 _SLUG_HASH_LENGTH = 12
+
+
+def _validated_port(raw: str) -> str:
+    """Return *raw* unchanged if it is a valid decimal TCP port (1..65535).
+
+    Raises :class:`ValueError` for non-numeric values, port 0, or ports above
+    65535 so that caller-controlled environment variables cannot inject
+    arbitrary text into template files consumed by Leader Agent commands.
+    """
+    if not raw.isdigit() or not (1 <= int(raw) <= 65535):
+        raise ValueError(
+            f"VELPOS_PORT must be a decimal integer in 1..65535, got {raw!r}"
+        )
+    return raw
+
+
 _MANIFEST_PATH = Path(".velpos/agent-manifest.json")
 _SCHEMA_VERSION = 1
 
@@ -34,6 +50,8 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
         slot_slug: str,
         project_root: str,
         agent_profile_ref: str | None = None,
+        slot_role: str = "worker",
+        team_id: str = "",
     ) -> str:
         root = self._prepare_team_root(team_root)
         team = self._normalize_slug(team_slug, "team_slug")
@@ -75,6 +93,8 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
                 files,
                 plugin_references,
                 source_hash,
+                slot_role=slot_role,
+                team_id=team_id,
             )
             try:
                 staging.replace(target)
@@ -332,6 +352,8 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
         files: dict[str, bytes],
         plugins: tuple[str, ...],
         source_hash: str,
+        slot_role: str = "worker",
+        team_id: str = "",
     ) -> None:
         if "CLAUDE.md" not in files:
             files = {
@@ -341,6 +363,8 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
                     f"Agent profile: `{agent_profile_ref}`.\n"
                 ).encode(),
             }
+        if slot_role == "leader":
+            files = cls._inject_leader_files(files, team_id or team_ref)
         for relative_path, content in files.items():
             destination = staging / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -356,8 +380,58 @@ class FilesystemWorkspaceGateway(WorkspaceGateway):
             "project_root": str(project_root),
             "source_config_hash": source_hash,
             "plugin_references": list(plugins),
+            "slot_role": slot_role,
         }
         cls._atomic_write_json(staging / _MANIFEST_PATH, manifest)
+
+    @classmethod
+    def _inject_leader_files(
+        cls,
+        files: dict[str, bytes],
+        team_ref: str,
+    ) -> dict[str, bytes]:
+        """Inject .claude/commands/ skill files and Leader protocol into workspace."""
+        leader_commands_dir = Path(__file__).parent.parent / "agent" / "leaders" / "commands"
+        result = dict(files)
+
+        # Load skill command templates
+        if leader_commands_dir.is_dir():
+            port = _validated_port(
+                os.getenv(
+                    "VELPOS_PORT",
+                    os.getenv("SERVER_PORT", os.getenv("BACKEND_PORT", "8083")),
+                )
+            )
+            for command_file in leader_commands_dir.glob("*.md"):
+                content = command_file.read_text(encoding="utf-8")
+                # Render template variables
+                content = content.replace("${TEAM_ID}", team_ref)
+                content = content.replace("${VELPOS_PORT}", port)
+                relative_key = f".claude/commands/{command_file.name}"
+                result[relative_key] = content.encode()
+
+        # Prepend Leader protocol to CLAUDE.md
+        leader_protocol = (
+            "# 团队 Leader 操作协议\n\n"
+            "你是本团队的 Leader Agent。你的核心职责是：\n"
+            "1. 分析进入你列的愿望卡，决策执行方式\n"
+            "2. 决定使用工作流模式（顺序流水线）还是决策模式（逐步决策）\n"
+            "3. 监控子 Agent 执行结果，处理异常\n\n"
+            "## 可用 Skill（通过 /commands 调用）\n\n"
+            "- /list-team-agents — 查看团队成员及其能力\n"
+            "- /get-board-status — 查看当前看板状态\n"
+            "- /create-flow-plan — 创建流转计划（核心操作）\n"
+            "- /advance-card — 手动推进卡片（Decision 模式下使用）\n"
+            "- /complete-plan — 标记计划完成\n\n"
+            "## 决策框架\n\n"
+            "- 任务明确、步骤可预测 → Workflow 模式\n"
+            "- 任务需要根据中间结果动态调整 → Decision 模式\n"
+            "- 收到子 Agent 完成/失败通知后，及时做出下一步决策\n\n"
+            "---\n\n"
+        )
+        existing_claude_md = result.get("CLAUDE.md", b"").decode("utf-8", errors="replace")
+        result["CLAUDE.md"] = (leader_protocol + existing_claude_md).encode()
+        return result
 
     def _validate_existing_workspace(
         self,

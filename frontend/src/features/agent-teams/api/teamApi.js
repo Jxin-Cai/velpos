@@ -10,5 +10,5 @@ export function createTeamProject(name, teamConfig) {
   return post('/projects/teams', {
     name,
     team_config: teamConfig,
-  })
+  }, { timeoutMs: 120000 })
 }

@@ -2,7 +2,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from domain.team.model.status import CardExecutionStatus
+from domain.team.model.status import (
+    CardExecutionStatus,
+    ExecutionFailureCategory,
+    ExecutionFailurePhase,
+)
 from domain.team.model.team_domain_error import TeamDomainError
 
 
@@ -16,9 +20,17 @@ class CardExecution:
     started_at: datetime | None = None
     ended_at: datetime | None = None
     failure_reason: str | None = None
+    failure_category: ExecutionFailureCategory | None = None
+    failure_phase: ExecutionFailurePhase | None = None
+    failure_retryable: bool | None = None
     session_id: str | None = None
     idempotency_key: str | None = None
     input_stage_output_id: str | None = None
+    triggered_by: str | None = None
+    delegated_by_slot_id: str | None = None
+    flow_plan_id: str | None = None
+    flow_step_id: str | None = None
+    timeout_at: datetime | None = None
 
     @classmethod
     def create(
@@ -57,7 +69,13 @@ class CardExecution:
         self.status = CardExecutionStatus.COMPLETED
         self.ended_at = datetime.now(timezone.utc)
 
-    def fail(self, reason: str) -> None:
+    def fail(
+        self,
+        reason: str,
+        category: ExecutionFailureCategory = ExecutionFailureCategory.UNKNOWN,
+        phase: ExecutionFailurePhase = ExecutionFailurePhase.EXECUTION,
+        retryable: bool | None = None,
+    ) -> None:
         if self.status not in {
             CardExecutionStatus.PREPARING,
             CardExecutionStatus.RUNNING,
@@ -67,6 +85,9 @@ class CardExecution:
             raise TeamDomainError("failure reason must not be blank")
         self.status = CardExecutionStatus.FAILED
         self.failure_reason = reason
+        self.failure_category = category
+        self.failure_phase = phase
+        self.failure_retryable = retryable
         self.ended_at = datetime.now(timezone.utc)
 
     def cancel(self) -> None:

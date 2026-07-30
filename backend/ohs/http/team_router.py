@@ -34,6 +34,7 @@ class SlotDTO(BaseModel):
     display_name: str
     agent_profile_id: str
     slug: str = ""
+    is_leader: bool = False
 
 
 class CreateTeamRequest(BaseModel):
@@ -71,6 +72,7 @@ async def create_team(body: CreateTeamRequest, service: ServiceDep) -> ApiRespon
             display_name=s.display_name,
             agent_profile_id=s.agent_profile_id,
             slug=s.slug,
+            is_leader=s.is_leader,
         ) for s in body.slots),
     )
     team = await service.create_team(cmd)

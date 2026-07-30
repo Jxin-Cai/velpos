@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects import mysql
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -43,6 +44,7 @@ class TeamModel(Base):
         String(8), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    leader_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     updated_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     agent_slots: Mapped[list[AgentSlotModel]] = relationship(
@@ -69,6 +71,7 @@ class AgentSlotModel(Base):
     role: Mapped[str] = mapped_column(String(255), nullable=False)
     workspace_ref: Mapped[str] = mapped_column(String(512), nullable=False)
     availability: Mapped[str] = mapped_column(String(16), nullable=False, default="available", server_default="available")
+    slot_role: Mapped[str] = mapped_column(String(20), nullable=False, default="worker", server_default="worker")
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     team: Mapped[TeamModel] = relationship(back_populates="agent_slots")
 
@@ -98,6 +101,8 @@ class WishCardModel(Base):
         ForeignKey("team_agent_slots.id", ondelete="SET NULL"),
         nullable=True,
     )
+    creator_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attribution_chain: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]", server_default="[]")
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     updated_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     executions: Mapped[list[CardExecutionModel]] = relationship(
@@ -127,6 +132,14 @@ class CardExecutionModel(Base):
     )
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    failure_phase: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    failure_retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    triggered_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    delegated_by_slot_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    flow_plan_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flow_step_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    timeout_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     started_time: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     ended_time: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
@@ -243,7 +256,10 @@ class CardStageOutputModel(Base):
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    rendered_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    rendered_markdown: Mapped[str] = mapped_column(
+        Text().with_variant(mysql.LONGTEXT(), "mysql"),
+        nullable=False,
+    )
     source_session_id: Mapped[str] = mapped_column(String(8), nullable=False)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
     compression_method: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -290,4 +306,53 @@ class StageOutputArtifactModel(Base):
             "stage_output_id", "path", name="uq_stage_output_artifacts_path"
         ),
         Index("idx_stage_output_artifacts_output", "stage_output_id", "created_time"),
+    )
+
+
+class FlowPlanModel(Base):
+    __tablename__ = "flow_plans"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    team_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False
+    )
+    card_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("wish_cards.id", ondelete="CASCADE"), nullable=False
+    )
+    leader_slot_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    leader_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    steps: Mapped[list[FlowPlanStepModel]] = relationship(
+        back_populates="flow_plan",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="FlowPlanStepModel.sequence",
+    )
+
+    __table_args__ = (
+        Index("idx_flow_plans_card_status", "card_id", "status"),
+    )
+
+
+class FlowPlanStepModel(Base):
+    __tablename__ = "flow_plan_steps"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    flow_plan_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("flow_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_slot_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    leader_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    flow_plan: Mapped[FlowPlanModel] = relationship(back_populates="steps")
+
+    __table_args__ = (
+        Index("idx_flow_plan_steps_execution", "execution_id"),
     )

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+import json
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from domain.team.model.card_execution import CardExecution
-from domain.team.model.status import CardExecutionStatus, WishCardStatus
+from domain.team.model.status import (
+    CardExecutionStatus,
+    ExecutionFailureCategory,
+    ExecutionFailurePhase,
+    WishCardStatus,
+)
 from domain.team.model.wish_card import WishCard
 from domain.team.repository.wish_card_repository import WishCardRepository
 from infr.repository.team_model import CardExecutionModel, WishCardModel
@@ -17,6 +24,38 @@ class WishCardRepositoryImpl(WishCardRepository):
 
     async def save(self, wish_card: WishCard) -> None:
         await self._session.merge(self._to_model(wish_card))
+        await self._session.flush()
+
+    async def save_state(self, wish_card: WishCard) -> None:
+        """Update only the wish-card row.
+
+        Terminal execution transitions use a conditional UPDATE of the child
+        row. Saving the whole aggregate immediately afterwards can merge a
+        stale execution model from the session identity map and undo that
+        transition. Keeping this write scoped to the parent row preserves the
+        atomic child update.
+        """
+        stmt = (
+            update(WishCardModel)
+            .where(WishCardModel.id == wish_card.id)
+            .values(
+                title=wish_card.title,
+                description=wish_card.description,
+                status=wish_card.status.value,
+                version=wish_card.version,
+                assigned_agent_slot_id=wish_card.assigned_agent_slot_id,
+                creator_id=wish_card.creator_id,
+                attribution_chain=(
+                    json.dumps(wish_card.attribution_chain)
+                    if wish_card.attribution_chain
+                    else "[]"
+                ),
+                updated_time=wish_card.updated_at,
+            )
+        )
+        result = await self._session.execute(stmt)
+        if result.rowcount != 1:
+            raise LookupError(f"Wish card {wish_card.id} not found")
         await self._session.flush()
 
     async def find_by_id(self, wish_card_id: str) -> WishCard | None:
@@ -69,6 +108,8 @@ class WishCardRepositoryImpl(WishCardRepository):
             status=card.status.value,
             version=card.version,
             assigned_agent_slot_id=card.assigned_agent_slot_id,
+            creator_id=card.creator_id,
+            attribution_chain=json.dumps(card.attribution_chain) if card.attribution_chain else "[]",
             created_time=card.created_at,
             updated_time=card.updated_at,
             executions=[
@@ -78,6 +119,14 @@ class WishCardRepositoryImpl(WishCardRepository):
                     agent_slot_id=execution.agent_slot_id,
                     status=execution.status.value,
                     failure_reason=execution.failure_reason,
+                    failure_category=execution.failure_category.value if execution.failure_category else None,
+                    failure_phase=execution.failure_phase.value if execution.failure_phase else None,
+                    failure_retryable=execution.failure_retryable,
+                    triggered_by=execution.triggered_by,
+                    delegated_by_slot_id=execution.delegated_by_slot_id,
+                    flow_plan_id=execution.flow_plan_id,
+                    flow_step_id=execution.flow_step_id,
+                    timeout_at=execution.timeout_at,
                     created_time=execution.created_at,
                     started_time=execution.started_at,
                     ended_time=execution.ended_at,
@@ -98,6 +147,8 @@ class WishCardRepositoryImpl(WishCardRepository):
             description=model.description,
             status=WishCardStatus(model.status),
             assigned_agent_slot_id=model.assigned_agent_slot_id,
+            creator_id=model.creator_id,
+            attribution_chain=json.loads(model.attribution_chain) if model.attribution_chain else [],
             _version=model.version,
             created_at=model.created_time,
             updated_at=model.updated_time,
@@ -108,6 +159,14 @@ class WishCardRepositoryImpl(WishCardRepository):
                     agent_slot_id=execution.agent_slot_id,
                     status=CardExecutionStatus(execution.status),
                     failure_reason=execution.failure_reason,
+                    failure_category=ExecutionFailureCategory(execution.failure_category) if execution.failure_category else None,
+                    failure_phase=ExecutionFailurePhase(execution.failure_phase) if execution.failure_phase else None,
+                    failure_retryable=execution.failure_retryable,
+                    triggered_by=execution.triggered_by,
+                    delegated_by_slot_id=execution.delegated_by_slot_id,
+                    flow_plan_id=execution.flow_plan_id,
+                    flow_step_id=execution.flow_step_id,
+                    timeout_at=execution.timeout_at,
                     created_at=execution.created_time,
                     started_at=execution.started_time,
                     ended_at=execution.ended_time,

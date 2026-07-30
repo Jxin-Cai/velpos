@@ -124,6 +124,18 @@ class BoardQueryService:
                 "started_at": item.started_at.isoformat() if item.started_at else None,
                 "ended_at": item.ended_at.isoformat() if item.ended_at else None,
                 "failure_reason": item.failure_reason,
+                "failure_category": (
+                    item.failure_category.value if item.failure_category else None
+                ),
+                "failure_phase": item.failure_phase.value if item.failure_phase else None,
+                "failure_retryable": item.failure_retryable,
+                "triggered_by": item.triggered_by,
+                "delegated_by_slot_id": item.delegated_by_slot_id,
+                "delegated_by_name": slot_names.get(
+                    item.delegated_by_slot_id, item.delegated_by_slot_id
+                ) if item.delegated_by_slot_id else None,
+                "flow_plan_id": item.flow_plan_id,
+                "flow_step_id": item.flow_step_id,
                 "input_stage_output_id": item.input_stage_output_id,
             }
             stage_output = output_by_execution.get(item.id)

@@ -6,12 +6,15 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from application.session.command.create_session_command import CreateSessionCommand
-from application.session.command.run_query_command import RunQueryCommand
+from application.team_board.execution_dispatch import dispatch_execution_query
 from application.team_board.team_workspace_helpers import (
     ensure_agent_project,
     prepare_execution_workspace,
 )
+from domain.session.model.message_type import MessageType
 from domain.shared.async_utils import safe_create_task
+from domain.shared.business_exception import BusinessException
+from domain.team.model.status import ExecutionFailureCategory, ExecutionFailurePhase
 from domain.team.model.team_domain_error import TeamDomainError
 
 if TYPE_CHECKING:
@@ -40,6 +43,8 @@ class ExecutionReconciliationService:
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         project_repo: ProjectRepository,
         connection_manager: ConnectionManager | None = None,
+        terminal_session_sync_fn: Callable[..., Awaitable[None]] | None = None,
+        flow_engine=None,
     ) -> None:
         self._team_repo = team_repo
         self._card_repo = card_repo
@@ -49,35 +54,90 @@ class ExecutionReconciliationService:
         self._session_service_factory = session_service_factory
         self._project_repo = project_repo
         self._connection_manager = connection_manager
+        self._terminal_session_sync_fn = terminal_session_sync_fn
+        self._flow_engine = flow_engine
 
-    async def reconcile_non_terminal_executions(self) -> list[str]:
+    async def reconcile_non_terminal_executions(
+        self,
+        *,
+        ignore_terminal_session_grace: bool = False,
+    ) -> list[str]:
         non_terminal = await self._execution_repo.find_non_terminal()
         reconciled: list[str] = []
         for execution in non_terminal:
             try:
-                await self._reconcile_one(execution)
-                reconciled.append(execution.id)
+                changed = await self._reconcile_one(
+                    execution,
+                    ignore_terminal_session_grace=ignore_terminal_session_grace,
+                )
+                if changed:
+                    reconciled.append(execution.id)
             except Exception:
                 logger.exception("reconciliation failed for execution %s", execution.id)
+        flow_engine = getattr(self, "_flow_engine", None)
+        if flow_engine is not None:
+            try:
+                reconciled.extend(await flow_engine.reconcile_active_plans())
+            except Exception:
+                logger.exception("flow plan reconciliation failed")
         return reconciled
 
-    async def _reconcile_one(self, execution: CardExecution) -> None:
+    async def _reconcile_one(
+        self,
+        execution: CardExecution,
+        *,
+        ignore_terminal_session_grace: bool = False,
+    ) -> bool:
+        # Check for timeout first
+        if await self._check_timeout(execution):
+            return True
         if execution.session_id is not None:
-            await self._reconcile_stuck_execution(execution)
-            return
+            return await self._reconcile_stuck_execution(
+                execution,
+                ignore_terminal_session_grace=ignore_terminal_session_grace,
+            )
         card = await self._card_repo.find_by_id(execution.card_id)
         if card is None:
-            logger.warning("reconcile: card %s not found for execution %s, skipping", execution.card_id, execution.id)
-            return
+            execution.fail(
+                "Wish card not found during reconciliation",
+                ExecutionFailureCategory.RECONCILIATION,
+                ExecutionFailurePhase.RECONCILIATION,
+                False,
+            )
+            await self._execution_repo.save(execution)
+            logger.warning(
+                "reconcile: failed execution %s because card %s was not found",
+                execution.id,
+                execution.card_id,
+            )
+            return True
         team = await self._team_repo.find_by_id(card.team_id)
         if team is None:
-            logger.warning("reconcile: team %s not found for card %s, skipping", card.team_id, card.id)
-            return
+            card.fail_execution(
+                execution.id,
+                "Team not found during reconciliation",
+                ExecutionFailureCategory.RECONCILIATION,
+                ExecutionFailurePhase.RECONCILIATION,
+                False,
+            )
+            await self._card_repo.save(card)
+            logger.warning(
+                "reconcile: failed execution %s because team %s was not found",
+                execution.id,
+                card.team_id,
+            )
+            return True
         target_slot = team.find_agent_slot(execution.agent_slot_id)
         if target_slot is None:
-            execution.fail("Target slot no longer exists")
-            await self._execution_repo.save(execution)
-            return
+            card.fail_execution(
+                execution.id,
+                "Target slot no longer exists",
+                ExecutionFailureCategory.AGENT_ERROR,
+                ExecutionFailurePhase.ORCHESTRATION,
+                False,
+            )
+            await self._card_repo.save(card)
+            return True
 
         try:
             workspace_path = await prepare_execution_workspace(
@@ -85,48 +145,72 @@ class ExecutionReconciliationService:
             )
         except TeamDomainError as error:
             failure_reason = str(error)
-            card.fail_execution(execution.id, failure_reason)
-            execution.fail(failure_reason)
+            card.fail_execution(
+                execution.id,
+                failure_reason,
+                ExecutionFailureCategory.WORKSPACE_UNAVAILABLE,
+                ExecutionFailurePhase.PREPARATION,
+                True,
+            )
             await self._card_repo.save(card)
-            await self._execution_repo.save(execution)
-            return
+            return True
 
         card.start_execution(execution.id)
         await self._card_repo.save(card)
-        await self._execution_repo.save(execution)
+        active_execution = card.active_execution
+        if active_execution is None:
+            raise TeamDomainError(f"active execution not found after start: {execution.id}")
         agent_project = await ensure_agent_project(team.name, target_slot, self._project_repo)
         session, prompt = await self._create_execution_session(
-            team=team, card=card, execution=execution,
+            team=team, card=card, execution=active_execution,
             agent_project_id=agent_project.id,
             workspace_path=workspace_path,
         )
-        execution.session_id = session.session_id
+        active_execution.session_id = session.session_id
         await self._card_repo.save(card)
-        await self._execution_repo.save(execution)
-        safe_create_task(self._dispatch_execution_query(
-            session.session_id, prompt
+        safe_create_task(dispatch_execution_query(
+            self._session_service_factory, session.session_id, prompt
         ))
+        return True
 
-    async def _reconcile_stuck_execution(self, execution: CardExecution) -> None:
+    async def _reconcile_stuck_execution(
+        self,
+        execution: CardExecution,
+        *,
+        ignore_terminal_session_grace: bool = False,
+    ) -> bool:
         try:
             session = await self._session_service.get_session(execution.session_id)
-        except Exception:
+        except BusinessException:
             logger.warning(
                 "reconcile: session %s not found for execution %s, failing execution",
                 execution.session_id, execution.id,
             )
             card = await self._card_repo.find_by_id(execution.card_id)
             if card is None:
-                return
-            card.fail_execution(execution.id, "Session not found during reconciliation")
+                execution.fail(
+                    "Wish card not found during reconciliation",
+                    ExecutionFailureCategory.RECONCILIATION,
+                    ExecutionFailurePhase.RECONCILIATION,
+                    False,
+                )
+                await self._execution_repo.save(execution)
+                return True
+            card.fail_execution(
+                execution.id,
+                "Session not found during reconciliation",
+                ExecutionFailureCategory.SESSION_LOST,
+                ExecutionFailurePhase.RECONCILIATION,
+                True,
+            )
             await self._card_repo.save(card)
-            await self._execution_repo.save(execution)
-            return
+            return True
 
-        if session.is_running:
-            return
+        if session.is_running or getattr(session, "is_compacting", False):
+            return False
         if (
-            session.updated_time is not None
+            not ignore_terminal_session_grace
+            and session.updated_time is not None
             and datetime.now() - session.updated_time < self._terminal_session_sync_grace
         ):
             logger.debug(
@@ -135,18 +219,149 @@ class ExecutionReconciliationService:
                 execution.id,
                 execution.session_id,
             )
-            return
+            return False
+
+        terminal_result = next(
+            (
+                message
+                for message in reversed(getattr(session, "messages", ()))
+                if message.message_type is MessageType.RESULT
+            ),
+            None,
+        )
+        terminal_session_sync_fn = getattr(self, "_terminal_session_sync_fn", None)
+        if terminal_session_sync_fn is not None:
+            succeeded = (
+                terminal_result is not None
+                and terminal_result.content.get("is_error") is not True
+            )
+            if succeeded:
+                reason = ""
+            elif terminal_result is not None:
+                reason = str(
+                    terminal_result.content.get("text")
+                    or terminal_result.content.get("error")
+                    or "Agent execution failed"
+                )
+            else:
+                session_status = getattr(session.status, "value", str(session.status))
+                reason = (
+                    "Session ended without a terminal result "
+                    f"(status={session_status})"
+                )
+            await terminal_session_sync_fn(
+                session,
+                succeeded=succeeded,
+                reason=reason,
+            )
+            logger.info(
+                "reconcile: replayed terminal sync for execution %s "
+                "(session=%s, succeeded=%s)",
+                execution.id,
+                execution.session_id,
+                succeeded,
+            )
+            return True
 
         card = await self._card_repo.find_by_id(execution.card_id)
         if card is None:
-            return
-        card.fail_execution(execution.id, "Execution stuck: session ended without terminal card sync")
-        await self._card_repo.save(card)
-        await self._execution_repo.save(execution)
+            execution.fail(
+                "Wish card not found during reconciliation",
+                ExecutionFailureCategory.RECONCILIATION,
+            )
+            await self._execution_repo.save(execution)
+            return True
+
+        active_exec = card.active_execution
+        if active_exec is None or active_exec.id != execution.id:
+            logger.info(
+                "reconcile: execution %s is no longer active on card %s; skipping stuck-execution fix",
+                execution.id,
+                execution.card_id,
+            )
+            return False
+
+        card.fail_execution(
+            execution.id,
+            "Execution stuck: session ended without terminal card sync",
+            ExecutionFailureCategory.RECONCILIATION,
+            ExecutionFailurePhase.RECONCILIATION,
+            True,
+        )  # active_exec.status → FAILED
+
+        saved = await self._execution_repo.save_terminal_if_non_terminal(active_exec)
+        if not saved:
+            logger.info(
+                "reconcile: stuck-execution race lost for %s "
+                "(already transitioned by sync callback); skipping",
+                execution.id,
+            )
+            return False
+
+        await self._card_repo.save_state(card)
         logger.info(
             "reconcile: failed stuck execution %s (session=%s)",
             execution.id, execution.session_id,
         )
+        return True
+
+    async def _check_timeout(self, execution: CardExecution) -> bool:
+        """Check if the execution has exceeded its timeout. Returns True if timed out."""
+        from datetime import datetime, timezone
+
+        if execution.timeout_at is None:
+            return False
+        if datetime.now(timezone.utc) <= execution.timeout_at:
+            return False
+
+        card = await self._card_repo.find_by_id(execution.card_id)
+        if card is None:
+            # Orphaned execution: no card to guard, no concurrent sync possible.
+            execution.fail(
+                "Execution timed out",
+                ExecutionFailureCategory.TIMEOUT,
+                ExecutionFailurePhase.EXECUTION,
+                True,
+            )
+            await self._execution_repo.save(execution)
+            return True
+
+        # Grab a reference to the active execution BEFORE domain mutation so we
+        # can pass the mutated object to the atomic conditional save below.
+        active_exec = card.active_execution
+        if active_exec is None or active_exec.id != execution.id:
+            logger.info(
+                "reconcile: execution %s is no longer active on card %s; skipping timeout",
+                execution.id,
+                execution.card_id,
+            )
+            return False
+
+        card.fail_execution(
+            execution.id,
+            "Execution timed out",
+            ExecutionFailureCategory.TIMEOUT,
+            ExecutionFailurePhase.EXECUTION,
+            True,
+        )  # active_exec.status → FAILED
+
+        # Atomic conditional write — wins only if the DB row is still non-terminal.
+        saved = await self._execution_repo.save_terminal_if_non_terminal(active_exec)
+        if not saved:
+            logger.info(
+                "reconcile: timeout race lost for execution %s "
+                "(already transitioned by sync callback); skipping",
+                execution.id,
+            )
+            return False
+
+        await self._card_repo.save_state(card)
+        logger.info(
+            "reconcile: timed out execution %s (timeout_at=%s)",
+            execution.id,
+            execution.timeout_at.isoformat(),
+        )
+        return True
 
     async def _create_execution_session(
         self,
@@ -179,11 +394,3 @@ class ExecutionReconciliationService:
                 "session_id": session.session_id,
             })
         return session, "\n\n".join(prompt_parts)
-
-    async def _dispatch_execution_query(self, session_id: str, prompt: str) -> None:
-        service = await self._session_service_factory()
-        try:
-            await service.submit_query(RunQueryCommand(session_id=session_id, prompt=prompt))
-            await service.commit()
-        finally:
-            await service.close()

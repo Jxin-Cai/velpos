@@ -14,6 +14,7 @@ class Team:
     created_at: datetime
     updated_at: datetime
     agent_slots: list[AgentSlot] = field(default_factory=list)
+    leader_session_id: str | None = None
 
     @classmethod
     def create(cls, project_id: str, name: str) -> "Team":
@@ -58,3 +59,6 @@ class Team:
 
     def find_agent_slot(self, slot_id: str) -> AgentSlot | None:
         return next((slot for slot in self.agent_slots if slot.id == slot_id), None)
+
+    def find_leader_slot(self) -> AgentSlot | None:
+        return next((slot for slot in self.agent_slots if slot.is_leader), None)

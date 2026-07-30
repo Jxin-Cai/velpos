@@ -94,5 +94,11 @@ class TeamBoardApplicationService:
 
     # ── Reconciliation ────────────────────────────────────────
 
-    async def reconcile_non_terminal_executions(self) -> list[str]:
-        return await self._reconciliation.reconcile_non_terminal_executions()
+    async def reconcile_non_terminal_executions(
+        self,
+        *,
+        ignore_terminal_session_grace: bool = False,
+    ) -> list[str]:
+        return await self._reconciliation.reconcile_non_terminal_executions(
+            ignore_terminal_session_grace=ignore_terminal_session_grace,
+        )

@@ -42,13 +42,20 @@ const {
   restoredPrompt, setRestoredPrompt, setQueuedCommand, steeringQueued, setSteeringQueued,
   messageWindow, userMessageMarkers, prependMessagesFor,
 } = useSession()
-const { currentProject, updateProjectInList } = useProject()
+const { currentProject, updateProjectInList, projects } = useProject()
 
 const wsConnection = inject('wsConnection')
 
 const isRunning = computed(() => status.value === 'running')
 const cardExecutionId = computed(() => session.value?.card_execution_id || '')
-const cardProjectId = computed(() => session.value?.project_id || currentProject.value?.id || '')
+const cardProjectId = computed(() => {
+  const agentProjectId = session.value?.project_id || currentProject.value?.id || ''
+  const teamProject = projects.value.find(
+    p => p.project_type === 'team' && p.dir_path && agentProjectId &&
+      projects.value.find(ap => ap.id === agentProjectId)?.dir_path?.startsWith(p.dir_path)
+  )
+  return teamProject?.id || agentProjectId
+})
 const cardHistoryVisible = ref(false)
 const cardHistoryLoading = ref(false)
 const cardHistoryError = ref('')

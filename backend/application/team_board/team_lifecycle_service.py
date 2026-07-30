@@ -4,10 +4,12 @@ import logging
 from typing import TYPE_CHECKING
 
 from application.team_board.team_workspace_helpers import ensure_agent_project
+from domain.team.model.status import SlotRole
 from domain.team.model.team_domain_error import TeamDomainError
 
 if TYPE_CHECKING:
     from application.team_board.commands import CreateTeamCommand
+    from application.team_board.leader_session_manager import LeaderSessionManager
     from domain.project.acl.plugin_manager import PluginManager
     from domain.project.repository.project_repository import ProjectRepository
     from domain.team.acl.workspace_gateway import WorkspaceGateway
@@ -25,12 +27,14 @@ class TeamLifecycleService:
         project_repo: ProjectRepository,
         plugin_manager: PluginManager | None = None,
         agent_catalog_fn=None,
+        leader_session_manager: LeaderSessionManager | None = None,
     ) -> None:
         self._team_repo = team_repo
         self._workspace = workspace_gateway
         self._project_repo = project_repo
         self._plugin_manager = plugin_manager
         self._agent_catalog_fn = agent_catalog_fn
+        self._leader_session_manager = leader_session_manager
 
     async def create_team(self, cmd: CreateTeamCommand) -> Team:
         from domain.team.model.team import Team
@@ -39,12 +43,15 @@ class TeamLifecycleService:
         workspace_refs: list[str] = []
         try:
             for index, slot_cfg in enumerate(cmd.slots, start=1):
+                role = SlotRole.LEADER if slot_cfg.is_leader else SlotRole.WORKER
                 workspace_ref = self._workspace.create_independent_workspace(
                     team_root=cmd.root_path,
                     team_slug=cmd.name,
                     slot_slug=slot_cfg.slug or slot_cfg.display_name or f"agent-{index}",
                     project_root=cmd.root_path,
                     agent_profile_ref=slot_cfg.agent_profile_id,
+                    slot_role=role.value,
+                    team_id=team.id,
                 )
                 workspace_refs.append(workspace_ref)
                 await self._load_agent_profile(slot_cfg.agent_profile_id, workspace_ref)
@@ -53,8 +60,14 @@ class TeamLifecycleService:
                     role=slot_cfg.agent_profile_id,
                     workspace_ref=workspace_ref,
                 )
+                slot.slot_role = role
                 await ensure_agent_project(team.name, slot, self._project_repo)
             await self._team_repo.save(team)
+
+            # Initialize Leader's persistent session
+            leader_slot = team.find_leader_slot()
+            if leader_slot is not None and self._leader_session_manager is not None:
+                await self._leader_session_manager.get_or_create_session(team, leader_slot)
         except Exception:
             logger.exception("workspace preparation failed for team %s", team.id)
             for workspace_ref in reversed(workspace_refs):

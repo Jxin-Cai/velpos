@@ -215,6 +215,44 @@ async def test_execution_round_trip_when_saved_independently(db_session: AsyncSe
 
 
 @pytest.mark.asyncio
+async def test_terminal_execution_preserved_when_card_state_saved_after_conditional_transition(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    team = await _save_team(db_session)
+    card = _card(team)
+    execution = card.assign_to(team.agent_slots[0].id)
+    card.start_execution(execution.id)
+    card_repository = WishCardRepositoryImpl(db_session)
+    execution_repository = CardExecutionRepositoryImpl(db_session)
+    await card_repository.save(card)
+    await execution_repository.find_non_terminal()
+    loaded_card = await card_repository.find_by_id(card.id)
+    loaded_execution = loaded_card.active_execution
+    assert loaded_execution is not None
+    loaded_card.fail_execution(loaded_execution.id, "Session ended before card sync")
+
+    # Act
+    transitioned = await execution_repository.save_terminal_if_non_terminal(
+        loaded_execution
+    )
+    await card_repository.save_state(loaded_card)
+    db_session.expire_all()
+    persisted_card = await card_repository.find_by_id(card.id)
+
+    # Assert
+    assert (
+        transitioned,
+        persisted_card.status,
+        persisted_card.latest_execution.status,
+    ) == (
+        True,
+        WishCardStatus.FAILED,
+        CardExecutionStatus.FAILED,
+    )
+
+
+@pytest.mark.asyncio
 async def test_executions_ordered_by_created_time_when_listed(db_session: AsyncSession) -> None:
     # Arrange
     team = await _save_team(db_session)

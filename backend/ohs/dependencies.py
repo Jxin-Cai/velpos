@@ -79,6 +79,7 @@ from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
 from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 from domain.im_binding.model.channel_registry import ImChannelRegistry
+from domain.team.model.status import ExecutionFailureCategory, ExecutionFailurePhase
 from ohs.session_event_coordinator import SessionEventCoordinator
 from ohs.im_delivery_coordinator import ImDeliveryCoordinator
 
@@ -206,17 +207,66 @@ async def _sync_card_execution(session, *, succeeded: bool, reason: str = "") ->
     """
     from infr.config.database import async_session_factory
     from infr.repository.stage_output_repository_impl import StageOutputRepositoryImpl
+    from infr.repository.flow_plan_repository_impl import FlowPlanRepositoryImpl
     from infr.client.session_context_collector_impl import SessionContextCollectorImpl
     from application.team_board.card_execution_sync_service import CardExecutionSyncService
+    from application.team_board.flow_engine_service import FlowEngineService
+    from application.team_board.leader_session_manager import LeaderSessionManager
 
     async with async_session_factory() as db_session:
+        team_repo = TeamRepositoryImpl(db_session)
+        card_repo = WishCardRepositoryImpl(db_session)
+        execution_repo = CardExecutionRepositoryImpl(db_session)
+        stage_output_repo = StageOutputRepositoryImpl(db_session)
+        flow_plan_repo = FlowPlanRepositoryImpl(db_session)
+
+        session_service = await _create_session_service(db_session)
+        leader_session_mgr = LeaderSessionManager(
+            team_repo=team_repo,
+            project_repo=ProjectRepositoryImpl(db_session),
+            session_service=session_service,
+            session_service_factory=_create_session_service,
+        )
+        # Import CardExecutionService locally to build move_card_fn
+        from application.team_board.card_execution_service import CardExecutionService
+        from infr.workspace.filesystem_workspace_gateway import FilesystemWorkspaceGateway
+        from infr.client.session_context_collector_impl import SessionContextCollectorImpl
+
+        card_exec_svc = CardExecutionService(
+            team_repo=team_repo,
+            card_repo=card_repo,
+            execution_repo=execution_repo,
+            handoff_repo=HandoffRepositoryImpl(db_session),
+            stage_output_repo=stage_output_repo,
+            workspace_gateway=FilesystemWorkspaceGateway(),
+            session_service=session_service,
+            session_service_factory=_create_session_service,
+            project_repo=ProjectRepositoryImpl(db_session),
+            connection_manager=_connection_manager,
+            session_repo=SessionRepositoryImpl(db_session),
+            fail_execution_fn=_fail_execution_on_dispatch_error,
+            collect_artifacts_fn=SessionContextCollectorImpl.collect_session_artifacts,
+            leader_session_manager=leader_session_mgr,
+        )
+        flow_engine = FlowEngineService(
+            flow_plan_repo=flow_plan_repo,
+            team_repo=team_repo,
+            card_repo=card_repo,
+            execution_repo=execution_repo,
+            stage_output_repo=stage_output_repo,
+            leader_session_manager=leader_session_mgr,
+            move_card_fn=card_exec_svc.move_card,
+            connection_manager=_connection_manager,
+            commit_fn=db_session.commit,
+        )
         service = CardExecutionSyncService(
-            card_repo=WishCardRepositoryImpl(db_session),
-            execution_repo=CardExecutionRepositoryImpl(db_session),
-            stage_output_repo=StageOutputRepositoryImpl(db_session),
-            team_repo=TeamRepositoryImpl(db_session),
+            card_repo=card_repo,
+            execution_repo=execution_repo,
+            stage_output_repo=stage_output_repo,
+            team_repo=team_repo,
             connection_manager=_connection_manager,
             collect_artifacts_fn=SessionContextCollectorImpl.collect_session_artifacts,
+            flow_engine=flow_engine,
         )
         await service.sync(session, succeeded=succeeded, reason=reason)
         await db_session.commit()
@@ -246,7 +296,13 @@ async def _fail_execution_on_dispatch_error(
                 return
             if execution.is_terminal:
                 return
-            card.fail_execution(execution_id, "Dispatch failed: could not start session query")
+            card.fail_execution(
+                execution_id,
+                "Dispatch failed: could not start session query",
+                ExecutionFailureCategory.NETWORK_ERROR,
+                ExecutionFailurePhase.DISPATCH,
+                True,
+            )
             await card_repo.save(card)
             await db_session.commit()
 
@@ -732,6 +788,8 @@ async def get_team_board_service(
     from application.team_board.card_execution_service import CardExecutionService
     from application.team_board.board_query_service import BoardQueryService
     from application.team_board.execution_reconciliation_service import ExecutionReconciliationService
+    from application.team_board.flow_engine_service import FlowEngineService
+    from infr.repository.flow_plan_repository_impl import FlowPlanRepositoryImpl
     from infr.repository.stage_output_repository_impl import StageOutputRepositoryImpl
     from infr.workspace.filesystem_workspace_gateway import FilesystemWorkspaceGateway
     from infr.agent.catalog import get_agent_by_id
@@ -747,12 +805,21 @@ async def get_team_board_service(
     session_repo = SessionRepositoryImpl(db_session)
     workspace_gw = FilesystemWorkspaceGateway()
 
+    from application.team_board.leader_session_manager import LeaderSessionManager
+
+    leader_session_mgr = LeaderSessionManager(
+        team_repo=team_repo,
+        project_repo=project_repo,
+        session_service=session_service,
+        session_service_factory=_create_session_service,
+    )
     lifecycle = TeamLifecycleService(
         team_repo=team_repo,
         workspace_gateway=workspace_gw,
         project_repo=project_repo,
         plugin_manager=_claude_plugin_manager,
         agent_catalog_fn=get_agent_by_id,
+        leader_session_manager=leader_session_mgr,
     )
     card_execution = CardExecutionService(
         team_repo=team_repo,
@@ -768,6 +835,18 @@ async def get_team_board_service(
         session_repo=session_repo,
         fail_execution_fn=_fail_execution_on_dispatch_error,
         collect_artifacts_fn=SessionContextCollectorImpl.collect_session_artifacts,
+        leader_session_manager=leader_session_mgr,
+    )
+    flow_engine = FlowEngineService(
+        flow_plan_repo=FlowPlanRepositoryImpl(db_session),
+        team_repo=team_repo,
+        card_repo=card_repo,
+        execution_repo=execution_repo,
+        stage_output_repo=stage_output_repo,
+        leader_session_manager=leader_session_mgr,
+        move_card_fn=card_execution.move_card,
+        connection_manager=_connection_manager,
+        commit_fn=db_session.commit,
     )
     query = BoardQueryService(
         team_repo=team_repo,
@@ -786,5 +865,7 @@ async def get_team_board_service(
         session_service_factory=_create_session_service,
         project_repo=project_repo,
         connection_manager=_connection_manager,
+        terminal_session_sync_fn=_sync_card_execution,
+        flow_engine=flow_engine,
     )
     return TeamBoardApplicationService(lifecycle, card_execution, query, reconciliation)

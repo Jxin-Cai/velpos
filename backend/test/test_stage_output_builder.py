@@ -108,3 +108,29 @@ def test_sensitive_value_redacted_when_final_output_contains_token() -> None:
     # Assert
     assert "top-secret-token-value" not in output.rendered_markdown
     assert "access_token=[REDACTED]" in output.rendered_markdown
+
+
+def test_limits_artifacts_when_build_receives_unbounded_iterable() -> None:
+    # Arrange
+    card = WishCard.create(team_id="team-1", title="Bound artifacts")
+    execution = CardExecution.create(card.id, "slot-1")
+    artifacts = (
+        SessionArtifact(
+            path=f"/workspace/artifact-{index:03}.txt",
+            description="Agent output",
+            artifact_type="text/plain",
+        )
+        for index in range(StageOutputBuilder._MAX_ARTIFACTS + 10)
+    )
+
+    # Act
+    output = StageOutputBuilder.build(
+        card=card,
+        execution=execution,
+        source_session_id="sess0001",
+        final_output="Completed.",
+        artifacts=artifacts,
+    )
+
+    # Assert
+    assert len(output.artifacts) == StageOutputBuilder._MAX_ARTIFACTS

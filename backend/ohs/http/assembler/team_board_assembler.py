@@ -42,6 +42,7 @@ class TeamBoardAssembler:
             "display_name": slot.name,
             "agent_profile_id": slot.role,
             "availability": slot.availability.value,
+            "is_leader": slot.is_leader,
         }
 
     @staticmethod
@@ -62,6 +63,14 @@ class TeamBoardAssembler:
             "session_id": latest.session_id if latest else None,
             "execution_id": latest.id if latest else None,
             "failure_reason": latest.failure_reason if latest else None,
+            "failure_category": (
+                latest.failure_category.value if latest and latest.failure_category else None
+            ),
+            "failure_phase": (
+                latest.failure_phase.value if latest and latest.failure_phase else None
+            ),
+            "failure_retryable": latest.failure_retryable if latest else None,
+            "attribution_chain": card.attribution_chain,
             "needs_user_action": needs_user_action,
             "handoff_readiness": handoff_readiness,
             "execution_count": len(card.executions),
@@ -95,6 +104,10 @@ class TeamBoardAssembler:
             "execution_id": execution.id,
             "status": execution.status.value,
             "session_id": execution.session_id,
+            "triggered_by": execution.triggered_by,
+            "delegated_by_slot_id": execution.delegated_by_slot_id,
+            "flow_plan_id": execution.flow_plan_id,
+            "flow_step_id": execution.flow_step_id,
         }
 
     @staticmethod
@@ -105,4 +118,16 @@ class TeamBoardAssembler:
             "agent_slot_id": execution.agent_slot_id,
             "status": execution.status.value,
             "session_id": execution.session_id,
+            "failure_reason": execution.failure_reason,
+            "failure_category": (
+                execution.failure_category.value if execution.failure_category else None
+            ),
+            "failure_phase": (
+                execution.failure_phase.value if execution.failure_phase else None
+            ),
+            "failure_retryable": execution.failure_retryable,
+            "triggered_by": execution.triggered_by,
+            "delegated_by_slot_id": execution.delegated_by_slot_id,
+            "flow_plan_id": execution.flow_plan_id,
+            "flow_step_id": execution.flow_step_id,
         }

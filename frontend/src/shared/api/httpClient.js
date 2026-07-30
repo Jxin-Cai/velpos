@@ -55,8 +55,9 @@ export function get(url, options = {}) {
   return request(url, { ...options, method: 'GET' })
 }
 
-export function post(url, body) {
+export function post(url, body, options = {}) {
   return request(url, {
+    ...options,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

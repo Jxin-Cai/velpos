@@ -9,6 +9,11 @@ class WishCardRepository(ABC):
         pass
 
     @abstractmethod
+    def save_state(self, wish_card: WishCard) -> None:
+        """Persist card fields without rewriting its execution collection."""
+        pass
+
+    @abstractmethod
     def find_by_id(self, wish_card_id: str) -> WishCard | None:
         pass
 

@@ -5,7 +5,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from domain.session.acl.connection_manager import (
     ConnectionManager as ConnectionManagerPort,
@@ -56,6 +57,13 @@ class ConnectionManager(ConnectionManagerPort):
 
     @staticmethod
     async def _safe_send(ws: WebSocket, data: dict[str, Any]) -> WebSocket | None:
+        if (
+            getattr(ws, "application_state", WebSocketState.CONNECTED)
+            is not WebSocketState.CONNECTED
+            or getattr(ws, "client_state", WebSocketState.CONNECTED)
+            is WebSocketState.DISCONNECTED
+        ):
+            return ws
         try:
             await asyncio.wait_for(
                 ws.send_json(data),
@@ -67,6 +75,27 @@ class ConnectionManager(ConnectionManagerPort):
                 "websocket_send_timeout",
                 extra={"event": data.get("event", "")},
             )
+            return ws
+        except WebSocketDisconnect:
+            # A client can close between the state check and send_json().
+            # This is normal lifecycle cleanup, not an application failure.
+            logger.info(
+                "websocket_send_skipped_disconnected",
+                extra={"event": data.get("event", "")},
+            )
+            return ws
+        except RuntimeError as error:
+            if "close message has been sent" in str(error):
+                logger.info(
+                    "websocket_send_skipped_disconnected",
+                    extra={"event": data.get("event", "")},
+                )
+            else:
+                logger.warning(
+                    "websocket_send_failed",
+                    extra={"event": data.get("event", "")},
+                    exc_info=True,
+                )
             return ws
         except Exception:
             logger.warning(

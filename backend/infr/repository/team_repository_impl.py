@@ -48,6 +48,7 @@ class TeamRepositoryImpl(TeamRepository):
             id=team.id,
             project_id=team.project_id,
             name=team.name,
+            leader_session_id=team.leader_session_id,
             created_time=team.created_at,
             updated_time=team.updated_at,
             agent_slots=[
@@ -58,6 +59,7 @@ class TeamRepositoryImpl(TeamRepository):
                     role=slot.role,
                     workspace_ref=slot.workspace_ref,
                     availability=slot.availability.value,
+                    slot_role=slot.slot_role.value,
                     created_time=slot.created_at,
                 )
                 for slot in team.agent_slots
@@ -66,12 +68,13 @@ class TeamRepositoryImpl(TeamRepository):
 
     @staticmethod
     def _to_domain(model: TeamModel) -> Team:
-        from domain.team.model.status import SlotAvailability
+        from domain.team.model.status import SlotAvailability, SlotRole
 
         return Team(
             id=model.id,
             project_id=model.project_id,
             name=model.name,
+            leader_session_id=model.leader_session_id,
             created_at=model.created_time,
             updated_at=model.updated_time,
             agent_slots=[
@@ -83,6 +86,7 @@ class TeamRepositoryImpl(TeamRepository):
                     workspace_ref=slot.workspace_ref,
                     created_at=slot.created_time,
                     availability=SlotAvailability(slot.availability) if slot.availability else SlotAvailability.AVAILABLE,
+                    slot_role=SlotRole(slot.slot_role) if slot.slot_role else SlotRole.WORKER,
                 )
                 for slot in model.agent_slots
             ],

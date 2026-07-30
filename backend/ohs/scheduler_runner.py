@@ -78,10 +78,18 @@ class ExecutionWatchdogRunner:
         self._interval_seconds = interval_seconds
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
+        self._ignore_terminal_session_grace_on_first_run = False
 
-    def start(self) -> None:
+    def start(
+        self,
+        *,
+        ignore_terminal_session_grace_on_first_run: bool = False,
+    ) -> None:
         if self._task is None or self._task.done():
             self._stopped.clear()
+            self._ignore_terminal_session_grace_on_first_run = (
+                ignore_terminal_session_grace_on_first_run
+            )
             self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -92,26 +100,45 @@ class ExecutionWatchdogRunner:
                 await self._task
 
     async def _loop(self) -> None:
+        is_first_run = True
         while not self._stopped.is_set():
             try:
-                await self._run_once()
+                await self.run_once(
+                    ignore_terminal_session_grace=(
+                        is_first_run
+                        and self._ignore_terminal_session_grace_on_first_run
+                    ),
+                )
             except Exception:
                 logger.warning("execution watchdog tick failed", exc_info=True)
+            finally:
+                is_first_run = False
             try:
                 await asyncio.wait_for(self._stopped.wait(), timeout=self._interval_seconds)
             except asyncio.TimeoutError:
                 pass
 
-    async def _run_once(self) -> None:
+    async def run_once(
+        self,
+        *,
+        ignore_terminal_session_grace: bool = False,
+    ) -> list[str]:
         from ohs.dependencies import get_team_board_service
 
         async with async_session_factory() as db_session:
             service = await get_team_board_service(db_session)
             try:
-                reconciled = await service.reconcile_non_terminal_executions()
+                reconciled = await service.reconcile_non_terminal_executions(
+                    ignore_terminal_session_grace=ignore_terminal_session_grace,
+                )
                 await db_session.commit()
             except Exception:
                 await db_session.rollback()
                 raise
             if reconciled:
-                logger.info("execution watchdog reconciled %d execution(s): %s", len(reconciled), reconciled)
+                logger.info(
+                    "execution watchdog reconciled %d execution(s): %s",
+                    len(reconciled),
+                    reconciled,
+                )
+            return reconciled

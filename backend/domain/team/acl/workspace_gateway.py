@@ -14,6 +14,8 @@ class WorkspaceGateway(ABC):
         slot_slug: str,
         project_root: str,
         agent_profile_ref: str | None = None,
+        slot_role: str = "worker",
+        team_id: str = "",
     ) -> str:
         pass
 

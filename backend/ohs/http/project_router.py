@@ -100,9 +100,15 @@ async def create_team_project(
             display_name=item.get("role_label") or item.get("display_name") or item.get("role") or f"Agent {index}",
             agent_profile_id=profile,
             slug=item.get("slug") or f"agent-{index}",
+            is_leader=bool(item.get("is_leader", False)),
         ))
     if not slots:
         raise HTTPException(status_code=422, detail="Team must have at least one agent slot")
+    if sum(slot.is_leader for slot in slots) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Team must have exactly one Leader agent",
+        )
     project = Project.create(request.name.strip(), dir_path, project_type="team")
     await project_repo.save(project)
     try:
@@ -114,7 +120,12 @@ async def create_team_project(
         raise
     config["team_id"] = team.id
     config["slots"] = [
-        {"display_name": slot.display_name, "agent_profile_id": slot.agent_profile_id, "slug": slot.slug}
+        {
+            "display_name": slot.display_name,
+            "agent_profile_id": slot.agent_profile_id,
+            "slug": slot.slug,
+            "is_leader": slot.is_leader,
+        }
         for slot in slots
     ]
     project.update_team_config(config)

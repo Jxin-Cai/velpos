@@ -641,6 +641,14 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info("websocket_disconnected", extra={"session_id": session_id})
+    except RuntimeError as error:
+        if "close message has been sent" in str(error):
+            logger.info(
+                "websocket_disconnected_during_initialization",
+                extra={"session_id": session_id},
+            )
+        else:
+            logger.exception("websocket_error", extra={"session_id": session_id})
     except Exception:
         logger.exception("websocket_error", extra={"session_id": session_id})
     finally:

@@ -107,9 +107,18 @@ function shortChecksum(value) {
                   <div><dt>Started</dt><dd>{{ formatDate(execution.started_at || execution.created_at) }}</dd></div>
                   <div><dt>Finished</dt><dd>{{ formatDate(execution.ended_at) }}</dd></div>
                   <div><dt>Execution ID</dt><dd>{{ execution.execution_id }}</dd></div>
+                  <div><dt>Triggered by</dt><dd>{{ execution.triggered_by || 'user' }}</dd></div>
+                  <div><dt>Delegated by</dt><dd>{{ execution.delegated_by_name || '—' }}</dd></div>
                 </dl>
 
-                <p v-if="execution.failure_reason" class="execution-failure">{{ execution.failure_reason }}</p>
+                <div v-if="execution.failure_reason" class="execution-failure">
+                  <strong>
+                    {{ execution.failure_category || 'unknown' }}
+                    <span v-if="execution.failure_phase"> · {{ execution.failure_phase }}</span>
+                  </strong>
+                  <span>{{ execution.failure_reason }}</span>
+                  <small>{{ execution.failure_retryable ? 'Retryable' : 'Needs intervention' }}</small>
+                </div>
 
                 <details v-if="execution.output" class="stage-output">
                   <summary>
@@ -247,7 +256,9 @@ function shortChecksum(value) {
 .execution-meta div:last-child { grid-column: 1 / -1; }
 .execution-meta dt { color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
 .execution-meta dd { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--text-secondary); font: 11px/1.4 var(--font-mono); }
-.execution-failure { margin: 10px 0 0; padding: 8px 10px; border-left: 2px solid var(--status-danger); background: var(--status-danger-bg); color: var(--status-danger); font-size: 11px; line-height: 1.5; }
+.execution-failure { display: grid; gap: 3px; margin: 10px 0 0; padding: 8px 10px; border-left: 2px solid var(--status-danger); background: var(--status-danger-bg); color: var(--status-danger); font-size: 11px; line-height: 1.5; }
+.execution-failure strong { font-size: 10px; text-transform: uppercase; }
+.execution-failure small { opacity: .8; }
 .handoff-block { margin-top: 12px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-tertiary); }
 .handoff-label { color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
 .handoff-snapshot { display: block; margin-top: 5px; color: var(--text-muted); font: 10px/1.4 var(--font-mono); overflow-wrap: anywhere; }

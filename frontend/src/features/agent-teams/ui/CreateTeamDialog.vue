@@ -21,7 +21,7 @@ const activeSlotIndex = ref(0)
 const workflowTemplates = ref([])
 
 const slots = ref([
-  { agent_profile_id: '', display_name: '' },
+  { agent_profile_id: '', display_name: '', is_leader: true },
 ])
 
 const availableAgents = computed(() => agentCategories.value.flatMap(category =>
@@ -46,13 +46,15 @@ function assignAgent(agent) {
 }
 
 function addSlot() {
-  slots.value.push({ agent_profile_id: '', display_name: '' })
+  slots.value.push({ agent_profile_id: '', display_name: '', is_leader: false })
   activeSlotIndex.value = slots.value.length - 1
 }
 
 function removeSlot(idx) {
   if (slots.value.length <= 1) return
+  const removedLeader = slots.value[idx]?.is_leader
   slots.value.splice(idx, 1)
+  if (removedLeader && slots.value.length) slots.value[0].is_leader = true
   activeSlotIndex.value = Math.min(idx, slots.value.length - 1)
 }
 
@@ -61,9 +63,12 @@ function applyTemplate(tpl) {
   slots.value = items.map(item => ({
     agent_profile_id: item.agent_profile_id || item.role || '',
     display_name: item.role_label || item.display_name || item.role || '',
+    is_leader: Boolean(item.is_leader),
   }))
   if (slots.value.length === 0) {
-    slots.value = [{ agent_profile_id: '', display_name: '' }]
+    slots.value = [{ agent_profile_id: '', display_name: '', is_leader: true }]
+  } else if (!slots.value.some(slot => slot.is_leader)) {
+    slots.value[0].is_leader = true
   }
   activeSlotIndex.value = 0
 }
@@ -87,7 +92,7 @@ watch(() => props.visible, (val) => {
     creating.value = false
     error.value = ''
     activeSlotIndex.value = 0
-    slots.value = [{ agent_profile_id: '', display_name: '' }]
+    slots.value = [{ agent_profile_id: '', display_name: '', is_leader: true }]
   }
 })
 
@@ -102,6 +107,7 @@ async function handleCreate() {
       .map(s => ({
         agent_profile_id: s.agent_profile_id,
         display_name: s.display_name || s.agent_profile_id,
+        is_leader: s.is_leader,
       })),
   }
 
@@ -216,6 +222,15 @@ onMounted(() => {
                 </div>
                 <div class="step-row">
                   <input v-model="slot.display_name" class="form-input" placeholder="Display name (optional)" />
+                  <label class="leader-toggle">
+                    <input
+                      type="radio"
+                      name="leader-slot"
+                      :checked="slot.is_leader"
+                      @change="slots.forEach((item, itemIndex) => { item.is_leader = itemIndex === idx })"
+                    />
+                    Leader
+                  </label>
                 </div>
               </div>
               <button class="btn-ghost add-btn" @click="addSlot">+ Add Slot</button>

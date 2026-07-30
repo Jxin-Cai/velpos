@@ -102,3 +102,40 @@ async def test_ignores_written_file_when_path_escapes_session_workspace(
 
     # Assert
     assert context.artifacts == ()
+
+
+@pytest.mark.asyncio
+async def test_ignores_dependency_files_when_workspace_contains_node_modules(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    artifact = tmp_path / "result.md"
+    artifact.write_text("done", encoding="utf-8")
+    dependency = tmp_path / "node_modules" / "package" / "index.js"
+    dependency.parent.mkdir(parents=True)
+    dependency.write_text("dependency", encoding="utf-8")
+    session = Session.create(project_dir=str(tmp_path))
+    collector = SessionContextCollectorImpl(_SessionRepositoryStub(session))
+
+    # Act
+    context = await collector.collect(session.session_id)
+
+    # Assert
+    assert [item.path for item in context.artifacts] == [str(artifact)]
+
+
+@pytest.mark.asyncio
+async def test_limits_artifacts_when_workspace_contains_many_files(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    for index in range(SessionContextCollectorImpl._MAX_ARTIFACTS + 10):
+        (tmp_path / f"artifact-{index:03}.txt").write_text("data", encoding="utf-8")
+    session = Session.create(project_dir=str(tmp_path))
+    collector = SessionContextCollectorImpl(_SessionRepositoryStub(session))
+
+    # Act
+    context = await collector.collect(session.session_id)
+
+    # Assert
+    assert len(context.artifacts) == SessionContextCollectorImpl._MAX_ARTIFACTS

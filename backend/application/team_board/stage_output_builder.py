@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import islice
 
 from domain.team.acl.session_context_collector import SessionArtifact
 from domain.team.model.card_execution import CardExecution
@@ -22,6 +23,7 @@ class StageOutputBuilder:
     """Build a bounded, auditable handoff snapshot without copying a transcript."""
 
     _MAX_SUMMARY_CHARS = 8_000
+    _MAX_ARTIFACTS = 50
     _COMPRESSION_METHOD = "goal_anchored_final_output_v1"
     _HEADING_PATTERN = re.compile(r"^#{1,4}\s+(.+?)\s*$", re.MULTILINE)
     _SENSITIVE_PATTERNS = (
@@ -59,7 +61,7 @@ class StageOutputBuilder:
         previous_output_id: str | None = None,
         revision: int = 1,
     ) -> StageOutput:
-        artifact_list = tuple(artifacts)
+        artifact_list = tuple(islice(artifacts, cls._MAX_ARTIFACTS))
         objective = card.title.strip()
         if card.description.strip():
             objective = f"{objective}\n\n{card.description.strip()}"

@@ -1,7 +1,8 @@
-import mimetypes
 import logging
-from pathlib import Path
+import mimetypes
+import os
 from collections.abc import Iterable, Iterator
+from pathlib import Path
 from typing import Any
 
 from domain.session.model.message import Message
@@ -15,8 +16,30 @@ from domain.team.acl.session_context_collector import (
 logger = logging.getLogger(__name__)
 
 
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
 class SessionContextCollectorImpl(SessionContextCollector):
     _ARTIFACT_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+    _IGNORED_ARTIFACT_DIRS = frozenset(
+        {
+            ".git",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".venv",
+            ".claude",
+            ".velpos",
+            "__pycache__",
+            "build",
+            "coverage",
+            "dist",
+            "node_modules",
+            "venv",
+        }
+    )
+    _MAX_ARTIFACTS = 50
     _MAX_SUMMARY_CHARS = 24_000
 
     def __init__(self, session_repository: SessionRepository) -> None:
@@ -90,13 +113,10 @@ class SessionContextCollectorImpl(SessionContextCollector):
         # text, while the actual Write/Edit tool input is intentionally not
         # retained. The execution workspace is the source of truth for those
         # files, so include its user-created files as handoff artifacts too.
-        for candidate in workspace.rglob("*"):
-            if (
-                not candidate.is_file()
-                or candidate.is_symlink()
-                or candidate.name == "CLAUDE.md"
-                or any(part in {".claude", ".velpos"} for part in candidate.relative_to(workspace).parts)
-            ):
+        for candidate in cls._iter_workspace_files(workspace):
+            if len(artifacts) >= cls._MAX_ARTIFACTS:
+                break
+            if candidate.is_symlink() or candidate.name == "CLAUDE.md":
                 continue
             path = str(candidate.resolve())
             artifacts.setdefault(
@@ -107,7 +127,25 @@ class SessionContextCollectorImpl(SessionContextCollector):
                     artifact_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
                 ),
             )
-        return tuple(artifacts[path] for path in sorted(artifacts))
+        return tuple(
+            artifacts[path] for path in sorted(artifacts)[: cls._MAX_ARTIFACTS]
+        )
+
+    @classmethod
+    def _iter_workspace_files(cls, workspace: Path) -> Iterator[Path]:
+        for root, dirnames, filenames in os.walk(
+            workspace,
+            topdown=True,
+            onerror=_raise_walk_error,
+            followlinks=False,
+        ):
+            dirnames[:] = sorted(
+                dirname
+                for dirname in dirnames
+                if dirname not in cls._IGNORED_ARTIFACT_DIRS
+            )
+            for filename in sorted(filenames):
+                yield Path(root, filename)
 
     @classmethod
     def _iter_artifact_tool_paths(cls, value: Any) -> Iterator[tuple[str, str]]:

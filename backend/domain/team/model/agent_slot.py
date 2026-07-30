@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from domain.team.model.status import SlotAvailability
+from domain.team.model.status import SlotAvailability, SlotRole
 from domain.team.model.team_domain_error import TeamDomainError
 
 
@@ -15,6 +15,7 @@ class AgentSlot:
     workspace_ref: str
     created_at: datetime
     availability: SlotAvailability = field(default=SlotAvailability.AVAILABLE)
+    slot_role: SlotRole = field(default=SlotRole.WORKER)
 
     def mark_unstable(self) -> None:
         self.availability = SlotAvailability.UNSTABLE
@@ -25,6 +26,10 @@ class AgentSlot:
     @property
     def is_available(self) -> bool:
         return self.availability == SlotAvailability.AVAILABLE
+
+    @property
+    def is_leader(self) -> bool:
+        return self.slot_role == SlotRole.LEADER
 
     @classmethod
     def create(

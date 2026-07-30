@@ -3,7 +3,12 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from domain.team.model.card_execution import CardExecution
-from domain.team.model.status import WishCardStatus
+from domain.team.model.status import (
+    ExecutionFailureCategory,
+    ExecutionFailurePhase,
+    ExecutionTrigger,
+    WishCardStatus,
+)
 from domain.team.model.team_domain_error import TeamDomainError
 
 
@@ -19,9 +24,17 @@ class WishCard:
     assigned_agent_slot_id: str | None = None
     _version: int = 0
     executions: list[CardExecution] = field(default_factory=list)
+    creator_id: str | None = None
+    attribution_chain: list[dict[str, object]] = field(default_factory=list)
 
     @classmethod
-    def create(cls, team_id: str, title: str, description: str = "") -> "WishCard":
+    def create(
+        cls,
+        team_id: str,
+        title: str,
+        description: str = "",
+        creator_id: str | None = "user",
+    ) -> "WishCard":
         if not team_id.strip():
             raise TeamDomainError("team_id must not be blank")
         if not title.strip():
@@ -36,6 +49,7 @@ class WishCard:
             status=WishCardStatus.BACKLOG,
             created_at=now,
             updated_at=now,
+            creator_id=creator_id,
         )
 
     @property
@@ -81,6 +95,11 @@ class WishCard:
         agent_slot_id: str,
         idempotency_key: str | None = None,
         input_stage_output_id: str | None = None,
+        triggered_by: ExecutionTrigger = ExecutionTrigger.USER,
+        delegated_by_slot_id: str | None = None,
+        flow_plan_id: str | None = None,
+        flow_step_id: str | None = None,
+        delegation_context: str = "",
     ) -> CardExecution:
         if not self.can_be_assigned:
             raise TeamDomainError(f"wish card cannot be assigned in status {self.status.value}")
@@ -94,6 +113,21 @@ class WishCard:
             input_stage_output_id,
         )
         self.executions.append(execution)
+        execution.triggered_by = triggered_by.value
+        execution.delegated_by_slot_id = delegated_by_slot_id
+        execution.flow_plan_id = flow_plan_id
+        execution.flow_step_id = flow_step_id
+        self.attribution_chain.append({
+            "sequence": len(self.attribution_chain) + 1,
+            "execution_id": execution.id,
+            "agent_slot_id": agent_slot_id,
+            "delegated_by_slot_id": delegated_by_slot_id,
+            "trigger": triggered_by.value,
+            "flow_plan_id": flow_plan_id,
+            "flow_step_id": flow_step_id,
+            "instruction": delegation_context,
+            "assigned_at": execution.created_at.isoformat(),
+        })
         self.assigned_agent_slot_id = agent_slot_id
         self.status = WishCardStatus.PREPARING
         self._version += 1
@@ -118,6 +152,19 @@ class WishCard:
             input_stage_output_id=input_stage_output_id,
         )
         self.executions.append(execution)
+        execution.triggered_by = ExecutionTrigger.RETRY.value
+        execution.delegated_by_slot_id = self.assigned_agent_slot_id
+        self.attribution_chain.append({
+            "sequence": len(self.attribution_chain) + 1,
+            "execution_id": execution.id,
+            "agent_slot_id": agent_slot_id,
+            "delegated_by_slot_id": self.assigned_agent_slot_id,
+            "trigger": ExecutionTrigger.RETRY.value,
+            "flow_plan_id": execution.flow_plan_id,
+            "flow_step_id": execution.flow_step_id,
+            "instruction": "",
+            "assigned_at": execution.created_at.isoformat(),
+        })
         self.assigned_agent_slot_id = agent_slot_id
         self.status = WishCardStatus.PREPARING
         self._version += 1
@@ -136,9 +183,16 @@ class WishCard:
         self.status = WishCardStatus.COMPLETED
         self.updated_at = datetime.now(timezone.utc)
 
-    def fail_execution(self, execution_id: str, reason: str) -> None:
+    def fail_execution(
+        self,
+        execution_id: str,
+        reason: str,
+        category: ExecutionFailureCategory = ExecutionFailureCategory.UNKNOWN,
+        phase: ExecutionFailurePhase = ExecutionFailurePhase.EXECUTION,
+        retryable: bool | None = None,
+    ) -> None:
         execution = self._require_active_execution(execution_id)
-        execution.fail(reason)
+        execution.fail(reason, category, phase, retryable)
         self.status = WishCardStatus.FAILED
         self.updated_at = datetime.now(timezone.utc)
 

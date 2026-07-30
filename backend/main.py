@@ -40,7 +40,10 @@ from ohs.http.terminal_router import router as terminal_router
 from ohs.http.usage_router import router as usage_router
 from ohs.http.memory_router import router as memory_router
 from ohs.http.team_router import router as team_router
+from ohs.http.flow_router import router as flow_router
 from ohs.ws.session_ws import router as ws_router
+from ohs.cors_config import DEFAULT_CORS_ORIGINS as _DEFAULT_CORS_ORIGINS
+from ohs.cors_config import parse_cors_origins as _parse_cors_origins
 
 class _LogContextDefaults(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -345,8 +348,10 @@ async def lifespan(app: FastAPI):
     try:
         from ohs.scheduler_runner import ExecutionWatchdogRunner
         watchdog_runner = ExecutionWatchdogRunner()
-        watchdog_runner.start()
-        logger.info("Execution watchdog runner started")
+        # Recovery may wake a persistent Leader and wait for a full model turn.
+        # It must not block ASGI startup or the dev launcher's health deadline.
+        watchdog_runner.start(ignore_terminal_session_grace_on_first_run=True)
+        logger.info("Execution watchdog runner started (initial recovery in background)")
     except Exception:
         logger.error("Failed to start execution watchdog runner", exc_info=True)
 
@@ -424,14 +429,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Velpos", version="0.1.0", lifespan=lifespan)
 
-_cors_origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")]
+_cors_origins = _parse_cors_origins(
+    os.getenv("CORS_ALLOW_ORIGINS", _DEFAULT_CORS_ORIGINS)
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(project_router)
@@ -456,6 +463,7 @@ app.include_router(terminal_router)
 app.include_router(usage_router)
 app.include_router(memory_router)
 app.include_router(team_router)
+app.include_router(flow_router)
 
 
 @app.exception_handler(BusinessException)
