@@ -65,8 +65,8 @@ def _configure_logging(*, force: bool = False) -> None:
     console_handler.setFormatter(formatter)
     console_handler.addFilter(context_filter)
 
-    repo_root = Path(__file__).resolve().parent.parent
-    log_dir = repo_root / ".log"
+    app_dir = Path(__file__).resolve().parent
+    log_dir = app_dir / ".log"
     log_dir.mkdir(parents=True, exist_ok=True)
     error_handler = RotatingFileHandler(
         log_dir / "backend-error.log",
