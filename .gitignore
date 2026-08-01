@@ -29,7 +29,6 @@ __pycache__/
 *.pyc
 .venv/
 backend/.venv/
-uv.lock
 
 # Env
 .env
