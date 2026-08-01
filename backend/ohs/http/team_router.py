@@ -78,6 +78,7 @@ async def create_team(
             slug=s.slug,
             is_leader=s.is_leader,
         ) for s in body.slots),
+        user_id=current_user.id,
     )
     team = await service.create_team(cmd)
     return ApiResponse.success({"id": team.id, "name": team.name})

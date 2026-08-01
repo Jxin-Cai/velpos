@@ -53,7 +53,7 @@ async def test_uses_real_directory_name_when_agent_name_is_missing(
 
     # Assert
     assert project.name == Path(project.dir_path).name
-    assert Path(project.dir_path).parent == tmp_path / ".velpos" / "agents"
+    assert Path(project.dir_path).parent == tmp_path / "velpos" / "1" / "agents"
 
 
 @pytest.mark.asyncio

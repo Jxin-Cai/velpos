@@ -51,7 +51,7 @@ class ProjectApplicationService:
         if self._workspace_root_resolver:
             root = self._workspace_root_resolver.agent_root(command.user_id)
         else:
-            root = default_agent_workspace_root()
+            root = default_agent_workspace_root(command.user_id)
         workspace = await asyncio.to_thread(
             create_workspace_directory,
             str(root),

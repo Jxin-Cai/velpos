@@ -204,7 +204,10 @@ class LeaderSessionManager:
         leader_slot: AgentSlot,
     ) -> Session:
         agent_project = await ensure_agent_project(
-            team.name, leader_slot, self._project_repo
+            team.name,
+            leader_slot,
+            self._project_repo,
+            team_project_id=team.project_id,
         )
         session_cmd = CreateSessionCommand(
             model=resolve_default_model(),

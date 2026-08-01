@@ -61,7 +61,12 @@ class TeamLifecycleService:
                     workspace_ref=workspace_ref,
                 )
                 slot.slot_role = role
-                await ensure_agent_project(team.name, slot, self._project_repo)
+                await ensure_agent_project(
+                    team.name,
+                    slot,
+                    self._project_repo,
+                    user_id=cmd.user_id,
+                )
             await self._team_repo.save(team)
 
             # Initialize Leader's persistent session

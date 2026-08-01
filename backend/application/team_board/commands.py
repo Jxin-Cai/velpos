@@ -17,6 +17,7 @@ class CreateTeamCommand:
     project_id: str
     root_path: str
     slots: tuple[AgentSlotConfig, ...]
+    user_id: int = 1
 
 
 @dataclass(frozen=True)

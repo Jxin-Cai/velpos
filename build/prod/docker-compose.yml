@@ -33,9 +33,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
-      PROJECTS_ROOT_DIR: /data/projects
+      PROJECTS_ROOT_DIR: /home/appuser/velpos
     volumes:
-      - ${PROJECTS_HOST_DIR:-/tmp/agent_projects}:/data/projects
+      - ${PROJECTS_HOST_DIR:-${HOME}/velpos}:/home/appuser/velpos
       - claude_config:/home/appuser/.claude
     depends_on:
       mysql:

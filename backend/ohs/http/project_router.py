@@ -115,7 +115,11 @@ async def create_team_project(
     await project_repo.save(project)
     try:
         team = await team_service.create_team(CreateTeamCommand(
-            name=project.name, project_id=project.id, root_path=project.dir_path, slots=tuple(slots)
+            name=project.name,
+            project_id=project.id,
+            root_path=project.dir_path,
+            slots=tuple(slots),
+            user_id=current_user.id,
         ))
     except Exception:
         await project_repo.remove(project.id)
@@ -166,7 +170,12 @@ async def list_projects(
 async def get_project(
     project_id: str,
     service: ServiceDep,
+    project_repo: ProjectRepoDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[ProjectDetailResponse]:
+    from application.shared.ownership_guard import ensure_user_owns_project
+    from infr.config.app_config import app_config
+    await ensure_user_owns_project(project_repo, project_id, current_user.id, mode=app_config.mode)
     project = await service.get_project(project_id)
     # Get sessions for this project
     sessions = await service.get_sessions_by_project(project_id)
@@ -180,7 +189,12 @@ async def get_project(
 async def delete_project(
     project_id: str,
     service: ServiceDep,
+    project_repo: ProjectRepoDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[None]:
+    from application.shared.ownership_guard import ensure_user_owns_project
+    from infr.config.app_config import app_config
+    await ensure_user_owns_project(project_repo, project_id, current_user.id, mode=app_config.mode)
     await service.delete_project(project_id)
     return ApiResponse.success()
 

@@ -8,12 +8,18 @@ _WORKSPACE_ID_LENGTH = 8
 _MAX_ALLOCATION_ATTEMPTS = 10
 
 
-def default_agent_workspace_root() -> Path:
-    return Path.home() / ".velpos" / "agents"
+def default_user_workspace_root(user_id: int = 1) -> Path:
+    if user_id <= 0:
+        raise ValueError("user_id must be a positive integer")
+    return Path.home() / "velpos" / str(user_id)
 
 
-def default_team_workspace_root() -> Path:
-    return Path.home() / ".velpos" / "teams"
+def default_agent_workspace_root(user_id: int = 1) -> Path:
+    return default_user_workspace_root(user_id) / "agents"
+
+
+def default_team_workspace_root(user_id: int = 1) -> Path:
+    return default_user_workspace_root(user_id) / "teams"
 
 
 def github_repository_name(github_url: str) -> str:

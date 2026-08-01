@@ -73,7 +73,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         from infr.repository.user_repository_impl import UserRepositoryImpl
 
         async with async_session_factory() as db_session:
-            auth_svc = AuthApplicationService(UserRepositoryImpl(db_session))
+            auth_svc = AuthApplicationService(
+                UserRepositoryImpl(db_session),
+                jwt_secret=app_config.jwt_secret,
+                jwt_expire_minutes=app_config.jwt_expire_minutes,
+                mode=app_config.mode,
+            )
             user_id = auth_svc.verify_token(token)
             if user_id is None:
                 return JSONResponse(

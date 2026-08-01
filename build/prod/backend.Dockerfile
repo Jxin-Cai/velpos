@@ -24,8 +24,8 @@ COPY . .
 # Non-root user — Claude CLI refuses --dangerously-skip-permissions as root
 RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -m appuser \
     && chown -R appuser:appuser /app \
-    && mkdir -p /data/projects /home/appuser/.claude /home/appuser/.ssh \
-    && chown -R appuser:appuser /data/projects /home/appuser/.claude /home/appuser/.ssh \
+    && mkdir -p /home/appuser/velpos /home/appuser/.claude /home/appuser/.ssh \
+    && chown -R appuser:appuser /home/appuser/velpos /home/appuser/.claude /home/appuser/.ssh \
     && chmod 700 /home/appuser/.ssh
 USER appuser
 ENV HOME=/home/appuser

@@ -238,7 +238,7 @@ All dev settings are in this single file. `CLAUDE_CLI_PATH` is **auto-detected**
 | `CLAUDE_RESULT_SETTLE_SECONDS` | `0.1` | Grace window for task events that arrive immediately after an SDK result |
 | `CLAUDE_FINAL_RESULT_TIMEOUT_SECONDS` | `300` | Maximum idle wait for a final result after all background tasks finish |
 | `CLAUDE_BACKGROUND_TASK_TIMEOUT_SECONDS` | `3600` | Maximum total runtime for background tasks in one turn |
-| `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project root on the **host filesystem** |
+| `PROJECTS_ROOT_DIR` | `~/velpos` | Workspace root; users are isolated under `~/velpos/{user_id}` |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed browser origins |
 
 </details>
@@ -284,13 +284,17 @@ cp build/prod/.env.example build/prod/.env
 
 | Variable | Default | Description |
 |---|---|---|
+| `VELPOS_MODE` | `pro` | Enables authentication and production validation |
+| `JWT_SECRET` | — | Required random JWT secret, at least 32 characters |
+| `JWT_EXPIRE_MINUTES` | `1440` | Login token lifetime in minutes |
+| `VELPOS_ADMIN_PASSWORD` | — | Required initial `admin` password, at least 12 characters |
+| `VELPOS_REGISTRATION_ENABLED` | `false` | Whether public account registration is enabled |
 | `MYSQL_ROOT_PASSWORD` | — | MySQL root password |
 | `MYSQL_DATABASE` | `velpos` | Database name |
 | `APP_PORT` | `80` | Public port exposed by nginx |
-| `PROJECTS_HOST_DIR` | `~/.agent_projects` | Host directory mounted into the container as `/data/projects` |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `PROJECTS_HOST_DIR` | `${HOME}/velpos` | Host workspace root; contains `{user_id}/agents` and `{user_id}/teams` |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
-| `DEFAULT_MODEL` | `claude-opus-4-6` | Default model |
+| `CORS_ALLOW_ORIGINS` | *(empty)* | Same-origin only; set an explicit allowlist when needed |
 
 The following are **auto-configured** by docker-compose and do not need to be set:
 
@@ -298,7 +302,7 @@ The following are **auto-configured** by docker-compose and do not need to be se
 |---|---|---|
 | `DATABASE_URL` | `mysql+aiomysql://root:...@mysql:3306/velpos` | Inter-container networking |
 | `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | Installed in the backend image |
-| `PROJECTS_ROOT_DIR` | `/data/projects` | Container-internal mount point |
+| `PROJECTS_ROOT_DIR` | `/home/appuser/velpos` | Container-internal workspace root |
 
 </details>
 

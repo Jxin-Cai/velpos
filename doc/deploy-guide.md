@@ -69,7 +69,7 @@ The defaults work out of the box. Key variables:
 | `BACKEND_PORT` | `8083` | |
 | `FRONTEND_PORT` | `3000` | |
 | `CLAUDE_CLI_PATH` | *(auto-detected)* | Only set if `claude` is not in PATH |
-| `PROJECTS_ROOT_DIR` | `~/claude-projects` | Project workspace directory |
+| `PROJECTS_ROOT_DIR` | `~/velpos` | User workspaces live under `~/velpos/{user_id}` |
 
 ### Step 2: Start
 
@@ -126,26 +126,27 @@ Prod mode runs everything in Docker: MySQL + backend + frontend (nginx). Claude 
 cp build/prod/.env.example build/prod/.env
 ```
 
-Edit `build/prod/.env` — two values must be changed:
+Edit `build/prod/.env`. The three blank secrets must be provided before startup:
 
 | Variable | Action | Example |
 |----------|--------|---------|
-| `ANTHROPIC_API_KEY` | **Required.** Replace `sk-ant-xxx` with your real key | `sk-ant-api03-...` |
-| `MYSQL_ROOT_PASSWORD` | **Recommended.** Replace `changeme` with a strong password | `MyStr0ngP@ss!` |
+| `JWT_SECRET` | **Required.** At least 32 random characters | Generate with `openssl rand -hex 32` |
+| `VELPOS_ADMIN_PASSWORD` | **Required.** Initial `admin` password, at least 12 characters | Use a password manager |
+| `MYSQL_ROOT_PASSWORD` | **Required.** Use a strong URL-safe password | Use a password manager |
 | `APP_PORT` | Optional. Default `80` | `8080` |
-| `PROJECTS_HOST_DIR` | Optional. Default `/tmp/agent_projects` | `/home/user/projects` |
+| `PROJECTS_HOST_DIR` | Optional. Default `${HOME}/velpos` | `/srv/velpos` |
 
 Auto-configured by docker-compose (do not set manually):
 - `DATABASE_URL` — inter-container MySQL connection
 - `CLAUDE_CLI_PATH` — `/usr/local/bin/claude` inside backend container
-- `PROJECTS_ROOT_DIR` — `/data/projects` inside container
+- `PROJECTS_ROOT_DIR` — `/home/appuser/velpos` inside container
 
-**Important:** `PROJECTS_HOST_DIR` must be an absolute path. Docker does not expand `~`.
+**Important:** use `${HOME}/velpos` or an absolute path. Docker does not expand a literal `~`.
 
 ### Step 2: Create projects directory
 
 ```bash
-mkdir -p /tmp/agent_projects   # or your configured PROJECTS_HOST_DIR
+mkdir -p "${HOME}/velpos"   # or your configured PROJECTS_HOST_DIR
 ```
 
 ### Step 3: Build and start

@@ -761,27 +761,7 @@ onMounted(async () => {
     return
   }
 
-  try {
-    await loadSessions()
-    restoreRunningSessions()
-    await loadScheduleCounts()
-    globalEventConnection = createGlobalEventConnection()
-    globalEventConnection.onEvent(handleGlobalEvent)
-    globalEventConnection.onReconnect(() => {
-      refreshBoardAfterReconnect()
-    })
-    window.addEventListener('vp-schedules-changed', loadScheduleCounts)
-    if (sidebarMode.value === 'teams') {
-      const firstTeam = projects.value.find(project => project.project_type === 'team')
-      handleProjectSelect(firstTeam?.id || null)
-    } else {
-      restoreLastSession()
-    }
-    ready.value = true
-  } catch (e) {
-    initError.value = e.message || 'Failed to load sessions'
-    ready.value = true
-  }
+  await bootApp()
 
   // Fade out splash screen after app is ready
   nextTick(() => {

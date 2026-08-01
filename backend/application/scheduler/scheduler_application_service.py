@@ -178,6 +178,7 @@ class SchedulerApplicationService:
                     project_id=task.project_id,
                     project_dir=project_dir,
                     name=f"[Scheduled] {task.name}",
+                    user_id=task.user_id,
                 ))
             else:
                 session = await service.get_session(task.session_id)

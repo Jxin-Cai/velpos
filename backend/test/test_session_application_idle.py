@@ -158,6 +158,32 @@ async def test_does_not_send_hidden_query_when_session_is_created(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_creates_session_workspace_under_user_agents_when_project_is_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    # Arrange
+    monkeypatch.setenv("PROJECTS_ROOT_DIR", str(tmp_path / "velpos"))
+    gateway = SimpleNamespace(
+        set_permission_mode=AsyncMock(),
+        open_fresh_connection=AsyncMock(),
+    )
+    service = _create_service(Mock(), gateway)
+    service._project_repository = None
+    command = CreateSessionCommand(
+        model="test-model",
+        name="scratch",
+        user_id=42,
+    )
+
+    # Act
+    session = await service.create_session(command)
+
+    # Assert
+    assert session.project_dir == str(tmp_path / "velpos" / "42" / "agents" / "scratch")
+
+
+@pytest.mark.asyncio
 async def test_invokes_delete_session_files_via_to_thread_when_project_dir_exists(
     monkeypatch,
 ) -> None:

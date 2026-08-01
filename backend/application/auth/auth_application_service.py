@@ -9,7 +9,6 @@ import jwt
 
 from domain.user.model.user import User, UserRole
 from domain.user.repository.user_repository import UserRepository
-from infr.config.app_config import app_config
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +17,17 @@ _ALGORITHM = "HS256"
 
 class AuthApplicationService:
 
-    def __init__(self, user_repository: UserRepository) -> None:
+    def __init__(
+        self,
+        user_repository: UserRepository,
+        jwt_secret: str,
+        jwt_expire_minutes: int,
+        mode: str = "dev",
+    ) -> None:
         self._user_repo = user_repository
+        self._jwt_secret = jwt_secret
+        self._jwt_expire_minutes = jwt_expire_minutes
+        self._mode = mode
 
     async def register(
         self,
@@ -33,7 +41,7 @@ class AuthApplicationService:
             raise BusinessException("Username already exists", "USER_EXISTS")
 
         role = UserRole.MEMBER
-        if app_config.mode == "pro":
+        if self._mode == "pro":
             has_active_admin = await self._has_usable_admin()
             if not has_active_admin:
                 role = UserRole.ADMIN
@@ -66,7 +74,7 @@ class AuthApplicationService:
         if not self._verify_password(password, user.hashed_password):
             raise BusinessException("Invalid username or password", "AUTH_FAILED")
 
-        token = self._generate_token(user)
+        token = self._generate_token(user)  # instance method – uses self._jwt_secret
         return user, token
 
     async def get_user_by_id(self, user_id: int) -> User | None:
@@ -74,31 +82,28 @@ class AuthApplicationService:
 
     def verify_token(self, token: str) -> int | None:
         try:
-            payload = jwt.decode(token, app_config.jwt_secret, algorithms=[_ALGORITHM])
+            payload = jwt.decode(token, self._jwt_secret, algorithms=[_ALGORITHM])
             return int(payload["sub"])
         except (jwt.InvalidTokenError, KeyError, ValueError):
             return None
 
-    @staticmethod
-    def _generate_token(user: User) -> str:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=app_config.jwt_expire_minutes)
+    def _generate_token(self, user: User) -> str:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=self._jwt_expire_minutes)
         payload = {
             "sub": str(user.id),
             "username": user.username,
             "exp": expire,
         }
-        return jwt.encode(payload, app_config.jwt_secret, algorithm=_ALGORITHM)
+        return jwt.encode(payload, self._jwt_secret, algorithm=_ALGORITHM)
 
-    @staticmethod
-    def _hash_password(password: str) -> str:
-        salt = app_config.jwt_secret[:16]
+    def _hash_password(self, password: str) -> str:
+        salt = self._jwt_secret[:16]
         return hashlib.pbkdf2_hmac(
             "sha256", password.encode(), salt.encode(), 100_000
         ).hex()
 
-    @staticmethod
-    def _verify_password(password: str, hashed: str) -> bool:
-        salt = app_config.jwt_secret[:16]
+    def _verify_password(self, password: str, hashed: str) -> bool:
+        salt = self._jwt_secret[:16]
         computed = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), salt.encode(), 100_000
         ).hex()

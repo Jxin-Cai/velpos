@@ -203,7 +203,12 @@ class CardExecutionService:
         card.start_execution(new_execution.id)
         await self._card_repo.save(card)
         await self._execution_repo.save(new_execution)
-        agent_project = await ensure_agent_project(team.name, target_slot, self._project_repo)
+        agent_project = await ensure_agent_project(
+            team.name,
+            target_slot,
+            self._project_repo,
+            team_project_id=team.project_id,
+        )
         session, prompt = await self._create_execution_session(
             team=team,
             card=card,
@@ -306,7 +311,12 @@ class CardExecutionService:
         card.start_execution(execution.id)
         await self._card_repo.save(card)
         await self._execution_repo.save(execution)
-        agent_project = await ensure_agent_project(team.name, target_slot, self._project_repo)
+        agent_project = await ensure_agent_project(
+            team.name,
+            target_slot,
+            self._project_repo,
+            team_project_id=team.project_id,
+        )
         session, prompt = await self._create_execution_session(
             team=team,
             card=card,

@@ -21,11 +21,22 @@ async def ensure_agent_project(
     team_name: str,
     slot: AgentSlot,
     project_repo: ProjectRepository,
+    user_id: int | None = None,
+    team_project_id: str = "",
 ) -> Project:
     project_name = f"{team_name}-{slot.name}"
     project = await project_repo.find_by_dir_path(slot.workspace_ref)
     if project is None:
-        project = Project.create(name=project_name, dir_path=slot.workspace_ref)
+        if user_id is None and team_project_id:
+            team_project = await project_repo.find_by_id(team_project_id)
+            user_id = team_project.user_id if team_project is not None else None
+        if user_id is None:
+            raise TeamDomainError("Cannot resolve the owner of the agent workspace")
+        project = Project.create(
+            name=project_name,
+            dir_path=slot.workspace_ref,
+            user_id=user_id,
+        )
     elif project.project_type == "team":
         raise TeamDomainError(
             f"Agent workspace is already owned by a team project: {slot.workspace_ref}"

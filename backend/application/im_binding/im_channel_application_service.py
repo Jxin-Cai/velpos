@@ -56,6 +56,7 @@ class ImChannelApplicationService:
         # infr implementations directly.
         session_service_context_factory: Callable[[], AsyncContextManager[SessionApplicationService]] | None = None,
         binding_context_factory: Callable[[], AsyncContextManager[tuple[ImBindingRepository, ChannelInitRepository]]] | None = None,
+        mode: str = "dev",
     ) -> None:
         self._registry = registry
         self._binding_repo = binding_repo
@@ -69,6 +70,7 @@ class ImChannelApplicationService:
         self._stage_inbound_attachments = stage_inbound_attachments_fn
         self._session_service_context_factory = session_service_context_factory
         self._binding_context_factory = binding_context_factory
+        self._mode = mode
 
     # ── 渠道发现 ──
 
@@ -556,11 +558,7 @@ class ImChannelApplicationService:
         try:
             async with async_session_factory() as db_session:
                 session_service = await self._session_service_factory(db_session)
-                # Disable IM sync callbacks — this inbound flow handles its own
-                # reply via adapter.send_message; letting the callbacks fire would
-                # cause duplicate messages back to the IM channel.
-                session_service._query_engine._on_assistant_response = None
-                session_service._query_engine._on_user_message = None
+                session_service.suppress_outbound_callbacks()
                 try:
                     session = await session_service.get_session(binding.session_id)
                 except BusinessException:

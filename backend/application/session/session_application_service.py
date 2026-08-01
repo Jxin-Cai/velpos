@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 from application.git_helpers import get_current_git_branch as _get_current_git_branch
 from collections.abc import Awaitable, Callable
@@ -140,6 +141,10 @@ class SessionApplicationService:
 
     async def steer_queued_message(self, session_id: str) -> dict:
         return await self._query_engine.steer_queued_message(session_id)
+
+    def suppress_outbound_callbacks(self) -> None:
+        self._query_engine._on_assistant_response = None
+        self._query_engine._on_user_message = None
 
     # ── Persistence helpers ──────────────────────────────────
 
@@ -345,11 +350,14 @@ class SessionApplicationService:
                 project_dir = project.dir_path
 
         if not project_dir:
-            projects_root = os.getenv(
-                "PROJECTS_ROOT_DIR", os.path.expanduser("~/claude-projects")
-            )
+            projects_root = Path(
+                os.path.expanduser(os.getenv("PROJECTS_ROOT_DIR", "~/velpos"))
+            ) / str(command.user_id) / "agents"
             dir_name = command.name.strip() if command.name else "default"
-            project_dir = os.path.join(projects_root, dir_name)
+            safe_dir_name = Path(dir_name).name
+            if safe_dir_name in {"", ".", ".."}:
+                safe_dir_name = "default"
+            project_dir = str(projects_root / safe_dir_name)
 
         os.makedirs(project_dir, exist_ok=True)
 

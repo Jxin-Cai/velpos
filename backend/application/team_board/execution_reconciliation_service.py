@@ -160,7 +160,12 @@ class ExecutionReconciliationService:
         active_execution = card.active_execution
         if active_execution is None:
             raise TeamDomainError(f"active execution not found after start: {execution.id}")
-        agent_project = await ensure_agent_project(team.name, target_slot, self._project_repo)
+        agent_project = await ensure_agent_project(
+            team.name,
+            target_slot,
+            self._project_repo,
+            team_project_id=team.project_id,
+        )
         session, prompt = await self._create_execution_session(
             team=team, card=card, execution=active_execution,
             agent_project_id=agent_project.id,

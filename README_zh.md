@@ -238,7 +238,7 @@ cp build/dev/.env.example build/dev/.env
 | `CLAUDE_RESULT_SETTLE_SECONDS` | `0.1` | SDK Result 后等待紧随其后的后台任务事件的宽限时间 |
 | `CLAUDE_FINAL_RESULT_TIMEOUT_SECONDS` | `300` | 后台任务全部结束后等待最终 Result 的最大静默时间 |
 | `CLAUDE_BACKGROUND_TASK_TIMEOUT_SECONDS` | `3600` | 单轮后台任务允许的最长总运行时间 |
-| `PROJECTS_ROOT_DIR` | `~/claude-projects` | **宿主机文件系统**上的项目根目录 |
+| `PROJECTS_ROOT_DIR` | `~/velpos` | 工作空间根目录；用户空间隔离在 `~/velpos/{user_id}` 下 |
 | `CORS_ALLOW_ORIGINS` | `*` | 允许的浏览器来源 |
 
 </details>
@@ -284,13 +284,17 @@ cp build/prod/.env.example build/prod/.env
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
+| `VELPOS_MODE` | `pro` | 启用鉴权和生产配置校验 |
+| `JWT_SECRET` | — | 必填的 JWT 随机密钥，至少 32 个字符 |
+| `JWT_EXPIRE_MINUTES` | `1440` | 登录令牌有效分钟数 |
+| `VELPOS_ADMIN_PASSWORD` | — | 必填的初始 `admin` 密码，至少 12 个字符 |
+| `VELPOS_REGISTRATION_ENABLED` | `false` | 是否允许公开注册账号 |
 | `MYSQL_ROOT_PASSWORD` | — | MySQL root 密码 |
 | `MYSQL_DATABASE` | `velpos` | 数据库名 |
 | `APP_PORT` | `80` | nginx 对外暴露端口 |
-| `PROJECTS_HOST_DIR` | `~/.agent_projects` | 宿主机目录，挂载到容器的 `/data/projects` |
-| `ANTHROPIC_API_KEY` | — | Anthropic API Key |
+| `PROJECTS_HOST_DIR` | `${HOME}/velpos` | 宿主机工作空间根目录，包含 `{user_id}/agents` 和 `{user_id}/teams` |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
-| `DEFAULT_MODEL` | `claude-opus-4-6` | 默认模型 |
+| `CORS_ALLOW_ORIGINS` | *（空）* | 默认仅同源访问；需要跨域时填写明确白名单 |
 
 以下变量由 docker-compose **自动配置**，无需手动设置：
 
@@ -298,7 +302,7 @@ cp build/prod/.env.example build/prod/.env
 |---|---|---|
 | `DATABASE_URL` | `mysql+aiomysql://root:...@mysql:3306/velpos` | 容器间网络互通 |
 | `CLAUDE_CLI_PATH` | `/usr/local/bin/claude` | 在后端镜像中已安装 |
-| `PROJECTS_ROOT_DIR` | `/data/projects` | 容器内挂载点 |
+| `PROJECTS_ROOT_DIR` | `/home/appuser/velpos` | 容器内工作空间根目录 |
 
 </details>
 

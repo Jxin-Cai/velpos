@@ -174,10 +174,42 @@ async def test_agent_project_uses_full_slot_name_when_project_is_missing() -> No
     )
 
     # Act
-    project = await ensure_agent_project("delivery", slot, project_repo)
+    project = await ensure_agent_project(
+        "delivery",
+        slot,
+        project_repo,
+        user_id=42,
+    )
 
     # Assert
     assert project.name == "delivery-Software architect"
+    assert project.user_id == 42
+
+
+@pytest.mark.asyncio
+async def test_agent_project_inherits_owner_when_recreated_for_team_project() -> None:
+    # Arrange
+    project_repo = SimpleNamespace(
+        find_by_dir_path=AsyncMock(return_value=None),
+        find_by_id=AsyncMock(return_value=SimpleNamespace(user_id=42)),
+        save=AsyncMock(),
+    )
+    slot = SimpleNamespace(
+        name="Backend",
+        role="backend-architect",
+        workspace_ref="/teams/delivery-backend",
+    )
+
+    # Act
+    project = await ensure_agent_project(
+        "delivery",
+        slot,
+        project_repo,
+        team_project_id="team-project",
+    )
+
+    # Assert
+    assert project.user_id == 42
 
 
 @pytest.mark.asyncio

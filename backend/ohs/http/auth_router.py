@@ -46,7 +46,12 @@ class AuthConfigResponse(BaseModel):
 def _get_auth_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> AuthApplicationService:
-    return AuthApplicationService(UserRepositoryImpl(db_session))
+    return AuthApplicationService(
+        UserRepositoryImpl(db_session),
+        jwt_secret=app_config.jwt_secret,
+        jwt_expire_minutes=app_config.jwt_expire_minutes,
+        mode=app_config.mode,
+    )
 
 
 def _to_user_response(user: User) -> UserResponse:
@@ -84,6 +89,9 @@ async def register(
     body: RegisterRequest,
     auth_svc: AuthApplicationService = Depends(_get_auth_service),
 ) -> ApiResponse[UserResponse]:
+    if app_config.mode == "pro" and not app_config.registration_enabled:
+        from domain.shared.business_exception import BusinessException
+        raise BusinessException("Registration is disabled", "REGISTRATION_DISABLED")
     user = await auth_svc.register(
         username=body.username,
         password=body.password,

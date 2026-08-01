@@ -7,6 +7,10 @@ from pathlib import Path
 class WorkspaceRootResolver(ABC):
 
     @abstractmethod
+    def user_root(self, user_id: int) -> Path:
+        ...
+
+    @abstractmethod
     def agent_root(self, user_id: int) -> Path:
         ...
 

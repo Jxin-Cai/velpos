@@ -78,5 +78,5 @@ def test_returns_velpos_roots_when_default_directories_are_requested(
     team_root = default_team_workspace_root()
 
     # Assert
-    assert agent_root == tmp_path / ".velpos" / "agents"
-    assert team_root == tmp_path / ".velpos" / "teams"
+    assert agent_root == tmp_path / "velpos" / "1" / "agents"
+    assert team_root == tmp_path / "velpos" / "1" / "teams"

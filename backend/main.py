@@ -291,7 +291,13 @@ async def lifespan(app: FastAPI):
             user_repo = UserRepositoryImpl(admin_session)
             admin_user = await user_repo.find_by_id(1)
             if admin_user is not None and not admin_user.hashed_password:
-                hashed = AuthApplicationService._hash_password(app_config.admin_password)
+                auth_svc = AuthApplicationService(
+                    user_repo,
+                    jwt_secret=app_config.jwt_secret,
+                    jwt_expire_minutes=app_config.jwt_expire_minutes,
+                    mode=app_config.mode,
+                )
+                hashed = auth_svc._hash_password(app_config.admin_password)
                 admin_user.update_password(hashed)
                 await user_repo.save(admin_user)
                 await admin_session.commit()

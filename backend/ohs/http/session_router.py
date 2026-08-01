@@ -16,6 +16,7 @@ from domain.user.model.user import User
 from ohs.auth_dependency import get_current_user
 from ohs.dependencies import (
     get_im_channel_application_service,
+    get_project_repository,
     get_session_application_service,
     get_session_branch_application_service,
 )
@@ -62,6 +63,7 @@ ImServiceDep = Annotated[
 async def create_session(
     request: CreateSessionRequest,
     service: ServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[SessionResponse]:
     model = request.model
     if not model:
@@ -74,6 +76,7 @@ async def create_session(
         project_id=request.project_id,
         project_dir=request.project_dir,
         name=request.name,
+        user_id=current_user.id,
     )
     session = await service.create_session(command)
     return ApiResponse.success(SessionResponse.from_domain(session))
@@ -136,8 +139,13 @@ async def list_models(
 async def get_session(
     session_id: str,
     service: ServiceDep,
+    project_repo=Depends(get_project_repository),
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[SessionDetailResponse]:
     session = await service.get_session(session_id)
+    from application.shared.ownership_guard import ensure_user_owns_session
+    from infr.config.app_config import app_config
+    await ensure_user_owns_session(project_repo, session.project_id, current_user.id, mode=app_config.mode)
     git_branch = await service.get_current_git_branch(session.project_dir)
     return ApiResponse.success(SessionDetailResponse.from_domain(session, git_branch=git_branch))
 
@@ -263,7 +271,13 @@ async def list_session_audit_events(
 async def delete_session(
     session_id: str,
     service: ServiceDep,
+    project_repo=Depends(get_project_repository),
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[None]:
+    session = await service.get_session(session_id)
+    from application.shared.ownership_guard import ensure_user_owns_session
+    from infr.config.app_config import app_config
+    await ensure_user_owns_session(project_repo, session.project_id, current_user.id, mode=app_config.mode)
     await service.delete_session(session_id)
     return ApiResponse.success()
 
@@ -273,7 +287,13 @@ async def rename_session(
     session_id: str,
     request: RenameSessionRequest,
     service: ServiceDep,
+    project_repo=Depends(get_project_repository),
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[SessionResponse]:
+    session = await service.get_session(session_id)
+    from application.shared.ownership_guard import ensure_user_owns_session
+    from infr.config.app_config import app_config
+    await ensure_user_owns_session(project_repo, session.project_id, current_user.id, mode=app_config.mode)
     session = await service.rename_session(session_id, request.name)
     return ApiResponse.success(SessionResponse.from_domain(session))
 
