@@ -14,10 +14,10 @@ cd velpos
 
 # Or specify directly
 ./setup.sh dev    # Development
-./setup.sh prod   # Production
+./build/prod/deploy.sh  # Production deploy/update
 ```
 
-The `setup.sh` script handles prerequisite checks, environment configuration, and service startup automatically. The sections below describe the manual process for reference and troubleshooting.
+The scripts handle prerequisite checks, environment configuration, and service startup automatically. The sections below describe the manual process for reference and troubleshooting.
 
 ---
 
@@ -122,6 +122,8 @@ Prod mode runs everything in Docker: MySQL + backend + frontend (nginx). Claude 
 
 ### Step 1: Environment
 
+The deploy script creates `build/prod/.env` interactively on its first run. To prepare it manually instead:
+
 ```bash
 cp build/prod/.env.example build/prod/.env
 ```
@@ -152,10 +154,17 @@ mkdir -p "${HOME}/velpos"   # or your configured PROJECTS_HOST_DIR
 ### Step 3: Build and start
 
 ```bash
-docker compose -f build/prod/docker-compose.yml up --build -d
+./build/prod/deploy.sh
 ```
 
-First run takes several minutes (image pulls + build).
+For subsequent releases, pull the code and run the same command. Named volumes and the workspace bind mount are preserved:
+
+```bash
+git pull
+./build/prod/deploy.sh
+```
+
+The script validates prerequisites and configuration, pulls base images, rebuilds and recreates the application containers, and waits for the services to become ready. First run takes several minutes (image pulls + build).
 
 ### Step 4: Verify
 
@@ -191,7 +200,7 @@ docker compose -f build/prod/docker-compose.yml down
 docker compose -f build/prod/docker-compose.yml down -v
 
 # Rebuild after code changes
-docker compose -f build/prod/docker-compose.yml up --build -d
+./build/prod/deploy.sh
 ```
 
 ---

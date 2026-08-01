@@ -174,10 +174,10 @@ cd velpos
 ```bash
 ./setup.sh          # 交互模式 — 选择 dev 或 prod
 ./setup.sh dev      # 开发环境
-./setup.sh prod     # 生产环境
+./build/prod/deploy.sh  # 生产环境一键部署/更新
 ```
 
-脚本会自动检查前置依赖、创建环境配置文件、提示输入必要密钥并启动所有服务。完整的机器可读部署指南请参考 [doc/deploy-guide.md](./doc/deploy-guide.md)（适合让 Claude Code 自动完成部署）。
+脚本会自动检查前置依赖、创建环境配置文件、提示输入必要密钥并启动所有服务。生产环境后续更新仍执行 `./build/prod/deploy.sh`。完整的机器可读部署指南请参考 [doc/deploy-guide.md](./doc/deploy-guide.md)（适合让 Claude Code 自动完成部署）。
 
 ### 开发环境
 
@@ -275,6 +275,8 @@ build/dev/start.sh logs      # 查看后端日志
 
 **1. 配置**
 
+首次执行部署脚本时会自动创建配置并提示设置必要密码。如果需要预先配置，也可以手动复制模板：
+
 ```bash
 cp build/prod/.env.example build/prod/.env
 ```
@@ -309,11 +311,19 @@ cp build/prod/.env.example build/prod/.env
 **2. 构建并启动**
 
 ```bash
-cd build/prod
-docker compose up --build -d
+./build/prod/deploy.sh
 ```
 
-栈包含 MySQL、后端和前端（nginx）。通过 `http://localhost`（或你配置的端口）访问界面。
+首次执行时，脚本会创建 `build/prod/.env`、生成 JWT 密钥，并以隐藏输入方式要求设置管理员和 MySQL 密码。脚本随后会校验环境、拉取基础镜像、重建并启动 MySQL、后端和前端（nginx），等待服务健康后才返回成功。
+
+以后更新版本只需：
+
+```bash
+git pull
+./build/prod/deploy.sh
+```
+
+数据库和 Claude 配置使用 Docker 卷持久化，工作空间使用 `PROJECTS_HOST_DIR` 持久化；重新部署不会删除这些数据。部署失败时，脚本会输出容器状态和近期日志。通过 `http://localhost`（或你配置的端口）访问界面。
 
 <br/>
 

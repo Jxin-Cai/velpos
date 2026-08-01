@@ -174,10 +174,10 @@ cd velpos
 ```bash
 ./setup.sh          # Interactive — asks dev or prod
 ./setup.sh dev      # Development mode
-./setup.sh prod     # Production mode
+./build/prod/deploy.sh  # One-command production deploy/update
 ```
 
-The setup script checks prerequisites, creates environment files, prompts for required secrets, and starts all services. See [doc/deploy-guide.md](./doc/deploy-guide.md) for the full machine-readable guide (useful for Claude Code automated setup).
+The scripts check prerequisites, create environment files, prompt for required secrets, and start all services. Run `./build/prod/deploy.sh` again for later production updates. See [doc/deploy-guide.md](./doc/deploy-guide.md) for the full machine-readable guide (useful for Claude Code automated setup).
 
 ### Development
 
@@ -275,6 +275,8 @@ build/dev/start.sh logs      # Tail backend logs
 
 **1. Configure**
 
+The deploy script creates the configuration and prompts for the required passwords on its first run. To configure it in advance, copy the template manually:
+
 ```bash
 cp build/prod/.env.example build/prod/.env
 ```
@@ -309,11 +311,19 @@ The following are **auto-configured** by docker-compose and do not need to be se
 **2. Build and start**
 
 ```bash
-cd build/prod
-docker compose up --build -d
+./build/prod/deploy.sh
 ```
 
-The stack includes MySQL, backend, and frontend (nginx). Access the UI at `http://localhost` (or the port you configured).
+On the first run, the script creates `build/prod/.env`, generates the JWT secret, and securely prompts for the admin and MySQL passwords. It then validates the environment, pulls base images, rebuilds and starts MySQL, backend, and frontend (nginx), and waits until the services are ready.
+
+For later updates, run:
+
+```bash
+git pull
+./build/prod/deploy.sh
+```
+
+Database and Claude configuration are persisted in Docker volumes, while workspaces are persisted in `PROJECTS_HOST_DIR`; redeploying does not delete this data. If deployment fails, the script prints container status and recent logs. Access the UI at `http://localhost` (or the port you configured).
 
 <br/>
 
