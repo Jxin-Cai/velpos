@@ -34,6 +34,15 @@ class ScheduledTaskRepositoryImpl(ScheduledTaskRepository):
         result = await self._session.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
 
+    async def find_all_by_user_id(self, user_id: int) -> list[ScheduledTask]:
+        stmt = (
+            select(ScheduledTaskModel)
+            .where(ScheduledTaskModel.user_id == user_id)
+            .order_by(ScheduledTaskModel.created_time.desc())
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
     async def find_due(self, now: datetime) -> list[ScheduledTask]:
         stmt = (
             select(ScheduledTaskModel)
@@ -77,6 +86,7 @@ class ScheduledTaskRepositoryImpl(ScheduledTaskRepository):
     def _to_model(task: ScheduledTask) -> ScheduledTaskModel:
         return ScheduledTaskModel(
             id=task.id,
+            user_id=task.user_id,
             project_id=task.project_id,
             session_id=task.session_id,
             channel_id=task.channel_id,
@@ -109,6 +119,7 @@ class ScheduledTaskRepositoryImpl(ScheduledTaskRepository):
             enabled=model.enabled == 1,
             auto_unbind_after_run=model.auto_unbind_after_run == 1,
             delete_session_on_success=model.delete_session_on_success == 1,
+            user_id=model.user_id,
             next_run_time=model.next_run_time,
             created_time=model.created_time,
         )

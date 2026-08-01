@@ -15,11 +15,11 @@ from application.project.command.reorder_projects_command import ReorderProjects
 from application.project.plugin_init_application_service import PluginInitApplicationService
 from application.project.project_application_service import ProjectApplicationService
 from application.project.workspace_application_service import WorkspaceApplicationService
-from application.project.workspace_directory import (
-    create_workspace_directory,
-    default_team_workspace_root,
-)
+from application.project.workspace_directory import create_workspace_directory
+from ohs.dependencies import get_workspace_root_resolver
 from ohs.assembler.session_assembler import SessionAssembler
+from domain.user.model.user import User
+from ohs.auth_dependency import get_current_user
 from ohs.dependencies import get_plugin_init_application_service, get_project_application_service, get_workspace_application_service
 from ohs.dependencies import get_project_repository, get_team_board_service
 from domain.project.model.project import Project
@@ -83,10 +83,12 @@ async def create_team_project(
     request: CreateTeamProjectRequest,
     project_repo: ProjectRepoDep,
     team_service: TeamBoardDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[ProjectResponse]:
+    resolver = get_workspace_root_resolver()
     dir_path = str(await asyncio.to_thread(
         create_workspace_directory,
-        str(default_team_workspace_root()),
+        str(resolver.team_root(current_user.id)),
     ))
 
     config = dict(request.team_config)
@@ -109,7 +111,7 @@ async def create_team_project(
             status_code=422,
             detail="Team must have exactly one Leader agent",
         )
-    project = Project.create(request.name.strip(), dir_path, project_type="team")
+    project = Project.create(request.name.strip(), dir_path, project_type="team", user_id=current_user.id)
     await project_repo.save(project)
     try:
         team = await team_service.create_team(CreateTeamCommand(
@@ -140,10 +142,12 @@ async def create_team_project(
 async def create_project(
     request: CreateProjectRequest,
     service: ServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[ProjectResponse]:
     command = CreateProjectCommand(
         name=request.name,
         github_url=request.github_url,
+        user_id=current_user.id,
     )
     project = await service.create_project(command)
     return ApiResponse.success(ProjectResponse.from_domain(project))
@@ -152,8 +156,9 @@ async def create_project(
 @router.get("", summary="List projects")
 async def list_projects(
     service: ServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[ProjectListResponse]:
-    projects = await service.list_projects()
+    projects = await service.list_projects(current_user.id)
     return ApiResponse.success(ProjectListResponse.from_domain_list(projects))
 
 

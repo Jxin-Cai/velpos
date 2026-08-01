@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
 from application.session.command.create_session_command import CreateSessionCommand
+from infr.client.claude_settings_env import resolve_default_model
 from application.session.command.run_query_command import RunQueryCommand
 from application.session.session_application_service import SessionApplicationService
 from domain.project.repository.project_repository import ProjectRepository
@@ -39,8 +39,11 @@ class SchedulerApplicationService:
         self._unbind_im_fn = unbind_im_fn
         self._save_run_fn = save_run_fn
 
-    async def list_tasks(self, project_id: str = "") -> list[dict[str, Any]]:
-        tasks = await self._repository.find_all()
+    async def list_tasks(self, project_id: str = "", user_id: int | None = None) -> list[dict[str, Any]]:
+        if user_id is not None:
+            tasks = await self._repository.find_all_by_user_id(user_id)
+        else:
+            tasks = await self._repository.find_all()
         if project_id:
             tasks = [task for task in tasks if task.project_id == project_id]
         result = []
@@ -63,6 +66,7 @@ class SchedulerApplicationService:
         execution_mode: str = "new_session",
         prompt_mode: str = "prompt",
         skill_name: str = "",
+        user_id: int = 1,
     ) -> ScheduledTask:
         self._validate_content(prompt_mode, prompt, skill_name)
         self._validate_execution_mode(execution_mode, session_id)
@@ -86,6 +90,7 @@ class SchedulerApplicationService:
             execution_mode=execution_mode,
             prompt_mode=prompt_mode,
             skill_name=skill_name,
+            user_id=user_id,
         )
         await self._repository.save(task)
         return task
@@ -169,7 +174,7 @@ class SchedulerApplicationService:
             created_new_session = task.execution_mode == "new_session"
             if created_new_session:
                 session = await service.create_session(CreateSessionCommand(
-                    model=os.getenv("DEFAULT_MODEL", "default"),
+                    model=resolve_default_model(),
                     project_id=task.project_id,
                     project_dir=project_dir,
                     name=f"[Scheduled] {task.name}",

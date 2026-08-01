@@ -25,6 +25,10 @@ class ScheduledTaskRepository(ABC):
         ...
 
     @abstractmethod
+    async def find_all_by_user_id(self, user_id: int) -> list[ScheduledTask]:
+        ...
+
+    @abstractmethod
     async def find_due(self, now: datetime) -> list[ScheduledTask]:
         ...
 

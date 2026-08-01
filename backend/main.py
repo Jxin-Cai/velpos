@@ -40,8 +40,10 @@ from ohs.http.terminal_router import router as terminal_router
 from ohs.http.usage_router import router as usage_router
 from ohs.http.memory_router import router as memory_router
 from ohs.http.team_router import router as team_router
+from ohs.http.auth_router import router as auth_router
 from ohs.http.flow_router import router as flow_router
 from ohs.ws.session_ws import router as ws_router
+from ohs.auth_dependency import AuthMiddleware
 from ohs.cors_config import DEFAULT_CORS_ORIGINS as _DEFAULT_CORS_ORIGINS
 from ohs.cors_config import parse_cors_origins as _parse_cors_origins
 
@@ -121,6 +123,7 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.claude_md_revision_model  # noqa: F401
     import infr.repository.trace_span_model  # noqa: F401
     import infr.repository.im_delivery_model  # noqa: F401
+    import infr.repository.user_model  # noqa: F401
 
     connectable = async_engine_from_config(
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
@@ -276,6 +279,23 @@ async def lifespan(app: FastAPI):
 
     # Re-apply logging config — Alembic fileConfig resets root logger to WARN
     _configure_logging(force=True)
+
+    # Pro mode: initialize admin password from env var if provided
+    from infr.config.app_config import app_config
+    if app_config.mode == "pro" and app_config.admin_password:
+        from infr.config.database import async_session_factory
+        from infr.repository.user_repository_impl import UserRepositoryImpl
+        from application.auth.auth_application_service import AuthApplicationService
+
+        async with async_session_factory() as admin_session:
+            user_repo = UserRepositoryImpl(admin_session)
+            admin_user = await user_repo.find_by_id(1)
+            if admin_user is not None and not admin_user.hashed_password:
+                hashed = AuthApplicationService._hash_password(app_config.admin_password)
+                admin_user.update_password(hashed)
+                await user_repo.save(admin_user)
+                await admin_session.commit()
+                logger.info("Admin password initialized from VELPOS_ADMIN_PASSWORD")
 
     try:
         from application.session.interrupted_run_recovery_service import (
@@ -436,11 +456,14 @@ _cors_origins = _parse_cors_origins(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
+app.add_middleware(AuthMiddleware)
+
+app.include_router(auth_router)
 app.include_router(project_router)
 app.include_router(project_memory_router)
 app.include_router(session_router)

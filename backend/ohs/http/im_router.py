@@ -5,6 +5,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
+from domain.user.model.user import User
+from ohs.auth_dependency import get_current_user
 from ohs.dependencies import get_im_channel_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.im_dto import (
@@ -30,8 +32,9 @@ ChannelServiceDep = Annotated[ImChannelApplicationService, Depends(get_im_channe
 @router.get("/channels", summary="List available IM channels with instances")
 async def list_channels(
     channel_service: ChannelServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[list[ChannelInfo]]:
-    channels = await channel_service.list_available_channels()
+    channels = await channel_service.list_available_channels(user_id=current_user.id)
     result = []
     for c in channels:
         instances_raw = c.get("instances", [])
@@ -47,10 +50,12 @@ async def list_channels(
 async def create_channel(
     request: CreateChannelRequest,
     channel_service: ChannelServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[dict[str, Any]]:
     result = await channel_service.create_channel_instance(
         channel_type=request.channel_type,
         name=request.name,
+        user_id=current_user.id,
     )
     return ApiResponse.success(result)
 

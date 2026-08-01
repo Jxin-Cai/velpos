@@ -20,6 +20,7 @@ class ScheduledTask:
     enabled: bool = True
     auto_unbind_after_run: bool = True
     delete_session_on_success: bool = False
+    user_id: int = 1
     next_run_time: datetime | None = None
     created_time: datetime = field(default_factory=datetime.now)
 
@@ -38,6 +39,7 @@ class ScheduledTask:
         execution_mode: str = "new_session",
         prompt_mode: str = "prompt",
         skill_name: str = "",
+        user_id: int = 1,
     ) -> ScheduledTask:
         task = cls(
             id=uuid.uuid4().hex[:8],
@@ -53,6 +55,7 @@ class ScheduledTask:
             enabled=enabled,
             auto_unbind_after_run=auto_unbind_after_run,
             delete_session_on_success=delete_session_on_success,
+            user_id=user_id,
             next_run_time=None,
             created_time=datetime.now(),
         )

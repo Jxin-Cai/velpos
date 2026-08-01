@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Index, String, BigInteger
+from sqlalchemy import DateTime, Float, Index, Integer, String, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infr.config.base import Base
@@ -12,6 +12,7 @@ class UsageLedgerModel(Base):
     __tablename__ = "usage_ledgers"
 
     id: Mapped[str] = mapped_column(String(8), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     session_id: Mapped[str] = mapped_column(String(8), nullable=False)
     project_id: Mapped[str] = mapped_column(String(8), nullable=False, default="", server_default="")
     model: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
@@ -25,6 +26,7 @@ class UsageLedgerModel(Base):
     __table_args__ = (
         Index("idx_usage_ledgers_session_time", "session_id", "created_time"),
         Index("idx_usage_ledgers_project_time", "project_id", "created_time"),
+        Index("idx_usage_ledgers_user_time", "user_id", "created_time"),
     )
 
 

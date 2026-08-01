@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String
+from sqlalchemy import DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infr.config.base import Base
@@ -16,6 +16,9 @@ class ChannelInitModel(Base):
 
     id: Mapped[str] = mapped_column(
         String(8), primary_key=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
     )
     channel_type: Mapped[str] = mapped_column(
         String(32), nullable=False,

@@ -16,9 +16,11 @@ logger = logging.getLogger(__name__)
 class ClaudePluginManager(PluginManagerPort):
 
     def __init__(self, cli_path: str | None = None) -> None:
-        self._cli_path = cli_path or os.getenv("CLAUDE_CLI_PATH")
+        import shutil
+
+        self._cli_path = cli_path or os.getenv("CLAUDE_CLI_PATH") or shutil.which("claude")
         if not self._cli_path:
-            raise RuntimeError("CLAUDE_CLI_PATH environment variable is not set")
+            raise RuntimeError("Cannot find claude CLI: set CLAUDE_CLI_PATH or ensure 'claude' is in PATH")
         self._claude_dir = Path(os.getenv("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
         self._plugins_dir = self._claude_dir / "plugins"
 

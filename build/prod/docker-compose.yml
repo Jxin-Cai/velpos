@@ -33,10 +33,10 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
-      CLAUDE_CLI_PATH: /usr/local/bin/claude
       PROJECTS_ROOT_DIR: /data/projects
     volumes:
       - ${PROJECTS_HOST_DIR:-/tmp/agent_projects}:/data/projects
+      - claude_config:/home/appuser/.claude
     depends_on:
       mysql:
         condition: service_healthy
@@ -63,4 +63,6 @@ services:
 
 volumes:
   mysql_data:
+    driver: local
+  claude_config:
     driver: local

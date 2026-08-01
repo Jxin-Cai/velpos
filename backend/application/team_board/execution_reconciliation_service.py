@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from application.session.command.create_session_command import CreateSessionCommand
+from infr.client.claude_settings_env import resolve_default_model
 from application.team_board.execution_dispatch import dispatch_execution_query
 from application.team_board.team_workspace_helpers import (
     ensure_agent_project,
@@ -378,7 +378,7 @@ class ExecutionReconciliationService:
             "关键决策、产物、验证、待处理事项和下一阶段建议。",
         ]
         session_cmd = CreateSessionCommand(
-            model=os.getenv("DEFAULT_MODEL", "default"),
+            model=resolve_default_model(),
             project_id=agent_project_id,
             project_dir=workspace_path,
             name=f"[{team.name}] {card.title}",

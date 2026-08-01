@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field
 
 from application.settings.settings_application_service import SettingsApplicationService
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
+from infr.config.app_config import app_config
 from ohs.dependencies import get_settings_application_service, get_claude_agent_gateway
 from ohs.http.api_response import ApiResponse
+
+_SENSITIVE_ENV_KEYS = {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"}
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
@@ -33,6 +36,11 @@ async def get_settings(
     service: ServiceDep,
 ) -> ApiResponse[dict]:
     result = await service.get_settings()
+    if app_config.mode == "pro":
+        env = result.get("env", {})
+        for key in _SENSITIVE_ENV_KEYS:
+            if key in env:
+                env[key] = "********"
     return ApiResponse.success(result)
 
 

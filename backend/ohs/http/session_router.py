@@ -12,6 +12,8 @@ from application.session.command.import_claude_session_command import ImportClau
 from application.session.session_application_service import SessionApplicationService
 from application.session.session_branch_application_service import SessionBranchApplicationService
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
+from domain.user.model.user import User
+from ohs.auth_dependency import get_current_user
 from ohs.dependencies import (
     get_im_channel_application_service,
     get_session_application_service,
@@ -104,8 +106,9 @@ async def batch_delete_sessions(
 async def list_sessions(
     service: ServiceDep,
     im_service: ImServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[SessionListResponse]:
-    sessions = await service.list_session_summaries()
+    sessions = await service.list_session_summaries(user_id=current_user.id)
     bindings = await im_service.list_all_bindings()
     binding_map = {b["session_id"]: b for b in bindings}
     project_dirs = tuple(dict.fromkeys(s.project_dir for s in sessions if s.project_dir))

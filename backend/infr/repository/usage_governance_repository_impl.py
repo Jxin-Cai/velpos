@@ -57,6 +57,7 @@ class UsageGovernanceRepositoryImpl(UsageGovernanceRepository):
     def _ledger_to_model(ledger: UsageLedger) -> UsageLedgerModel:
         return UsageLedgerModel(
             id=ledger.id,
+            user_id=ledger.user_id,
             session_id=ledger.session_id,
             project_id=ledger.project_id,
             model=ledger.model,
@@ -80,6 +81,7 @@ class UsageGovernanceRepositoryImpl(UsageGovernanceRepository):
             cache_read_tokens=model.cache_read_tokens,
             cache_creation_tokens=model.cache_creation_tokens,
             estimated_cost_usd=model.estimated_cost_usd,
+            user_id=model.user_id,
             created_time=model.created_time,
         )
 

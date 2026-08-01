@@ -6,6 +6,7 @@ import os
 
 from application.git_helpers import get_current_git_branch as _get_current_git_branch
 from collections.abc import Awaitable, Callable
+from infr.client.claude_settings_env import resolve_default_model
 from typing import Any, AsyncContextManager
 
 from application.session.command.clear_context_command import ClearContextCommand
@@ -380,8 +381,35 @@ class SessionApplicationService:
     async def list_sessions(self) -> list[Session]:
         return await self._session_repository.find_all()
 
-    async def list_session_summaries(self) -> list[SessionSummary]:
-        return await self._session_repository.find_all_summaries()
+    def disable_im_sync(self) -> None:
+        """Disable IM sync callbacks on the query engine.
+
+        Call this when the session service is used in an inbound IM context where
+        the IM adapter handles replies directly, to prevent duplicate messages being
+        sent back to the IM channel.
+        """
+        self._query_engine._on_assistant_response = None
+        self._query_engine._on_user_message = None
+
+    async def commit(self) -> None:
+        """Flush and commit the current unit of work to the database."""
+        await self._session_repository.commit()
+
+    async def list_session_summaries(self, user_id: int | None = None) -> list[SessionSummary]:
+        summaries = await self._session_repository.find_all_summaries()
+        if user_id is None:
+            return summaries
+        from infr.config.app_config import app_config
+        if app_config.mode == "dev":
+            return summaries
+        user_project_ids = await self._get_user_project_ids(user_id)
+        return [s for s in summaries if s.project_id in user_project_ids]
+
+    async def _get_user_project_ids(self, user_id: int) -> set[str]:
+        if self._project_repository is None:
+            return set()
+        projects = await self._project_repository.find_all_by_user_id(user_id)
+        return {p.id for p in projects}
 
     async def get_current_git_branch(self, project_dir: str) -> str:
         return await _get_current_git_branch(project_dir)
@@ -687,7 +715,7 @@ class SessionApplicationService:
             project_id = await self._ensure_project_for_dir(project_dir)
 
         session = Session.create(
-            model=os.getenv("DEFAULT_MODEL", "default"),
+            model=resolve_default_model(),
             project_id=project_id,
             project_dir=project_dir,
         )

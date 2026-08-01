@@ -21,6 +21,7 @@ class ChannelInit:
     _init_status: ChannelInitStatus
     _config: dict
     _error_message: str
+    _user_id: int
     _created_at: datetime
     _updated_at: datetime
 
@@ -51,6 +52,10 @@ class ChannelInit:
         return self._error_message
 
     @property
+    def user_id(self) -> int:
+        return self._user_id
+
+    @property
     def created_at(self) -> datetime:
         return self._created_at
 
@@ -65,7 +70,7 @@ class ChannelInit:
     # ── Factories ──
 
     @classmethod
-    def create(cls, channel_type: ImChannelType, name: str = "") -> ChannelInit:
+    def create(cls, channel_type: ImChannelType, name: str = "", user_id: int = 1) -> ChannelInit:
         now = datetime.now()
         return cls(
             _id=uuid.uuid4().hex[:8],
@@ -74,6 +79,7 @@ class ChannelInit:
             _init_status=ChannelInitStatus.NOT_INITIALIZED,
             _config={},
             _error_message="",
+            _user_id=user_id,
             _created_at=now,
             _updated_at=now,
         )
@@ -89,6 +95,7 @@ class ChannelInit:
         created_at: datetime,
         updated_at: datetime,
         name: str = "",
+        user_id: int = 1,
     ) -> ChannelInit:
         return cls(
             _id=id,
@@ -97,6 +104,7 @@ class ChannelInit:
             _init_status=init_status,
             _config=config,
             _error_message=error_message,
+            _user_id=user_id,
             _created_at=created_at,
             _updated_at=updated_at,
         )

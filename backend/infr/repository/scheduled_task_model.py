@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, SmallInteger
+from sqlalchemy import DateTime, Index, Integer, String, SmallInteger
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,7 @@ class ScheduledTaskModel(Base):
     __tablename__ = "scheduled_tasks"
 
     id: Mapped[str] = mapped_column(String(8), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     project_id: Mapped[str] = mapped_column(String(8), nullable=False, default="", server_default="")
     session_id: Mapped[str] = mapped_column(String(8), nullable=False, default="", server_default="")
     channel_id: Mapped[str] = mapped_column(String(8), nullable=False, default="", server_default="")
@@ -32,6 +33,7 @@ class ScheduledTaskModel(Base):
         Index("idx_scheduled_tasks_next", "enabled", "next_run_time"),
         Index("idx_scheduled_tasks_project", "project_id"),
         Index("idx_scheduled_tasks_channel", "channel_id"),
+        Index("idx_scheduled_tasks_user_id", "user_id"),
     )
 
 

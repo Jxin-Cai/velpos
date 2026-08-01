@@ -13,6 +13,7 @@ class Project:
     _id: str
     _name: str
     _dir_path: str
+    _user_id: int = 1
     _agents: dict[str, dict] = field(default_factory=dict)
     _plugins: dict[str, dict] = field(default_factory=dict)
     _sort_order: int = 0
@@ -38,6 +39,10 @@ class Project:
     @property
     def dir_path(self) -> str:
         return self._dir_path
+
+    @property
+    def user_id(self) -> int:
+        return self._user_id
 
     @property
     def agents(self) -> dict[str, dict]:
@@ -122,12 +127,13 @@ class Project:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, name: str, dir_path: str, project_type: str = "single", team_config: dict | None = None) -> Project:
+    def create(cls, name: str, dir_path: str, project_type: str = "single", team_config: dict | None = None, user_id: int = 1) -> Project:
         now = datetime.now()
         return cls(
             _id=uuid.uuid4().hex[:8],
             _name=name,
             _dir_path=dir_path,
+            _user_id=user_id,
             _agents={},
             _plugins={},
             _sort_order=0,
@@ -152,6 +158,7 @@ class Project:
         team_config: dict | None = None,
         active_claude_md_revision_id: str = "",
         claude_md_file_hash: str = "",
+        user_id: int = 1,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> Project:
@@ -159,6 +166,7 @@ class Project:
             _id=id,
             _name=name,
             _dir_path=dir_path,
+            _user_id=user_id,
             _agents=dict(agents) if agents else {},
             _plugins=dict(plugins) if plugins else {},
             _sort_order=sort_order,

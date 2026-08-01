@@ -16,12 +16,11 @@ from application.team_board.commands import (
     RetryExecutionCommand,
 )
 from application.team_board.team_board_service import TeamBoardApplicationService
-from application.project.workspace_directory import (
-    create_workspace_directory,
-    default_team_workspace_root,
-)
+from application.project.workspace_directory import create_workspace_directory
 from domain.team.model.team_domain_error import TeamDomainError
-from ohs.dependencies import get_team_board_service
+from domain.user.model.user import User
+from ohs.auth_dependency import get_current_user
+from ohs.dependencies import get_team_board_service, get_workspace_root_resolver
 from ohs.http.api_response import ApiResponse
 from ohs.http.assembler.team_board_assembler import TeamBoardAssembler
 
@@ -59,10 +58,15 @@ class ArchiveCardRequest(BaseModel):
 
 
 @router.post("", summary="Create a team with agent slots")
-async def create_team(body: CreateTeamRequest, service: ServiceDep) -> ApiResponse[dict]:
+async def create_team(
+    body: CreateTeamRequest,
+    service: ServiceDep,
+    current_user: User = Depends(get_current_user),
+) -> ApiResponse[dict]:
+    resolver = get_workspace_root_resolver()
     root_path = await asyncio.to_thread(
         create_workspace_directory,
-        str(default_team_workspace_root()),
+        str(resolver.team_root(current_user.id)),
     )
     cmd = CreateTeamCommand(
         name=body.name,

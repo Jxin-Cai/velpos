@@ -23,6 +23,11 @@ class ProjectRepository(ABC):
         ...
 
     @abstractmethod
+    def find_all_by_user_id(self, user_id: int) -> list[Project]:
+        """Find all Projects owned by a user."""
+        ...
+
+    @abstractmethod
     def find_by_dir_path(self, dir_path: str) -> Project | None:
         """Find a Project by dir_path. Returns None if not found."""
         ...

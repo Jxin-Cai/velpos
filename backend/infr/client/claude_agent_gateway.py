@@ -59,9 +59,11 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     ) -> None:
         import os
 
-        self._cli_path = cli_path or os.getenv("CLAUDE_CLI_PATH")
+        import shutil
+
+        self._cli_path = cli_path or os.getenv("CLAUDE_CLI_PATH") or shutil.which("claude")
         if not self._cli_path:
-            raise RuntimeError("CLAUDE_CLI_PATH environment variable is not set")
+            raise RuntimeError("Cannot find claude CLI: set CLAUDE_CLI_PATH or ensure 'claude' is in PATH")
         self._permission_mode = permission_mode or os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
         self._max_buffer_size = max_buffer_size or int(os.getenv("CLAUDE_MAX_BUFFER_SIZE", str(10 * 1024 * 1024)))
         self._idle_timeout = float(os.getenv("CLAUDE_IDLE_TIMEOUT", "60"))

@@ -4,10 +4,11 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Any, AsyncContextManager
 
 from domain.shared.async_utils import safe_create_task
-from typing import Any
 
 from domain.im_binding.acl.im_channel_adapter import ImChannelAdapter, InitResult
 from application.session.command.run_query_command import RunQueryCommand
@@ -50,6 +51,11 @@ class ImChannelApplicationService:
             [Any, list[dict[str, Any]]],
             Awaitable[list[dict[str, Any]]],
         ] | None = None,
+        # DIP-compliant factories: Application layer obtains independent-scoped
+        # repositories/services via these injected factories rather than importing
+        # infr implementations directly.
+        session_service_context_factory: Callable[[], AsyncContextManager[SessionApplicationService]] | None = None,
+        binding_context_factory: Callable[[], AsyncContextManager[tuple[ImBindingRepository, ChannelInitRepository]]] | None = None,
     ) -> None:
         self._registry = registry
         self._binding_repo = binding_repo
@@ -61,12 +67,18 @@ class ImChannelApplicationService:
         self._accept_inbound = accept_inbound_fn
         self._enqueue_outbound = enqueue_outbound_fn
         self._stage_inbound_attachments = stage_inbound_attachments_fn
+        self._session_service_context_factory = session_service_context_factory
+        self._binding_context_factory = binding_context_factory
 
     # ── 渠道发现 ──
 
-    async def list_available_channels(self) -> list[dict[str, Any]]:
+    async def list_available_channels(self, user_id: int | None = None) -> list[dict[str, Any]]:
         """返回所有已注册渠道类型, 每个类型下嵌套其实例列表."""
-        all_inits = await self._init_repo.find_all()
+        from infr.config.app_config import app_config
+        if user_id is not None and app_config.mode == "pro":
+            all_inits = await self._init_repo.find_all_by_user_id(user_id)
+        else:
+            all_inits = await self._init_repo.find_all()
         all_bindings = await self._binding_repo.find_all_bound()
         binding_by_channel_id = {b.channel_id: b for b in all_bindings}
 
@@ -105,12 +117,12 @@ class ImChannelApplicationService:
     # ── 渠道实例管理 ──
 
     async def create_channel_instance(
-        self, channel_type: str, name: str = "",
+        self, channel_type: str, name: str = "", user_id: int = 1,
     ) -> dict[str, Any]:
         """创建一个新的渠道实例."""
         ct = ImChannelType(channel_type)
         spec = self._registry.get_spec(ct)
-        ci = ChannelInit.create(ct, name=name)
+        ci = ChannelInit.create(ct, name=name, user_id=user_id)
         # 默认名: DisplayName-短ID, 如 "QQ-a3f8"
         if not name:
             ci.rename(f"{spec.display_name}-{ci.id[:4]}")
@@ -131,17 +143,7 @@ class ImChannelApplicationService:
         # If bound, unbind first
         binding = await self._binding_repo.find_by_channel_id(channel_id)
         if binding and binding.binding_status != BindingStatus.UNBOUND:
-            try:
-                adapter = self._create_adapter(ci.channel_type)
-                await adapter.unbind(binding)
-            except Exception:
-                logger.warning("Adapter unbind failed during instance delete", exc_info=True)
-            await self._binding_repo.remove(binding.session_id)
-            if self._connection_manager:
-                await self._connection_manager.broadcast(
-                    binding.session_id,
-                    {"event": "im_unbound", "channel_type": ci.channel_type.value},
-                )
+            await self._force_unbind(binding)
 
         await self._init_repo.remove(channel_id)
 
@@ -297,16 +299,7 @@ class ImChannelApplicationService:
                 "[IM-bind] Session %s already bound to channel_id=%s, unbinding first",
                 session_id, current_binding.channel_id,
             )
-            try:
-                await self._create_adapter(current_binding.channel_type).unbind(current_binding)
-            except Exception:
-                logger.warning("[IM-bind] Old binding unbind failed", exc_info=True)
-            await self._binding_repo.remove(session_id)
-            if self._connection_manager:
-                await self._connection_manager.broadcast(
-                    session_id,
-                    {"event": "im_unbound", "channel_type": current_binding.channel_type.value},
-                )
+            await self._force_unbind(current_binding)
 
         adapter = self._create_adapter(ct)
 
@@ -345,15 +338,7 @@ class ImChannelApplicationService:
             await self.start_channel_listener(binding)
             await self._send_bind_notification(binding, adapter)
 
-        return {
-            "id": binding.id,
-            "session_id": binding.session_id,
-            "channel_type": binding.channel_type.value,
-            "channel_id": binding.channel_id,
-            "binding_status": binding.binding_status.value,
-            "channel_address": binding.channel_address,
-            "ui_data": result.ui_data,
-        }
+        return self._binding_result_dict(binding, result.ui_data)
 
     # ── 完成绑定 ──
 
@@ -375,15 +360,7 @@ class ImChannelApplicationService:
             await self.start_channel_listener(binding)
             await self._send_bind_notification(binding, adapter)
 
-        return {
-            "id": binding.id,
-            "session_id": binding.session_id,
-            "channel_type": binding.channel_type.value,
-            "channel_id": binding.channel_id,
-            "binding_status": binding.binding_status.value,
-            "channel_address": binding.channel_address,
-            "ui_data": result.ui_data,
-        }
+        return self._binding_result_dict(binding, result.ui_data)
 
     # ── 解绑 ──
 
@@ -392,16 +369,7 @@ class ImChannelApplicationService:
         if binding is None:
             return
 
-        try:
-            adapter = self._create_adapter(binding.channel_type)
-            await adapter.unbind(binding)
-        except Exception:
-            logger.warning(
-                "Adapter unbind failed for session %s",
-                session_id, exc_info=True,
-            )
-
-        await self._binding_repo.remove(session_id)
+        await self._force_unbind(binding)
 
     # ── 出站消息同步 ──
 
@@ -415,22 +383,41 @@ class ImChannelApplicationService:
         if binding is None or binding.binding_status != BindingStatus.BOUND:
             return
         reply_ctx = self._build_reply_context(binding)
-        if self._enqueue_outbound is not None:
-            await self._enqueue_outbound(
-                session_id,
-                content,
-                attachments=attachments,
-                reply_context=reply_ctx,
-                binding=binding,
-            )
-            return
-        adapter = self._create_adapter(binding.channel_type)
-        await adapter.send_message(
+        await self._dispatch_outbound(
             binding,
             content,
             reply_context=reply_ctx,
             attachments=attachments,
         )
+
+    async def _dispatch_outbound(
+        self,
+        binding: ImBinding,
+        content: str,
+        *,
+        reply_context: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        deduplication_key: str | None = None,
+    ) -> None:
+        """Dispatch outbound message via queue (preferred) or direct adapter send."""
+        if self._enqueue_outbound is not None:
+            kwargs: dict[str, Any] = {
+                "reply_context": reply_context,
+                "binding": binding,
+            }
+            if attachments is not None:
+                kwargs["attachments"] = attachments
+            if deduplication_key is not None:
+                kwargs["deduplication_key"] = deduplication_key
+            await self._enqueue_outbound(binding.session_id, content, **kwargs)
+            return
+        adapter = self._create_adapter(binding.channel_type)
+        send_kwargs: dict[str, Any] = {"reply_context": reply_context}
+        if attachments is not None:
+            send_kwargs["attachments"] = attachments
+        if deduplication_key is not None:
+            send_kwargs["idempotency_key"] = deduplication_key
+        await adapter.send_message(binding, content, **send_kwargs)
 
     # ── 同步会话上下文到 IM ──
 
@@ -439,15 +426,12 @@ class ImChannelApplicationService:
         if binding is None or binding.binding_status != BindingStatus.BOUND:
             raise BusinessException("No active IM binding for this session", "IM_NOT_BOUND")
 
-        from infr.config.database import async_session_factory
-        from infr.repository.session_repository_impl import SessionRepositoryImpl
+        if self._session_service_context_factory is None:
+            raise BusinessException("No session service context factory configured for context sync")
 
         entries: list[str] = []
-        async with async_session_factory() as bg_session:
-            repo = SessionRepositoryImpl(bg_session)
-            session = await repo.find_by_id(session_id)
-            if session is None:
-                raise BusinessException("Session not found")
+        async with self._session_service_context_factory() as _svc:
+            session = await _svc.get_session(session_id)
 
             for msg in session.messages:
                 role = msg.message_type.value
@@ -481,23 +465,14 @@ class ImChannelApplicationService:
             chunk_index += 1
             try:
                 payload = f"[Context Sync]\n\n{text}"
-                if self._enqueue_outbound is not None:
-                    await self._enqueue_outbound(
-                        session_id,
-                        payload,
-                        deduplication_key=(
-                            f"context:{session_id}:{sync_operation_id}:{current_chunk_index}"
-                        ),
-                        reply_context=reply_ctx,
-                        binding=binding,
-                    )
-                else:
-                    adapter = self._create_adapter(binding.channel_type)
-                    await adapter.send_message(
-                        binding,
-                        payload,
-                        reply_context=reply_ctx,
-                    )
+                await self._dispatch_outbound(
+                    binding,
+                    payload,
+                    reply_context=reply_ctx,
+                    deduplication_key=(
+                        f"context:{session_id}:{sync_operation_id}:{current_chunk_index}"
+                    ),
+                )
                 sent += len(chunk)
             except Exception:
                 logger.warning("[sync-context] Chunk send failed for session=%s", session_id, exc_info=True)
@@ -743,15 +718,6 @@ class ImChannelApplicationService:
                     logger.debug("[IM-process] remove_reaction failed", exc_info=True)
 
     @staticmethod
-    def _extract_last_response(session: Any) -> str:
-        for msg in reversed(session.messages):
-            if msg.message_type.value == "assistant":
-                text = ImChannelApplicationService._extract_text_from_content(msg.content)
-                if text:
-                    return text
-        return ""
-
-    @staticmethod
     def _build_inbound_query_command(
         binding: ImBinding,
         content: str,
@@ -830,20 +796,11 @@ class ImChannelApplicationService:
         adapter = self._create_adapter(binding.channel_type)
         resolved_context = adapter.build_reply_context(binding) or {}
         resolved_context.update(reply_context)
-        if self._enqueue_outbound is not None:
-            await self._enqueue_outbound(
-                binding.session_id,
-                content,
-                deduplication_key=deduplication_key,
-                reply_context=resolved_context,
-                binding=binding,
-            )
-            return
-        await adapter.send_message(
+        await self._dispatch_outbound(
             binding,
             content,
             reply_context=resolved_context,
-            idempotency_key=deduplication_key,
+            deduplication_key=deduplication_key,
         )
 
     # ── Channel listener lifecycle ──
@@ -917,6 +874,40 @@ class ImChannelApplicationService:
             logger.error("[IM-listener] Failed to start listener: channel=%s session=%s", channel_type_val, session_id, exc_info=True)
 
     # ── Internal ──
+
+    async def _force_unbind(self, binding: ImBinding, *, notify: bool = True) -> None:
+        """Unbind adapter, remove persistence, and optionally notify clients.
+
+        Single Point of Truth for the complete unbind operation: adapter call,
+        repo removal, and WebSocket broadcast. All three call-sites (delete_channel_instance,
+        bind re-bind, unbind) delegate here so the flow is consistent.
+        """
+        try:
+            adapter = self._create_adapter(binding.channel_type)
+            await adapter.unbind(binding)
+        except Exception:
+            logger.warning(
+                "Adapter unbind failed for session %s", binding.session_id, exc_info=True,
+            )
+        await self._binding_repo.remove(binding.session_id)
+        if notify and self._connection_manager:
+            await self._connection_manager.broadcast(
+                binding.session_id,
+                {"event": "im_unbound", "channel_type": binding.channel_type.value},
+            )
+
+    @staticmethod
+    def _binding_result_dict(binding: ImBinding, ui_data: Any) -> dict[str, Any]:
+        """Build the canonical binding result dict returned by bind() and complete_binding()."""
+        return {
+            "id": binding.id,
+            "session_id": binding.session_id,
+            "channel_type": binding.channel_type.value,
+            "channel_id": binding.channel_id,
+            "binding_status": binding.binding_status.value,
+            "channel_address": binding.channel_address,
+            "ui_data": ui_data,
+        }
 
     async def _send_bind_notification(
         self, binding: ImBinding, adapter: ImChannelAdapter,

@@ -6,7 +6,7 @@ import dataclasses
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from typing import Annotated, Any, Awaitable, Callable
 
 from application.message.attachment_application_service import AttachmentApplicationService
@@ -20,6 +20,7 @@ from infr.client.connection_manager import ConnectionManager
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from ohs.assembler.session_assembler import SessionAssembler
 from application.team_board.team_board_service import TeamBoardApplicationService
+from infr.config.app_config import app_config
 from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_attachment_application_service, get_terminal_application_service, get_create_session_service_factory, get_team_board_service
 
 logger = logging.getLogger(__name__)
@@ -457,11 +458,28 @@ async def terminal_websocket_endpoint(
         await terminal_service.close_pty(terminal_id)
 
 
+def _verify_ws_token(websocket: WebSocket) -> bool:
+    if app_config.mode == "dev":
+        return True
+    token = websocket.query_params.get("token")
+    if not token:
+        return False
+    import jwt as pyjwt
+    try:
+        pyjwt.decode(token, app_config.jwt_secret, algorithms=["HS256"])
+        return True
+    except pyjwt.InvalidTokenError:
+        return False
+
+
 @router.websocket("/ws/events")
 async def global_events_endpoint(
     websocket: WebSocket,
     manager: ConnectionManagerDep,
 ) -> None:
+    if not _verify_ws_token(websocket):
+        await websocket.close(code=4001)
+        return
     await manager.connect_global(websocket)
     try:
         while True:
@@ -483,6 +501,9 @@ async def websocket_endpoint(
     attachment_service: AttachmentServiceDep,
     team_service: TeamServiceDep,
 ) -> None:
+    if not _verify_ws_token(websocket):
+        await websocket.close(code=4001)
+        return
     # Accept WebSocket first to avoid 403 on handshake rejection.
     # Errors are delivered as WebSocket events so the client gets proper close codes.
     await manager.connect(websocket, session_id)

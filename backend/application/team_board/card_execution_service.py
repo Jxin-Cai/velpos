@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from html import escape
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from application.session.command.create_session_command import CreateSessionCommand
+from infr.client.claude_settings_env import resolve_default_model
 from application.team_board.execution_dispatch import dispatch_execution_query
 from application.team_board.team_workspace_helpers import (
     ensure_agent_project,
@@ -596,7 +596,7 @@ class CardExecutionService:
         )
 
         session_cmd = CreateSessionCommand(
-            model=os.getenv("DEFAULT_MODEL", "default"),
+            model=resolve_default_model(),
             project_id=agent_project_id,
             project_dir=workspace_path,
             name=f"[{team.name}] {card.title}",

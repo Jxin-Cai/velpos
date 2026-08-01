@@ -16,6 +16,7 @@ class UsageLedger:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    user_id: int = 1
     created_time: datetime = field(default_factory=datetime.now)
 
     @classmethod
@@ -28,6 +29,7 @@ class UsageLedger:
         output_tokens: int,
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
+        user_id: int = 1,
     ) -> UsageLedger:
         estimated_cost = cls.estimate_cost_usd(input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
         return cls(
@@ -40,6 +42,7 @@ class UsageLedger:
             cache_read_tokens=max(cache_read_tokens, 0),
             cache_creation_tokens=max(cache_creation_tokens, 0),
             estimated_cost_usd=estimated_cost,
+            user_id=user_id,
             created_time=datetime.now(),
         )
 

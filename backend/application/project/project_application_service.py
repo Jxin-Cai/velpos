@@ -16,6 +16,7 @@ from application.project.workspace_directory import (
     default_agent_workspace_root,
     github_repository_name,
 )
+from domain.project.acl.workspace_root_resolver import WorkspaceRootResolver
 from domain.session.acl.connection_manager import ConnectionManager
 from application.session.session_application_service import SessionApplicationService
 from domain.project.model.project import Project
@@ -34,20 +35,26 @@ class ProjectApplicationService:
         session_repository: SessionRepository,
         session_service_factory: Callable[[], Awaitable[SessionApplicationService]],
         connection_manager: ConnectionManager,
+        workspace_root_resolver: WorkspaceRootResolver | None = None,
     ) -> None:
         self._project_repository = project_repository
         self._session_repository = session_repository
         self._session_service_factory = session_service_factory
         self._connection_manager = connection_manager
+        self._workspace_root_resolver = workspace_root_resolver
 
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
     async def create_project(self, command: CreateProjectCommand) -> Project:
+        if self._workspace_root_resolver:
+            root = self._workspace_root_resolver.agent_root(command.user_id)
+        else:
+            root = default_agent_workspace_root()
         workspace = await asyncio.to_thread(
             create_workspace_directory,
-            str(default_agent_workspace_root()),
+            str(root),
         )
         dir_path = str(workspace)
 
@@ -108,88 +115,19 @@ class ProjectApplicationService:
             or github_repository_name(command.github_url)
             or workspace.name
         )
-        project = Project.create(name=project_name, dir_path=dir_path)
+        project = Project.create(name=project_name, dir_path=dir_path, user_id=command.user_id)
         await self._project_repository.save(project)
         logger.info("Project created: id=%s, name=%s", project.id, project.name)
         return project
 
-    async def list_projects(self) -> list[Project]:
-        return await self._project_repository.find_all()
+    async def list_projects(self, user_id: int) -> list[Project]:
+        return await self._project_repository.find_all_by_user_id(user_id)
 
     async def get_project(self, project_id: str) -> Project:
         project = await self._project_repository.find_by_id(project_id)
         if project is None:
             raise BusinessException("Project not found", "PROJECT_NOT_FOUND")
         return project
-
-        mode = config.get("mode")
-        if mode not in ("delegation", "collaboration"):
-            raise BusinessException("Invalid team mode, must be 'delegation' or 'collaboration'", "INVALID_TEAM_MODE")
-
-        members_key = "pipeline" if mode == "delegation" else "members"
-        members = config.get(members_key, [])
-        if not isinstance(members, list) or not members:
-            raise BusinessException("Team must have at least one member", "TEAM_NO_MEMBERS")
-
-        seen_project_ids = set()
-        seen_roles = set()
-        for member in members:
-            if not isinstance(member, dict):
-                raise BusinessException("Each team member must be an object", "INVALID_MEMBER")
-            pid = member.get("project_id")
-            role = member.get("role")
-            if not pid:
-                raise BusinessException("Each member must reference a project_id", "MEMBER_NO_PROJECT")
-            if not role:
-                raise BusinessException("Each member must define a role", "MEMBER_NO_ROLE")
-            if pid in seen_project_ids:
-                raise BusinessException(f"Duplicate project_id in team: {pid}", "DUPLICATE_MEMBER")
-            if role in seen_roles:
-                raise BusinessException(f"Duplicate role in team: {role}", "DUPLICATE_ROLE")
-            seen_project_ids.add(pid)
-            seen_roles.add(role)
-            sub_project = await self._project_repository.find_by_id(pid)
-            if sub_project is None:
-                raise BusinessException(f"Sub-project not found: {pid}", "SUB_PROJECT_NOT_FOUND")
-            if sub_project.project_type == "team":
-                raise BusinessException(f"Cannot use a team project as a sub-project: {pid}", "NESTED_TEAM")
-
-        self._validate_int_range(config, "max_concurrent", 1, 10)
-        self._validate_int_range(config, "worker_max_turns", 1, 200)
-        self._validate_number_range(config, "worker_max_budget_usd", 0.1, 50)
-        self._validate_int_range(config, "max_depth", 1, 10)
-
-        if "file_checkpointing" in config and not isinstance(config.get("file_checkpointing"), bool):
-            raise BusinessException("file_checkpointing must be a boolean", "INVALID_FILE_CHECKPOINTING")
-
-        if mode == "collaboration":
-            default_workflow = config.get("default_workflow", [])
-            if default_workflow and not isinstance(default_workflow, list):
-                raise BusinessException("default_workflow must be a list", "INVALID_DEFAULT_WORKFLOW")
-            unknown_roles = [role for role in default_workflow if role not in seen_roles]
-            if unknown_roles:
-                raise BusinessException(
-                    f"default_workflow contains unknown roles: {', '.join(unknown_roles)}",
-                    "INVALID_DEFAULT_WORKFLOW",
-                )
-
-        return mode
-
-    @staticmethod
-    def _validate_int_range(config: dict, key: str, minimum: int, maximum: int) -> None:
-        if key not in config:
-            return
-        value = config.get(key)
-        if not isinstance(value, int) or isinstance(value, bool) or value < minimum or value > maximum:
-            raise BusinessException(f"{key} must be an integer between {minimum} and {maximum}", f"INVALID_{key.upper()}")
-
-    @staticmethod
-    def _validate_number_range(config: dict, key: str, minimum: float, maximum: float) -> None:
-        if key not in config:
-            return
-        value = config.get(key)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < minimum or value > maximum:
-            raise BusinessException(f"{key} must be between {minimum} and {maximum}", f"INVALID_{key.upper()}")
 
     async def get_sessions_by_project(self, project_id: str) -> list:
         """Return all sessions belonging to a project."""

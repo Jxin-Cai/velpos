@@ -35,6 +35,15 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
         result = await self._session.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
 
+    async def find_all_by_user_id(self, user_id: int) -> list[ChannelInit]:
+        stmt = (
+            select(ChannelInitModel)
+            .where(ChannelInitModel.user_id == user_id)
+            .order_by(ChannelInitModel.created_time)
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
     async def remove(self, channel_init_id: str) -> bool:
         return await remove_by_pk(self._session, ChannelInitModel.id, channel_init_id)
 
@@ -42,6 +51,7 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
     def _to_model(ci: ChannelInit) -> ChannelInitModel:
         return ChannelInitModel(
             id=ci.id,
+            user_id=ci.user_id,
             channel_type=ci.channel_type.value,
             name=ci.name,
             init_status=ci.init_status.value,
@@ -62,6 +72,7 @@ class ChannelInitRepositoryImpl(ChannelInitRepository):
             init_status=ChannelInitStatus(model.init_status),
             config=config,
             error_message=model.error_message or "",
+            user_id=model.user_id,
             created_at=model.created_time,
             updated_at=model.updated_time,
         )

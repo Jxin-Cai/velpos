@@ -6,6 +6,7 @@ from typing import Any
 from claude_agent_sdk import list_sessions, rename_session, get_session_messages
 
 from domain.session.acl.claude_session_manager import ClaudeSessionManager
+from infr.config.app_config import app_config
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class ClaudeSessionManagerImpl(ClaudeSessionManager):
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """List Claude Code sessions from ~/.claude/projects/."""
+        if app_config.mode == "pro":
+            return []
         sessions = list_sessions(directory=directory, limit=limit)
         return [
             {

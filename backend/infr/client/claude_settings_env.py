@@ -53,3 +53,12 @@ def load_claude_settings_env(config_dir: Path | None = None) -> dict[str, str]:
             settings_path,
         )
     return env
+
+
+def resolve_default_model() -> str:
+    """Resolve default model: env var → settings.json → fallback."""
+    from_env = os.getenv("DEFAULT_MODEL")
+    if from_env:
+        return from_env
+    settings_env = load_claude_settings_env()
+    return settings_env.get("ANTHROPIC_MODEL", "default")

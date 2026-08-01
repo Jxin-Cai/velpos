@@ -85,6 +85,9 @@ from ohs.im_delivery_coordinator import ImDeliveryCoordinator
 
 logger = logging.getLogger(__name__)
 
+from infr.workspace.workspace_root_resolver_impl import WorkspaceRootResolverImpl
+
+_workspace_root_resolver = WorkspaceRootResolverImpl()
 _connection_manager = ConnectionManager()
 _claude_agent_gateway = ClaudeAgentGateway()
 _claude_plugin_manager = ClaudePluginManager()
@@ -670,6 +673,7 @@ async def get_project_application_service(
         session_repository=session_repo,
         session_service_factory=_create_session_service,
         connection_manager=_connection_manager,
+        workspace_root_resolver=_workspace_root_resolver,
     )
 
 
@@ -869,3 +873,7 @@ async def get_team_board_service(
         flow_engine=flow_engine,
     )
     return TeamBoardApplicationService(lifecycle, card_execution, query, reconciliation)
+
+
+def get_workspace_root_resolver() -> WorkspaceRootResolverImpl:
+    return _workspace_root_resolver

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, JSON, String
+from sqlalchemy import DateTime, Index, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infr.config.base import Base
@@ -13,6 +13,9 @@ class ProjectModel(Base):
 
     id: Mapped[str] = mapped_column(
         String(8), primary_key=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
     )
     name: Mapped[str] = mapped_column(
         String(255), nullable=False,
@@ -46,4 +49,8 @@ class ProjectModel(Base):
     )
     updated_time: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, default=datetime.now, onupdate=datetime.now,
+    )
+
+    __table_args__ = (
+        Index("idx_projects_user_id", "user_id"),
     )

@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from application.scheduler.scheduler_application_service import SchedulerApplicationService
+from domain.user.model.user import User
+from ohs.auth_dependency import get_current_user
 from ohs.dependencies import get_scheduler_application_service
 from ohs.http.api_response import ApiResponse
 
@@ -49,15 +51,17 @@ class ScheduledTaskPatchRequest(BaseModel):
 @router.get("", summary="List scheduled tasks")
 async def list_schedules(
     service: ServiceDep,
+    current_user: User = Depends(get_current_user),
     project_id: str = Query(default=""),
 ) -> ApiResponse[dict]:
-    return ApiResponse.success({"tasks": await service.list_tasks(project_id=project_id)})
+    return ApiResponse.success({"tasks": await service.list_tasks(project_id=project_id, user_id=current_user.id)})
 
 
 @router.post("", summary="Create scheduled task")
 async def create_schedule(
     request: ScheduledTaskRequest,
     service: ServiceDep,
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[dict]:
     task = await service.create_task(
         project_id=request.project_id,
@@ -72,6 +76,7 @@ async def create_schedule(
         execution_mode=request.execution_mode,
         prompt_mode=request.prompt_mode,
         skill_name=request.skill_name,
+        user_id=current_user.id,
     )
     return ApiResponse.success({"task": service.task_to_dict(task)})
 

@@ -1,5 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { initAuth, isAuthenticated, appMode } from '@shared/lib/authStore'
+import { LoginPage } from '@pages/login'
 import { applyVbReviews, fetchSessionTimelineEvents, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
@@ -78,6 +80,7 @@ const { startListening: startHotkeyHintListening, stopListening: stopHotkeyHintL
 
 const ready = ref(false)
 const initError = ref(null)
+const needsLogin = ref(false)
 
 const settingsDialogVisible = ref(false)
 const gitManagerVisible = ref(false)
@@ -713,7 +716,51 @@ watch(currentSessionId, (newId, oldId) => {
   }
 })
 
+async function handleAuthenticated() {
+  needsLogin.value = false
+  await bootApp()
+}
+
+async function bootApp() {
+  try {
+    await loadSessions()
+    restoreRunningSessions()
+    await loadScheduleCounts()
+    globalEventConnection = createGlobalEventConnection()
+    globalEventConnection.onEvent(handleGlobalEvent)
+    globalEventConnection.onReconnect(() => {
+      refreshBoardAfterReconnect()
+    })
+    window.addEventListener('vp-schedules-changed', loadScheduleCounts)
+    if (sidebarMode.value === 'teams') {
+      const firstTeam = projects.value.find(project => project.project_type === 'team')
+      handleProjectSelect(firstTeam?.id || null)
+    } else {
+      restoreLastSession()
+    }
+    ready.value = true
+  } catch (e) {
+    initError.value = e.message || 'Failed to load sessions'
+    ready.value = true
+  }
+}
+
 onMounted(async () => {
+  const authed = await initAuth()
+  if (!authed && appMode.value === 'pro') {
+    needsLogin.value = true
+    ready.value = true
+    // Fade out splash
+    nextTick(() => {
+      const splash = document.getElementById('vp-splash')
+      if (splash) {
+        splash.classList.add('fade-out')
+        splash.addEventListener('transitionend', () => splash.remove(), { once: true })
+      }
+    })
+    return
+  }
+
   try {
     await loadSessions()
     restoreRunningSessions()
@@ -809,10 +856,13 @@ useGlobalHotkeys({
 
 <template>
   <div class="app-layout">
+    <!-- Login page for pro mode -->
+    <LoginPage v-if="needsLogin" @authenticated="handleAuthenticated" />
+
     <!-- Global shortcut interceptor -->
-    <GlobalShortcutInterceptor />
+    <GlobalShortcutInterceptor v-if="!needsLogin" />
     <!-- Skeleton: shown while loadSessions() is pending (ready=false, no error) -->
-    <template v-if="!ready && !initError">
+    <template v-if="!needsLogin && !ready && !initError">
       <header class="app-header">
         <div class="header-left">
           <AppLogo prefix="logo" />
@@ -862,7 +912,7 @@ useGlobalHotkeys({
     </template>
 
     <!-- Real UI: shown after ready or on error -->
-    <template v-else>
+    <template v-else-if="!needsLogin">
       <header class="app-header">
         <div class="header-left">
           <button class="mobile-menu-btn" @click="toggleSidebar" aria-label="Toggle menu">

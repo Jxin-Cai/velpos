@@ -5,6 +5,7 @@ import os
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from application.session.command.create_session_command import CreateSessionCommand
+from infr.client.claude_settings_env import resolve_default_model
 from application.team_board.execution_dispatch import dispatch_execution_query
 from application.team_board.team_workspace_helpers import ensure_agent_project
 from domain.session.model.session_status import SessionStatus
@@ -206,7 +207,7 @@ class LeaderSessionManager:
             team.name, leader_slot, self._project_repo
         )
         session_cmd = CreateSessionCommand(
-            model=os.getenv("DEFAULT_MODEL", "default"),
+            model=resolve_default_model(),
             project_id=agent_project.id,
             project_dir=leader_slot.workspace_ref,
             name=f"[{team.name}] Leader",

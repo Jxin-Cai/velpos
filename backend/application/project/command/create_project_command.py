@@ -6,6 +6,7 @@ class CreateProjectCommand(BaseModel):
 
     name: str = ""
     github_url: str = ""
+    user_id: int = 1
 
     @field_validator('name')
     @classmethod

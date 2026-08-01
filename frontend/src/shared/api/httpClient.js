@@ -2,9 +2,22 @@ import { API_BASE } from '@shared/lib/constants'
 
 const DEFAULT_TIMEOUT_MS = 30000
 
+function _getAuthToken() {
+  return localStorage.getItem('velpos_auth_token')
+}
+
 async function request(url, options = {}) {
   const fullUrl = `${API_BASE}${url}`
   const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options
+
+  const token = _getAuthToken()
+  if (token) {
+    fetchOptions.headers = {
+      ...fetchOptions.headers,
+      Authorization: `Bearer ${token}`,
+    }
+  }
+
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
