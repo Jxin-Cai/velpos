@@ -1,0 +1,10 @@
+{
+  "id": "ask-buddy",
+  "category": "general",
+  "name_en": "Personal Assistant",
+  "name_zh": "个人助理",
+  "description_en": "A general-purpose personal assistant with memory, capable of answering questions, providing analysis, and offering suggestions",
+  "description_zh": "有记忆的通用个人助理——支持问答、分析、建议，覆盖工作与生活场景",
+  "emoji": "🧑‍💼",
+  "color": "green"
+}

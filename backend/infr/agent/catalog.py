@@ -10,6 +10,7 @@ _TEAMS_DIR = Path(__file__).parent / "teams"
 # ── Category definitions ──
 
 CATEGORIES: list[dict] = [
+    {"id": "general", "name_en": "General", "name_zh": "通用"},
     {"id": "engineering", "name_en": "Engineering", "name_zh": "工程开发"},
     {"id": "design", "name_en": "Design", "name_zh": "设计"},
     {"id": "testing", "name_en": "Testing", "name_zh": "测试"},
