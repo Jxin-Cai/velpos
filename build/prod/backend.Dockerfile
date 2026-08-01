@@ -1,5 +1,8 @@
 FROM nikolaik/python-nodejs:python3.12-nodejs22-slim
 
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+    || sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
@@ -8,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm config set registry https://registry.npmmirror.com && npm install -g @anthropic-ai/claude-code
 
 # uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
