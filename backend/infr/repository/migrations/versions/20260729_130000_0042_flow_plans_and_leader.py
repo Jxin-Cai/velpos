@@ -94,7 +94,7 @@ def upgrade() -> None:
     if "attribution_chain" not in _columns("wish_cards"):
         op.add_column(
             "wish_cards",
-            sa.Column("attribution_chain", sa.Text, nullable=True, server_default="[]"),
+            sa.Column("attribution_chain", sa.Text, nullable=True),
         )
 
     # --- Create new tables ---
