@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { initAuth, isAuthenticated, appMode } from '@shared/lib/authStore'
+import { initAuth } from '@shared/lib/authStore'
 import { LoginPage } from '@pages/login'
 import { applyVbReviews, fetchSessionTimelineEvents, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
@@ -746,8 +746,15 @@ async function bootApp() {
 }
 
 onMounted(async () => {
-  const authed = await initAuth()
-  if (!authed && appMode.value === 'pro') {
+  let authed
+  try {
+    authed = await initAuth()
+  } catch (e) {
+    initError.value = e.message || 'Failed to initialize authentication'
+    ready.value = true
+  }
+
+  if (authed === false) {
     needsLogin.value = true
     ready.value = true
     // Fade out splash
@@ -761,7 +768,9 @@ onMounted(async () => {
     return
   }
 
-  await bootApp()
+  if (authed) {
+    await bootApp()
+  }
 
   // Fade out splash screen after app is ready
   nextTick(() => {

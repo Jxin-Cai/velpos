@@ -7,8 +7,8 @@ const USER_KEY = 'velpos_auth_user'
 const state = reactive({
   token: localStorage.getItem(TOKEN_KEY) || null,
   user: JSON.parse(localStorage.getItem(USER_KEY) || 'null'),
-  mode: 'dev',
-  autoLogin: true,
+  mode: null,
+  autoLogin: false,
   initialized: false,
 })
 
@@ -22,14 +22,9 @@ export function getToken() {
 }
 
 export async function initAuth() {
-  try {
-    const config = await get('/api/auth/config')
-    state.mode = config.mode
-    state.autoLogin = config.auto_login
-  } catch {
-    state.mode = 'dev'
-    state.autoLogin = true
-  }
+  const config = await get('/auth/config')
+  state.mode = config.mode
+  state.autoLogin = config.auto_login
 
   if (state.mode === 'dev') {
     state.user = { id: 1, username: 'admin', display_name: 'Admin', role: 'admin' }
@@ -40,7 +35,7 @@ export async function initAuth() {
 
   if (state.token) {
     try {
-      const user = await get('/api/auth/me')
+      const user = await get('/auth/me')
       state.user = user
       state.initialized = true
       return true
@@ -54,7 +49,7 @@ export async function initAuth() {
 }
 
 export async function login(username, password) {
-  const data = await post('/api/auth/login', { username, password })
+  const data = await post('/auth/login', { username, password })
   state.token = data.token
   state.user = data.user
   localStorage.setItem(TOKEN_KEY, data.token)
@@ -63,7 +58,7 @@ export async function login(username, password) {
 }
 
 export async function register(username, password, displayName) {
-  return await post('/api/auth/register', {
+  return await post('/auth/register', {
     username,
     password,
     display_name: displayName || undefined,
