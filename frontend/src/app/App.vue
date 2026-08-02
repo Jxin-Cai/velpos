@@ -1,11 +1,12 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { initAuth } from '@shared/lib/authStore'
+import { initAuth, logout } from '@shared/lib/authStore'
 import { LoginPage } from '@pages/login'
 import { applyVbReviews, fetchSessionTimelineEvents, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
 import { useImBinding } from '@features/im-binding'
 import { createWsConnection, createGlobalEventConnection } from '@shared/api/wsClient'
+import { AUTH_REQUIRED_EVENT } from '@shared/api/httpClient'
 import { listSchedules } from '@features/scheduler/api/schedulerApi'
 import { TeamBoardPage, useTeamBoard } from '@features/team-board'
 import { ChatPanelPage } from '@pages/chat-panel'
@@ -718,7 +719,25 @@ watch(currentSessionId, (newId, oldId) => {
 
 async function handleAuthenticated() {
   needsLogin.value = false
+  initError.value = null
+  ready.value = false
   await bootApp()
+}
+
+function handleAuthRequired() {
+  logout()
+  initError.value = null
+  needsLogin.value = true
+  ready.value = true
+
+  if (globalEventConnection) {
+    globalEventConnection.close()
+    globalEventConnection = null
+  }
+  for (const connection of _connections.values()) {
+    connection.close()
+  }
+  _connections.clear()
 }
 
 async function bootApp() {
@@ -746,6 +765,8 @@ async function bootApp() {
 }
 
 onMounted(async () => {
+  window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired)
+
   let authed
   try {
     authed = await initAuth()
@@ -790,6 +811,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   // Clean up event listener
+  window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired)
   window.removeEventListener('vp-session-imported', handleSessionImported)
   window.removeEventListener('vp-schedules-changed', loadScheduleCounts)
   stopHotkeyHintListening()

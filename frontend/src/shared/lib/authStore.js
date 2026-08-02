@@ -39,7 +39,10 @@ export async function initAuth() {
       state.user = user
       state.initialized = true
       return true
-    } catch {
+    } catch (error) {
+      if (error?.status !== 401) {
+        throw error
+      }
       clearAuth()
     }
   }

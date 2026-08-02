@@ -1,7 +1,9 @@
 import {
+  WS_CLOSE_AUTH_REQUIRED,
   WS_CLOSE_NORMAL,
   WS_CLOSE_NOT_FOUND,
 } from '@shared/lib/constants'
+import { AUTH_REQUIRED_EVENT } from '@shared/api/httpClient'
 
 function _getWsTokenParam() {
   const token = localStorage.getItem('velpos_auth_token')
@@ -65,6 +67,10 @@ function _createBaseConnection(path, {
     ws.onclose = (event) => {
       onClose?.(event, () => eventHandler)
       if (destroyed) return
+      if (event.code === WS_CLOSE_AUTH_REQUIRED) {
+        window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT))
+        return
+      }
       if (skipReconnectCode != null && event.code === skipReconnectCode) return
       reconnectAttempt++
       reconnectTimer = setTimeout(connect, getDelay())

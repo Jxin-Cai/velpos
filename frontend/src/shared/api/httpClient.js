@@ -1,6 +1,15 @@
 import { API_BASE } from '@shared/lib/constants'
 
 const DEFAULT_TIMEOUT_MS = 30000
+export const AUTH_REQUIRED_EVENT = 'vp-auth-required'
+
+export class HttpError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+  }
+}
 
 function _getAuthToken() {
   return localStorage.getItem('velpos_auth_token')
@@ -38,7 +47,11 @@ async function request(url, options = {}) {
       } catch {
         // response body is not JSON, use default error message
       }
-      throw new Error(errorMsg)
+      const error = new HttpError(errorMsg, res.status)
+      if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT))
+      }
+      throw error
     }
 
     // Handle responses with no body (e.g. 204 No Content)
