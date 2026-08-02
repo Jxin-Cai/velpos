@@ -4,10 +4,12 @@ set -Eeuo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROD_DIR="${SCRIPT_DIR}"
+readonly ROOT_DIR="$(cd -- "${PROD_DIR}/../.." && pwd)"
 readonly ENV_FILE="${PROD_DIR}/.env"
 readonly ENV_EXAMPLE_FILE="${PROD_DIR}/.env.example"
 readonly COMPOSE_FILE="${PROD_DIR}/docker-compose.yml"
 readonly HEALTH_TIMEOUT_SECONDS="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-300}"
+readonly REBUILD_BASE_IMAGES="${VELPOS_REBUILD_BASE_IMAGES:-false}"
 
 log() {
   printf '[velpos-deploy] %s\n' "$*"
@@ -21,6 +23,63 @@ fail() {
 
 compose() {
   docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+
+content_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@" | awk '{print $1}' | sha256sum | awk '{print substr($1, 1, 16)}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@" | awk '{print $1}' | shasum -a 256 | awk '{print substr($1, 1, 16)}'
+    return
+  fi
+  fail "Neither sha256sum nor shasum is available."
+}
+
+ensure_base_image() {
+  local image="$1"
+  local dockerfile="$2"
+  local context="$3"
+
+  if [[ "${REBUILD_BASE_IMAGES}" != "true" ]] \
+    && docker image inspect "${image}" >/dev/null 2>&1; then
+    log "Reusing base image ${image}."
+    return
+  fi
+
+  if [[ "${REBUILD_BASE_IMAGES}" == "true" ]]; then
+    log "Refreshing base image ${image}."
+  else
+    log "Base image ${image} is missing; building it once."
+  fi
+  docker build --pull --file "${dockerfile}" --tag "${image}" "${context}"
+}
+
+configure_base_image_names() {
+  local backend_hash frontend_hash
+  backend_hash="$(content_hash \
+    "${PROD_DIR}/backend-base.Dockerfile" \
+    "${ROOT_DIR}/backend/pyproject.toml" \
+    "${ROOT_DIR}/backend/uv.lock")"
+  frontend_hash="$(content_hash \
+    "${PROD_DIR}/frontend-base.Dockerfile" \
+    "${ROOT_DIR}/frontend/package.json" \
+    "${ROOT_DIR}/frontend/package-lock.json")"
+
+  export VELPOS_BACKEND_BASE_IMAGE="velpos-backend-base:${backend_hash}"
+  export VELPOS_FRONTEND_BASE_IMAGE="velpos-frontend-base:${frontend_hash}"
+}
+
+ensure_base_images() {
+  ensure_base_image \
+    "${VELPOS_BACKEND_BASE_IMAGE}" \
+    "${PROD_DIR}/backend-base.Dockerfile" \
+    "${ROOT_DIR}/backend"
+  ensure_base_image \
+    "${VELPOS_FRONTEND_BASE_IMAGE}" \
+    "${PROD_DIR}/frontend-base.Dockerfile" \
+    "${ROOT_DIR}/frontend"
 }
 
 show_diagnostics() {
@@ -164,6 +223,8 @@ validate_environment() {
   [[ "$(read_env_value VELPOS_MODE)" == "pro" ]] || fail "VELPOS_MODE must be set to pro."
   [[ "${HEALTH_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] || \
     fail "DEPLOY_HEALTH_TIMEOUT_SECONDS must be a positive integer."
+  [[ "${REBUILD_BASE_IMAGES}" == "true" || "${REBUILD_BASE_IMAGES}" == "false" ]] || \
+    fail "VELPOS_REBUILD_BASE_IMAGES must be true or false."
 
   projects_host_dir="$(read_env_value PROJECTS_HOST_DIR)"
   projects_host_dir="${projects_host_dir//'${HOME}'/${HOME}}"
@@ -214,13 +275,15 @@ main() {
 
   configure_missing_secrets
   validate_environment
+  configure_base_image_names
   compose config --quiet
+  ensure_base_images
 
-  log "Building production images..."
-  compose build --pull
+  log "Building application code layers..."
+  compose build
 
   log "Starting the production stack..."
-  compose up -d --remove-orphans --force-recreate
+  compose up -d --remove-orphans
   wait_for_services
 
   log "Deployment completed successfully."

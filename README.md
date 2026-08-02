@@ -177,7 +177,7 @@ cd velpos
 ./build/prod/deploy.sh  # One-command production deploy/update
 ```
 
-The scripts check prerequisites, create environment files, prompt for required secrets, and start all services. Run `./build/prod/deploy.sh` again for later production updates. See [doc/deploy-guide.md](./doc/deploy-guide.md) for the full machine-readable guide (useful for Claude Code automated setup).
+The scripts check prerequisites, create environment files, prompt for required secrets, and start all services. Production deployment builds dependency base images once and reuses them for later code-only updates. Run `./build/prod/deploy.sh` again for subsequent releases, or set `VELPOS_REBUILD_BASE_IMAGES=true` to refresh the base images. See [doc/deploy-guide.md](./doc/deploy-guide.md) for the full machine-readable guide (useful for Claude Code automated setup).
 
 ### Development
 

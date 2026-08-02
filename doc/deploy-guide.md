@@ -164,7 +164,15 @@ git pull
 ./build/prod/deploy.sh
 ```
 
-The script validates prerequisites and configuration, pulls base images, rebuilds and recreates the application containers, and waits for the services to become ready. First run takes several minutes (image pulls + build).
+The first run builds content-addressed backend and frontend dependency images, so it can take several minutes. Subsequent runs reuse those images while the Dockerfiles and dependency lockfiles are unchanged, build only the application code layers, and recreate only services whose images or configuration changed.
+
+To deliberately refresh system packages, language runtimes, or globally installed tools in the base images, run:
+
+```bash
+VELPOS_REBUILD_BASE_IMAGES=true ./build/prod/deploy.sh
+```
+
+Changes to `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, or `frontend/package-lock.json` automatically produce a new dependency image without this flag.
 
 ### Step 4: Verify
 

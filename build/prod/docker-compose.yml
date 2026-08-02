@@ -28,6 +28,8 @@ services:
     build:
       context: ../../backend
       dockerfile: ../build/prod/backend.Dockerfile
+      args:
+        BACKEND_BASE_IMAGE: ${VELPOS_BACKEND_BASE_IMAGE:-velpos-backend-base:local}
     container_name: vp-backend
     restart: unless-stopped
     env_file: .env
@@ -51,6 +53,8 @@ services:
     build:
       context: ../../frontend
       dockerfile: ../build/prod/frontend.Dockerfile
+      args:
+        FRONTEND_BASE_IMAGE: ${VELPOS_FRONTEND_BASE_IMAGE:-velpos-frontend-base:local}
     container_name: vp-frontend
     restart: unless-stopped
     ports:

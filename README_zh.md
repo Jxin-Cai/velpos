@@ -177,7 +177,7 @@ cd velpos
 ./build/prod/deploy.sh  # 生产环境一键部署/更新
 ```
 
-脚本会自动检查前置依赖、创建环境配置文件、提示输入必要密钥并启动所有服务。生产环境后续更新仍执行 `./build/prod/deploy.sh`。完整的机器可读部署指南请参考 [doc/deploy-guide.md](./doc/deploy-guide.md)（适合让 Claude Code 自动完成部署）。
+脚本会自动检查前置依赖、创建环境配置文件、提示输入必要密钥并启动所有服务。生产部署会首次构建依赖基础镜像，后续只部署代码层并复用基础镜像；更新仍执行 `./build/prod/deploy.sh`，如需主动刷新基础镜像可设置 `VELPOS_REBUILD_BASE_IMAGES=true`。完整的机器可读部署指南请参考 [doc/deploy-guide.md](./doc/deploy-guide.md)（适合让 Claude Code 自动完成部署）。
 
 ### 开发环境
 
