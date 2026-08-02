@@ -2,6 +2,9 @@ ARG FRONTEND_BASE_IMAGE=velpos-frontend-base:local
 FROM ${FRONTEND_BASE_IMAGE} AS build
 
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
 COPY . .
 RUN npm run build
 

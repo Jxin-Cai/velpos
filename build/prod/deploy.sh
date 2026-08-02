@@ -59,13 +59,9 @@ ensure_base_image() {
 configure_base_image_names() {
   local backend_hash frontend_hash
   backend_hash="$(content_hash \
-    "${PROD_DIR}/backend-base.Dockerfile" \
-    "${ROOT_DIR}/backend/pyproject.toml" \
-    "${ROOT_DIR}/backend/uv.lock")"
+    "${PROD_DIR}/backend-base.Dockerfile")"
   frontend_hash="$(content_hash \
-    "${PROD_DIR}/frontend-base.Dockerfile" \
-    "${ROOT_DIR}/frontend/package.json" \
-    "${ROOT_DIR}/frontend/package-lock.json")"
+    "${PROD_DIR}/frontend-base.Dockerfile")"
 
   export VELPOS_BACKEND_BASE_IMAGE="velpos-backend-base:${backend_hash}"
   export VELPOS_FRONTEND_BASE_IMAGE="velpos-frontend-base:${frontend_hash}"

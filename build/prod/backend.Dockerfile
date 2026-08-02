@@ -1,6 +1,9 @@
 ARG BACKEND_BASE_IMAGE=velpos-backend-base:local
 FROM ${BACKEND_BASE_IMAGE}
 
+COPY --chown=appuser:appuser pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
 COPY --chown=appuser:appuser . .
 
 USER appuser

@@ -164,7 +164,7 @@ git pull
 ./build/prod/deploy.sh
 ```
 
-The first run builds content-addressed backend and frontend dependency images, so it can take several minutes. Subsequent runs reuse those images while the Dockerfiles and dependency lockfiles are unchanged, build only the application code layers, and recreate only services whose images or configuration changed.
+The first run builds content-addressed backend and frontend runtime images, so it can take several minutes. These base images contain only system packages, language runtimes, and shared tools. Python and Node project dependencies remain in the application build and are always resolved from the current lockfiles; Docker reuses their layers while the lockfiles are unchanged. Subsequent runs recreate only services whose images or configuration changed.
 
 To deliberately refresh system packages, language runtimes, or globally installed tools in the base images, run:
 
@@ -172,7 +172,7 @@ To deliberately refresh system packages, language runtimes, or globally installe
 VELPOS_REBUILD_BASE_IMAGES=true ./build/prod/deploy.sh
 ```
 
-Changes to `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, or `frontend/package-lock.json` automatically produce a new dependency image without this flag.
+Changes to `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, or `frontend/package-lock.json` automatically invalidate the corresponding application dependency layer and reinstall the current dependencies. They do not require rebuilding the runtime base images.
 
 ### Step 4: Verify
 

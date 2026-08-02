@@ -24,10 +24,6 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -m appuser \
 USER appuser
 ENV HOME=/home/appuser
 WORKDIR /app
-
-COPY --chown=appuser:appuser pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --index-url https://pypi.tuna.tsinghua.edu.cn/simple
-
 ENV PATH="/app/.venv/bin:/home/appuser/.local/bin:$PATH"
 
 RUN git config --global user.name "Velpos" \
