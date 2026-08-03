@@ -78,38 +78,28 @@ ensure_base_images() {
     "${ROOT_DIR}/frontend"
 }
 
-readonly WHEEL_CACHE_DIR="${PROD_DIR}/.wheel-cache"
-
 prepare_backend_wheels() {
   local wheels_dir="${ROOT_DIR}/backend/.wheels"
-  local lock_hash
-  lock_hash="$(content_hash "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock")"
-  local stamp_file="${WHEEL_CACHE_DIR}/.stamp-${lock_hash}"
 
-  if [[ -f "${stamp_file}" && -d "${WHEEL_CACHE_DIR}/wheels" ]]; then
-    log "Reusing cached wheels (hash: ${lock_hash})."
-    rm -rf "${wheels_dir}"
-    cp -a "${WHEEL_CACHE_DIR}/wheels" "${wheels_dir}"
+  if [[ -d "${wheels_dir}" ]] && ls "${wheels_dir}"/*.whl >/dev/null 2>&1; then
+    log "Using pre-cached wheels from backend/.wheels/."
     return
   fi
 
   log "Downloading Python dependencies for offline install..."
-  rm -rf "${WHEEL_CACHE_DIR}/wheels" "${WHEEL_CACHE_DIR}"/.stamp-*
-  mkdir -p "${WHEEL_CACHE_DIR}/wheels"
+  mkdir -p "${wheels_dir}"
 
   docker run --rm \
     --platform linux/amd64 \
     -v "${ROOT_DIR}/backend:/src:ro" \
-    -v "${WHEEL_CACHE_DIR}/wheels:/wheels" \
+    -v "${wheels_dir}:/wheels" \
     python:3.12-slim \
     bash -c "pip install --quiet uv \
       && uv export --frozen --no-dev --project /src > /tmp/req.txt \
-      && pip download -r /tmp/req.txt -d /wheels --only-binary=:all: --quiet"
+      && pip download -r /tmp/req.txt -d /wheels --only-binary=:all:" \
+    || fail "Failed to download wheels. On slow networks, run './build/prod/prepare-wheels.sh' on a faster machine first, then rsync backend/.wheels/ to the server."
 
-  touch "${stamp_file}"
-  rm -rf "${wheels_dir}"
-  cp -a "${WHEEL_CACHE_DIR}/wheels" "${wheels_dir}"
-  log "Wheels cached successfully."
+  log "Wheels downloaded successfully."
 }
 
 show_diagnostics() {
