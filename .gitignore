@@ -21,6 +21,7 @@ node_modules/
 # Build env files (templates are tracked, actual .env are not)
 build/dev/.env
 build/prod/.env
+build/prod/.wheel-cache/
 backend/.env
 frontend/.env
 
@@ -29,6 +30,7 @@ __pycache__/
 *.pyc
 .venv/
 backend/.venv/
+backend/.wheels/
 
 # Env
 .env
