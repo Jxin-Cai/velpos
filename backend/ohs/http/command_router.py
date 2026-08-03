@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, Query
 
 from application.command.command_application_service import CommandApplicationService
 from application.command_policy.command_policy_application_service import CommandPolicyApplicationService
+from ohs.auth_dependency import require_admin
 from ohs.dependencies import get_command_application_service, get_command_policy_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.command_dto import CommandInfo, CommandListResponse
 
-router = APIRouter(prefix="/api/commands", tags=["Command"])
+router = APIRouter(prefix="/api/commands", tags=["Command"], dependencies=[Depends(require_admin)])
 
 ServiceDep = Annotated[
     CommandApplicationService,

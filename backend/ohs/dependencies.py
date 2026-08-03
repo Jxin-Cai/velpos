@@ -10,6 +10,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.agent.agent_application_service import AgentApplicationService
+from application.agent.agent_template_application_service import AgentTemplateApplicationService
 from application.git.git_application_service import GitApplicationService
 from application.channel_profile.channel_profile_application_service import (
     ChannelProfileApplicationService,
@@ -723,10 +724,12 @@ def get_rule_file_application_service() -> RuleFileApplicationService:
 async def get_agent_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> AgentApplicationService:
+    from infr.repository.agent_template_repository_impl import AgentTemplateRepositoryImpl
     revision_service = _create_revision_service(db_session)
     return AgentApplicationService(
         plugin_manager=_claude_plugin_manager,
         claude_md_revision_service=revision_service,
+        agent_template_repository=AgentTemplateRepositoryImpl(db_session),
     )
 
 
@@ -877,3 +880,10 @@ async def get_team_board_service(
 
 def get_workspace_root_resolver() -> WorkspaceRootResolverImpl:
     return _workspace_root_resolver
+
+
+async def get_agent_template_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> AgentTemplateApplicationService:
+    from infr.repository.agent_template_repository_impl import AgentTemplateRepositoryImpl
+    return AgentTemplateApplicationService(AgentTemplateRepositoryImpl(db_session))

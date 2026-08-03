@@ -14,6 +14,7 @@ const state = reactive({
 
 export const isAuthenticated = computed(() => !!state.token || state.mode === 'dev')
 export const currentUser = computed(() => state.user)
+export const isAdmin = computed(() => state.user?.role === 'admin')
 export const appMode = computed(() => state.mode)
 export const authInitialized = computed(() => state.initialized)
 

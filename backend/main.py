@@ -42,6 +42,8 @@ from ohs.http.memory_router import router as memory_router
 from ohs.http.team_router import router as team_router
 from ohs.http.auth_router import router as auth_router
 from ohs.http.flow_router import router as flow_router
+from ohs.http.admin_agent_template_router import router as admin_agent_template_router
+from ohs.http.admin_user_router import router as admin_user_router
 from ohs.ws.session_ws import router as ws_router
 from ohs.auth_dependency import AuthMiddleware
 from ohs.cors_config import DEFAULT_CORS_ORIGINS as _DEFAULT_CORS_ORIGINS
@@ -493,6 +495,8 @@ app.include_router(usage_router)
 app.include_router(memory_router)
 app.include_router(team_router)
 app.include_router(flow_router)
+app.include_router(admin_agent_template_router)
+app.include_router(admin_user_router)
 
 
 @app.exception_handler(BusinessException)
@@ -500,8 +504,14 @@ async def business_exception_handler(
     request: Request,
     exc: BusinessException,
 ) -> JSONResponse:
+    if exc.code == "AUTH_REQUIRED":
+        status_code = 401
+    elif exc.code == "ADMIN_REQUIRED":
+        status_code = 403
+    else:
+        status_code = 422
     response = ApiResponse.fail(code=-1, message=exc.message)
-    return JSONResponse(status_code=422, content=response.model_dump())
+    return JSONResponse(status_code=status_code, content=response.model_dump())
 
 
 @app.exception_handler(Exception)

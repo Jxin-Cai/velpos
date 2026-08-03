@@ -21,6 +21,7 @@ class UserRepositoryImpl(UserRepository):
                 role=user.role.value,
                 hashed_password=user.hashed_password,
                 created_time=user.created_at,
+                is_active=user.is_active,
             )
             self._db.add(model)
             await self._db.flush()
@@ -31,6 +32,7 @@ class UserRepositoryImpl(UserRepository):
                 role=UserRole(model.role),
                 hashed_password=model.hashed_password,
                 created_at=model.created_time,
+                is_active=model.is_active,
             )
         else:
             model = await self._db.get(UserModel, user.id)
@@ -40,6 +42,7 @@ class UserRepositoryImpl(UserRepository):
             model.display_name = user.display_name
             model.role = user.role.value
             model.hashed_password = user.hashed_password
+            model.is_active = user.is_active
             await self._db.flush()
             return user
 
@@ -57,6 +60,11 @@ class UserRepositoryImpl(UserRepository):
             return None
         return self._to_domain(model)
 
+    async def find_all(self) -> list[User]:
+        stmt = select(UserModel).order_by(UserModel.id)
+        result = await self._db.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
     @staticmethod
     def _to_domain(model: UserModel) -> User:
         return User.reconstitute(
@@ -66,4 +74,5 @@ class UserRepositoryImpl(UserRepository):
             role=UserRole(model.role),
             hashed_password=model.hashed_password,
             created_at=model.created_time,
+            is_active=model.is_active,
         )

@@ -18,6 +18,7 @@ class User:
     _role: UserRole
     _hashed_password: str
     _created_at: datetime = field(default_factory=datetime.now)
+    _is_active: bool = True
 
     @property
     def id(self) -> int:
@@ -44,6 +45,10 @@ class User:
         return self._created_at
 
     @property
+    def is_active(self) -> bool:
+        return self._is_active
+
+    @property
     def is_admin(self) -> bool:
         return self._role == UserRole.ADMIN
 
@@ -62,6 +67,7 @@ class User:
             _role=role,
             _hashed_password=hashed_password,
             _created_at=datetime.now(),
+            _is_active=True,
         )
 
     @classmethod
@@ -73,6 +79,7 @@ class User:
         role: UserRole,
         hashed_password: str,
         created_at: datetime,
+        is_active: bool = True,
     ) -> User:
         return cls(
             _id=id,
@@ -81,6 +88,7 @@ class User:
             _role=role,
             _hashed_password=hashed_password,
             _created_at=created_at,
+            _is_active=is_active,
         )
 
     def update_display_name(self, display_name: str) -> None:
@@ -88,3 +96,12 @@ class User:
 
     def update_password(self, hashed_password: str) -> None:
         self._hashed_password = hashed_password
+
+    def update_role(self, role: UserRole) -> None:
+        self._role = role
+
+    def activate(self) -> None:
+        self._is_active = True
+
+    def deactivate(self) -> None:
+        self._is_active = False

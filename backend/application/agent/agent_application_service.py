@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
+from domain.agent.repository.agent_template_repository import AgentTemplateRepository
 from domain.project.acl.plugin_manager import PluginManager
 from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
@@ -24,9 +25,11 @@ class AgentApplicationService:
         self,
         plugin_manager: PluginManager | None = None,
         claude_md_revision_service: ClaudeMdRevisionApplicationService | None = None,
+        agent_template_repository: AgentTemplateRepository | None = None,
     ) -> None:
         self._plugin_manager = plugin_manager
         self._claude_md_revision_service = claude_md_revision_service
+        self._agent_template_repository = agent_template_repository
 
     async def list_agents(self, language: str = "en") -> dict:
         name_key = f"name_{language}" if language in ("en", "zh") else "name_en"
@@ -42,6 +45,7 @@ class AgentApplicationService:
                     "emoji": a["emoji"],
                     "color": a["color"],
                     "has_plugin": a.get("has_plugin", False),
+                    "source": "system",
                 }
                 for a in AGENT_CATALOG
                 if a["category"] == cat["id"]
@@ -51,6 +55,29 @@ class AgentApplicationService:
                 "name": cat.get(name_key, cat["name_en"]),
                 "agents": agents,
             })
+
+        if self._agent_template_repository:
+            custom_templates = await self._agent_template_repository.find_all_active()
+            if custom_templates:
+                custom_agents = [
+                    {
+                        "id": t.id,
+                        "name": t.name_zh if language == "zh" else t.name_en,
+                        "description": t.description_zh if language == "zh" else t.description_en,
+                        "emoji": t.emoji,
+                        "color": t.color,
+                        "has_plugin": bool(t.plugins_config),
+                        "source": "custom",
+                    }
+                    for t in custom_templates
+                ]
+                custom_name = "自定义" if language == "zh" else "Custom"
+                categories.append({
+                    "id": "custom",
+                    "name": custom_name,
+                    "agents": custom_agents,
+                })
+
         return {"categories": categories}
 
     async def list_team_templates(self, language: str = "en", mode: str | None = None) -> dict:

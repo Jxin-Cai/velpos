@@ -49,6 +49,14 @@ async def get_current_user(request: Request) -> User:
     return user
 
 
+async def require_admin(request: Request) -> User:
+    user = await get_current_user(request)
+    if not user.is_admin:
+        from domain.shared.business_exception import BusinessException
+        raise BusinessException("Admin access required", "ADMIN_REQUIRED")
+    return user
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
@@ -90,6 +98,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     status_code=401,
                     content={"code": -1, "message": "User not found", "data": None},
+                )
+            if not user.is_active:
+                return JSONResponse(
+                    status_code=403,
+                    content={"code": -1, "message": "Account is disabled", "data": None},
                 )
             request.state.current_user = user
 

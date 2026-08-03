@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infr.config.base import Base
@@ -17,3 +17,4 @@ class UserModel(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="member")
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     created_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="1", default=True)

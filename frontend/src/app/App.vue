@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { initAuth, logout } from '@shared/lib/authStore'
+import { initAuth, logout, isAdmin } from '@shared/lib/authStore'
 import { LoginPage } from '@pages/login'
 import { applyVbReviews, fetchSessionTimelineEvents, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
@@ -20,6 +20,7 @@ import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
 import { WorkspaceButton, WorkspacePanel } from '@features/workspace'
 import { SchedulerDialog } from '@features/scheduler'
+import { AdminPage, AdminButton } from '@features/admin-panel'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
 import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
 import AppLogo from '@shared/ui/AppLogo.vue'
@@ -83,6 +84,7 @@ const ready = ref(false)
 const initError = ref(null)
 const needsLogin = ref(false)
 
+const adminVisible = ref(false)
 const settingsDialogVisible = ref(false)
 const gitManagerVisible = ref(false)
 const terminalDrawerVisible = ref(false)
@@ -938,10 +940,11 @@ useGlobalHotkeys({
         <div class="header-right">
           <NotificationBell @navigate="handleNotificationNavigate" />
           <WorkingSessionsButton @navigate="handleNotificationNavigate" />
-          <GitManagerButton @click="gitManagerVisible = true" />
+          <GitManagerButton v-if="isAdmin" @click="gitManagerVisible = true" />
           <SettingsButton @click="settingsDialogVisible = true" />
           <WorkspaceButton :active="workspaceVisible" @click="workspaceVisible = !workspaceVisible" />
-          <TerminalButton :active="terminalDrawerVisible" @click="terminalDrawerVisible = !terminalDrawerVisible" />
+          <TerminalButton v-if="isAdmin" :active="terminalDrawerVisible" @click="terminalDrawerVisible = !terminalDrawerVisible" />
+          <AdminButton v-if="isAdmin" @click="adminVisible = true" />
           <ThemeSwitcher />
         </div>
       </header>
@@ -993,7 +996,11 @@ useGlobalHotkeys({
           </button>
         </div>
         <main class="app-main">
-          <div v-if="initError" class="init-error">
+          <AdminPage
+            v-if="adminVisible"
+            @close="adminVisible = false"
+          />
+          <div v-else-if="initError" class="init-error">
             <div class="error-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"/>

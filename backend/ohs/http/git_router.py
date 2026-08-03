@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from application.git.git_application_service import GitApplicationService
+from ohs.auth_dependency import require_admin
 from ohs.dependencies import get_git_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.git_dto import (
@@ -17,7 +18,7 @@ from ohs.http.dto.git_dto import (
     SshPublicKeyResponse,
 )
 
-router = APIRouter(prefix="/api/git", tags=["Git"])
+router = APIRouter(prefix="/api/git", tags=["Git"], dependencies=[Depends(require_admin)])
 
 ServiceDep = Annotated[
     GitApplicationService,

@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends
 
 from application.terminal.command.execute_terminal_command import ExecuteTerminalCommand
 from application.terminal.terminal_application_service import TerminalApplicationService
+from ohs.auth_dependency import require_admin
 from ohs.dependencies import get_terminal_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.terminal_dto import ExecuteTerminalRequest, OpenPathRequest
 
-router = APIRouter(prefix="/api/terminal", tags=["Terminal"])
+router = APIRouter(prefix="/api/terminal", tags=["Terminal"], dependencies=[Depends(require_admin)])
 
 ServiceDep = Annotated[
     TerminalApplicationService,
