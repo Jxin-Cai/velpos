@@ -59,6 +59,7 @@ async def update_user_role(
     user_id: int,
     request: UpdateRoleRequest,
     repo: RepoDep,
+    admin: Annotated[User, Depends(require_admin)],
 ) -> ApiResponse[None]:
     user = await repo.find_by_id(user_id)
     if user is None:
@@ -68,6 +69,9 @@ async def update_user_role(
         new_role = UserRole(request.role)
     except ValueError:
         raise BusinessException(f"Invalid role: {request.role}")
+
+    if user.id == admin.id and new_role != UserRole.ADMIN:
+        raise BusinessException("Administrators cannot demote their own account")
 
     user.update_role(new_role)
     await repo.save(user)
@@ -79,10 +83,14 @@ async def update_user_status(
     user_id: int,
     request: UpdateStatusRequest,
     repo: RepoDep,
+    admin: Annotated[User, Depends(require_admin)],
 ) -> ApiResponse[None]:
     user = await repo.find_by_id(user_id)
     if user is None:
         raise BusinessException(f"User not found: {user_id}")
+
+    if user.id == admin.id and not request.is_active:
+        raise BusinessException("Administrators cannot disable their own account")
 
     if request.is_active:
         user.activate()

@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import AgentTemplateTab from './AgentTemplateTab.vue'
 import UserManagementTab from './UserManagementTab.vue'
+import { SettingsDialog } from '@features/settings-manager'
+import { GitManagerDialog } from '@features/git-manager'
 
 const emit = defineEmits(['close'])
 
@@ -13,6 +15,14 @@ const tabs = [
 ]
 
 const activeTab = ref('agents')
+const settingsVisible = ref(false)
+const gitVisible = ref(false)
+
+function selectTab(tab) {
+  activeTab.value = tab.key
+  if (tab.key === 'settings') settingsVisible.value = true
+  if (tab.key === 'git') gitVisible.value = true
+}
 </script>
 
 <template>
@@ -32,7 +42,7 @@ const activeTab = ref('agents')
           :key="tab.key"
           class="admin-tab"
           :class="{ active: activeTab === tab.key }"
-          @click="activeTab = tab.key"
+          @click="selectTab(tab)"
         >
           {{ tab.label }}
         </button>
@@ -41,13 +51,17 @@ const activeTab = ref('agents')
     <main class="admin-body">
       <AgentTemplateTab v-if="activeTab === 'agents'" />
       <UserManagementTab v-else-if="activeTab === 'users'" />
-      <div v-else-if="activeTab === 'settings'" class="admin-placeholder">
-        <p>CC 配置管理（即将上线）</p>
+      <div v-else-if="activeTab === 'settings'" class="admin-launcher">
+        <p>管理 Claude Code 设置、模型渠道和认证配置。</p>
+        <button class="glass-btn primary" @click="settingsVisible = true">打开 CC 配置</button>
       </div>
-      <div v-else-if="activeTab === 'git'" class="admin-placeholder">
-        <p>Git 配置管理（即将上线）</p>
+      <div v-else-if="activeTab === 'git'" class="admin-launcher">
+        <p>管理全局 Git 身份和 SSH 密钥。</p>
+        <button class="glass-btn primary" @click="gitVisible = true">打开 Git 配置</button>
       </div>
     </main>
+    <SettingsDialog :visible="settingsVisible" @close="settingsVisible = false" />
+    <GitManagerDialog :visible="gitVisible" @close="gitVisible = false" />
   </div>
 </template>
 
@@ -116,12 +130,14 @@ const activeTab = ref('agents')
   padding: 24px;
 }
 
-.admin-placeholder {
+.admin-launcher {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 200px;
   color: var(--text-muted);
   font-size: 14px;
+  flex-direction: column;
+  gap: 12px;
 }
 </style>

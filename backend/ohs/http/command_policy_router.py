@@ -6,10 +6,15 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from application.command_policy.command_policy_application_service import CommandPolicyApplicationService
+from ohs.auth_dependency import require_admin
 from ohs.dependencies import get_command_policy_application_service
 from ohs.http.api_response import ApiResponse
 
-router = APIRouter(prefix="/api/commands/policies", tags=["Command Policy"])
+router = APIRouter(
+    prefix="/api/commands/policies",
+    tags=["Command Policy"],
+    dependencies=[Depends(require_admin)],
+)
 
 ServiceDep = Annotated[
     CommandPolicyApplicationService,

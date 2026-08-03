@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, Field
 
 from application.settings.settings_application_service import SettingsApplicationService
-from domain.user.model.user import User
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from infr.config.app_config import app_config
 from ohs.auth_dependency import require_admin
@@ -15,7 +14,11 @@ from ohs.http.api_response import ApiResponse
 
 _SENSITIVE_ENV_KEYS = {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"}
 
-router = APIRouter(prefix="/api/settings", tags=["Settings"])
+router = APIRouter(
+    prefix="/api/settings",
+    tags=["Settings"],
+    dependencies=[Depends(require_admin)],
+)
 
 ServiceDep = Annotated[
     SettingsApplicationService,
@@ -50,7 +53,6 @@ async def get_settings(
 async def update_settings(
     data: Annotated[dict[str, Any], Body(...)],
     service: ServiceDep,
-    _admin: Annotated[User, Depends(require_admin)],
 ) -> ApiResponse[dict]:
     result = await service.update_settings(data)
     return ApiResponse.success(result)
@@ -60,7 +62,6 @@ async def update_settings(
 async def fetch_models(
     request: FetchModelsRequest,
     gateway: GatewayDep,
-    _admin: Annotated[User, Depends(require_admin)],
 ) -> ApiResponse[list]:
     models = await gateway.get_models_for_channel(
         host=request.host,

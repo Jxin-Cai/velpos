@@ -13,6 +13,7 @@ from application.channel_profile.command.create_channel_profile_command import (
 from application.channel_profile.command.update_channel_profile_command import (
     UpdateChannelProfileCommand,
 )
+from ohs.auth_dependency import require_admin
 from ohs.dependencies import get_channel_profile_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.channel_profile_dto import (
@@ -22,7 +23,11 @@ from ohs.http.dto.channel_profile_dto import (
     UpdateChannelProfileRequest,
 )
 
-router = APIRouter(prefix="/api/channel-profiles", tags=["ChannelProfile"])
+router = APIRouter(
+    prefix="/api/channel-profiles",
+    tags=["ChannelProfile"],
+    dependencies=[Depends(require_admin)],
+)
 
 ServiceDep = Annotated[
     ChannelProfileApplicationService,

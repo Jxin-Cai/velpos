@@ -90,7 +90,7 @@ class AgentApplicationService:
         language: str,
         project_repository: ProjectRepository,
     ) -> Project:
-        agent_meta = get_agent_by_id(agent_id)
+        agent_meta = await self._resolve_agent_meta(agent_id)
         if not agent_meta:
             raise BusinessException(f"Unknown agent: {agent_id}")
 
@@ -110,7 +110,7 @@ class AgentApplicationService:
         if current_agent and current_agent.get("id") != agent_id:
             await self._uninstall_agent_plugins(current_agent["id"], project_dir)
 
-        prompt_content = read_prompt(agent_id, language)
+        prompt_content = self._read_prompt(agent_meta, language)
         await self._apply_claude_md_revision(project_dir, prompt_content)
         logger.info(
             "Applied agent prompt through CLAUDE.md revision: agent=%s, lang=%s, project=%s",
@@ -140,14 +140,14 @@ class AgentApplicationService:
 
         agent_id = current_agent["id"]
         language = current_agent.get("language", "en")
-        agent_meta = get_agent_by_id(agent_id)
+        agent_meta = await self._resolve_agent_meta(agent_id)
         if not agent_meta:
             raise BusinessException(f"Unknown agent: {agent_id}")
 
         project_dir = project.dir_path
 
         # Re-apply CLAUDE.md revision
-        prompt_content = read_prompt(agent_id, language)
+        prompt_content = self._read_prompt(agent_meta, language)
         await self._apply_claude_md_revision(project_dir, prompt_content)
         logger.info(
             "Updated agent prompt through CLAUDE.md revision: agent=%s, lang=%s, project=%s",
@@ -209,7 +209,7 @@ class AgentApplicationService:
     async def _install_agent_plugins(self, agent_id: str, project_dir: str) -> None:
         if not self._plugin_manager:
             return
-        agent_meta = get_agent_by_id(agent_id)
+        agent_meta = await self._resolve_agent_meta(agent_id)
         if not agent_meta:
             return
 
@@ -267,7 +267,7 @@ class AgentApplicationService:
     async def _uninstall_agent_plugins(self, agent_id: str, project_dir: str) -> None:
         if not self._plugin_manager:
             return
-        agent_meta = get_agent_by_id(agent_id)
+        agent_meta = await self._resolve_agent_meta(agent_id, active_only=False)
         if not agent_meta:
             return
 
@@ -293,3 +293,41 @@ class AgentApplicationService:
                     "Failed to uninstall marketplace plugin %s for agent %s",
                     plugin_name, agent_id, exc_info=True,
                 )
+
+    async def _resolve_agent_meta(
+        self,
+        agent_id: str,
+        *,
+        active_only: bool = True,
+    ) -> dict | None:
+        system_agent = get_agent_by_id(agent_id)
+        if system_agent is not None:
+            return {**system_agent, "source": "system"}
+
+        if self._agent_template_repository is None:
+            return None
+        template = await self._agent_template_repository.find_by_id(agent_id)
+        if template is None or (active_only and not template.is_active):
+            return None
+
+        plugin_config = dict(template.plugins_config or {})
+        return {
+            "id": template.id,
+            "source": "custom",
+            "prompt_en": template.prompt_en,
+            "prompt_zh": template.prompt_zh,
+            "plugins": list(plugin_config.get("local_plugins") or []),
+            "marketplace_plugins": {
+                "marketplaces": list(plugin_config.get("marketplaces") or []),
+                "plugins": list(plugin_config.get("plugins") or []),
+            },
+        }
+
+    @staticmethod
+    def _read_prompt(agent_meta: dict, language: str) -> str:
+        if agent_meta.get("source") == "system":
+            return read_prompt(agent_meta["id"], language)
+
+        primary_key = "prompt_zh" if language == "zh" else "prompt_en"
+        fallback_key = "prompt_en" if language == "zh" else "prompt_zh"
+        return str(agent_meta.get(primary_key) or agent_meta.get(fallback_key) or "")

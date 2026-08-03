@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import Depends, Request
+from fastapi import Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -55,6 +55,35 @@ async def require_admin(request: Request) -> User:
         from domain.shared.business_exception import BusinessException
         raise BusinessException("Admin access required", "ADMIN_REQUIRED")
     return user
+
+
+async def authenticate_websocket_user(websocket: WebSocket) -> User | None:
+    """Authenticate a WebSocket and re-check the current database user state."""
+    if app_config.mode == "dev":
+        return _DEFAULT_ADMIN
+
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+
+    from application.auth.auth_application_service import AuthApplicationService
+    from infr.config.database import async_session_factory
+    from infr.repository.user_repository_impl import UserRepositoryImpl
+
+    async with async_session_factory() as db_session:
+        auth_svc = AuthApplicationService(
+            UserRepositoryImpl(db_session),
+            jwt_secret=app_config.jwt_secret,
+            jwt_expire_minutes=app_config.jwt_expire_minutes,
+            mode=app_config.mode,
+        )
+        user_id = auth_svc.verify_token(token)
+        if user_id is None:
+            return None
+        user = await auth_svc.get_user_by_id(user_id)
+        if user is None or not user.is_active:
+            return None
+        return user
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

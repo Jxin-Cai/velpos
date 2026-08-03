@@ -71,6 +71,9 @@ class AuthApplicationService:
         if not user.hashed_password:
             raise BusinessException("Invalid username or password", "AUTH_FAILED")
 
+        if not user.is_active:
+            raise BusinessException("Account is disabled", "ACCOUNT_DISABLED")
+
         if not self._verify_password(password, user.hashed_password):
             raise BusinessException("Invalid username or password", "AUTH_FAILED")
 

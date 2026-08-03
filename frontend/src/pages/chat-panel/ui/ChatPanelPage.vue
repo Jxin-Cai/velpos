@@ -33,6 +33,7 @@ import { TracePanel } from '@features/trace-viewer'
 import { getSettings, updateSettings } from '@features/settings-manager'
 import { usePermissionMode } from '../model/usePermissionMode'
 import { getExecutionHistory } from '@features/team-board'
+import { isAdmin } from '@shared/lib/authStore'
 
 const emit = defineEmits(['locate-session', 'return-team', 'open-file'])
 
@@ -298,10 +299,12 @@ onMounted(async () => {
   } catch {
     // fallback to empty — user can still type model names
   }
-  try {
-    const settings = await getSettings()
-    currentEffort.value = settings?.effortLevel || ''
-  } catch { /* fallback to default */ }
+  if (isAdmin.value) {
+    try {
+      const settings = await getSettings()
+      currentEffort.value = settings?.effortLevel || ''
+    } catch { /* fallback to default */ }
+  }
   // Fetch available IM channels and binding status for current session
   fetchImChannels()
   if (currentSessionId.value) {
@@ -434,6 +437,7 @@ function getEffortLabel(val) {
 }
 
 async function handleEffortSelect(val) {
+  if (!isAdmin.value) return
   showEffortMenu.value = false
   currentEffort.value = val
   try {
@@ -1451,6 +1455,7 @@ function formatMaxTokens(n) {
           </div>
         </div>
         <CommandPaletteButton
+          v-if="isAdmin"
           :disabled="!currentSessionId"
           @click="handleCommandsClick"
         />
@@ -1719,7 +1724,7 @@ function formatMaxTokens(n) {
             </div>
             </Transition>
           </div>
-          <div class="dropdown-wrapper" @click.stop>
+          <div v-if="isAdmin" class="dropdown-wrapper" @click.stop>
             <button
               class="dash-chip dash-effort"
               @click="showEffortMenu = !showEffortMenu; showModelMenu = false; showPermMenu = false; showHistory = false"

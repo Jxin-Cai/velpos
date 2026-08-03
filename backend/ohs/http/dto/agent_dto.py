@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +12,7 @@ class AgentInfo(BaseModel):
     emoji: str
     color: str
     has_plugin: bool = False
+    source: Literal["system", "custom"] = "system"
 
 
 class AgentCategoryInfo(BaseModel):

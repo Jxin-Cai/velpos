@@ -20,7 +20,7 @@ from infr.client.connection_manager import ConnectionManager
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from ohs.assembler.session_assembler import SessionAssembler
 from application.team_board.team_board_service import TeamBoardApplicationService
-from infr.config.app_config import app_config
+from ohs.auth_dependency import authenticate_websocket_user
 from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_attachment_application_service, get_terminal_application_service, get_create_session_service_factory, get_team_board_service
 
 logger = logging.getLogger(__name__)
@@ -417,6 +417,13 @@ async def terminal_websocket_endpoint(
     websocket: WebSocket,
     terminal_service: TerminalServiceDep,
 ) -> None:
+    user = await authenticate_websocket_user(websocket)
+    if user is None:
+        await websocket.close(code=4001)
+        return
+    if not user.is_admin:
+        await websocket.close(code=4003)
+        return
     await websocket.accept()
     init = await websocket.receive_json()
     cwd = init.get("cwd") if isinstance(init, dict) else None
@@ -458,26 +465,12 @@ async def terminal_websocket_endpoint(
         await terminal_service.close_pty(terminal_id)
 
 
-def _verify_ws_token(websocket: WebSocket) -> bool:
-    if app_config.mode == "dev":
-        return True
-    token = websocket.query_params.get("token")
-    if not token:
-        return False
-    import jwt as pyjwt
-    try:
-        pyjwt.decode(token, app_config.jwt_secret, algorithms=["HS256"])
-        return True
-    except pyjwt.InvalidTokenError:
-        return False
-
-
 @router.websocket("/ws/events")
 async def global_events_endpoint(
     websocket: WebSocket,
     manager: ConnectionManagerDep,
 ) -> None:
-    if not _verify_ws_token(websocket):
+    if await authenticate_websocket_user(websocket) is None:
         await websocket.close(code=4001)
         return
     await manager.connect_global(websocket)
@@ -501,7 +494,7 @@ async def websocket_endpoint(
     attachment_service: AttachmentServiceDep,
     team_service: TeamServiceDep,
 ) -> None:
-    if not _verify_ws_token(websocket):
+    if await authenticate_websocket_user(websocket) is None:
         await websocket.close(code=4001)
         return
     # Accept WebSocket first to avoid 403 on handshake rejection.

@@ -126,6 +126,7 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.trace_span_model  # noqa: F401
     import infr.repository.im_delivery_model  # noqa: F401
     import infr.repository.user_model  # noqa: F401
+    import infr.repository.agent_template_model  # noqa: F401
 
     connectable = async_engine_from_config(
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
@@ -506,7 +507,7 @@ async def business_exception_handler(
 ) -> JSONResponse:
     if exc.code == "AUTH_REQUIRED":
         status_code = 401
-    elif exc.code == "ADMIN_REQUIRED":
+    elif exc.code in {"ADMIN_REQUIRED", "ACCOUNT_DISABLED"}:
         status_code = 403
     else:
         status_code = 422

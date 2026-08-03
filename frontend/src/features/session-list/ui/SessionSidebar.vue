@@ -27,6 +27,10 @@ const props = defineProps({
     type: Object,
     default: () => ({}),
   },
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits([
@@ -655,7 +659,7 @@ defineExpose({ scrollToSession })
                   </svg>
                 </button>
                 <button
-                  v-if="group.id !== '__unassigned__'"
+                  v-if="isAdmin && group.id !== '__unassigned__'"
                   class="project-action-btn project-clock-btn"
                   @click.stop="emit('open-scheduler', group.id)"
                   aria-label="Configure project clock"

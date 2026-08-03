@@ -48,7 +48,9 @@ function createTab(no) {
 
 function terminalWsUrl() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}/ws/terminal`
+  const token = localStorage.getItem('velpos_auth_token')
+  const query = token ? `?token=${encodeURIComponent(token)}` : ''
+  return `${protocol}//${window.location.host}/ws/terminal${query}`
 }
 
 function createXterm(tab) {

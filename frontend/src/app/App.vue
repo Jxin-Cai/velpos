@@ -15,8 +15,6 @@ import { NOTIFICATION_TYPE, NotificationBell, useNotifications } from '@features
 import { WorkingSessionsButton, useWorkingSessions } from '@features/working-sessions'
 import { fetchSessionRunSteps } from '@features/task-progress'
 import { fetchTraceRuns } from '@features/trace-viewer'
-import { SettingsButton, SettingsDialog } from '@features/settings-manager'
-import { GitManagerButton, GitManagerDialog } from '@features/git-manager'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
 import { WorkspaceButton, WorkspacePanel } from '@features/workspace'
 import { SchedulerDialog } from '@features/scheduler'
@@ -85,8 +83,6 @@ const initError = ref(null)
 const needsLogin = ref(false)
 
 const adminVisible = ref(false)
-const settingsDialogVisible = ref(false)
-const gitManagerVisible = ref(false)
 const terminalDrawerVisible = ref(false)
 const terminalDockHeight = ref(0)
 const workspaceVisible = ref(false)
@@ -846,11 +842,12 @@ function handleSessionImported(event) {
 
 // ── Global shortcuts ──
 
-// Cmd/Ctrl + P: Open settings dialog
+// Cmd/Ctrl + P: Open the administrator panel
 useGlobalHotkeys({
   keys: ['Ctrl+P', 'Cmd+P'],
   handler: () => {
-    settingsDialogVisible.value = true
+    if (!isAdmin.value) return true
+    adminVisible.value = true
     return false
   },
   priority: 100
@@ -940,8 +937,6 @@ useGlobalHotkeys({
         <div class="header-right">
           <NotificationBell @navigate="handleNotificationNavigate" />
           <WorkingSessionsButton @navigate="handleNotificationNavigate" />
-          <GitManagerButton v-if="isAdmin" @click="gitManagerVisible = true" />
-          <SettingsButton @click="settingsDialogVisible = true" />
           <WorkspaceButton :active="workspaceVisible" @click="workspaceVisible = !workspaceVisible" />
           <TerminalButton v-if="isAdmin" :active="terminalDrawerVisible" @click="terminalDrawerVisible = !terminalDrawerVisible" />
           <AdminButton v-if="isAdmin" @click="adminVisible = true" />
@@ -968,6 +963,7 @@ useGlobalHotkeys({
           :current-session-id="currentSessionId"
           :loading="loading"
           :schedule-counts="scheduleCounts"
+          :is-admin="isAdmin"
           @create="handleCreate"
           @select="handleSessionSelect"
           @delete="onDeleteSession"
@@ -1059,14 +1055,6 @@ useGlobalHotkeys({
         </main>
       </div>
 
-      <SettingsDialog
-        :visible="settingsDialogVisible"
-        @close="settingsDialogVisible = false"
-      />
-      <GitManagerDialog
-        :visible="gitManagerVisible"
-        @close="gitManagerVisible = false"
-      />
       <WorkspacePanel
         :visible="workspaceVisible"
         :project="currentProject"

@@ -13,7 +13,7 @@ const form = ref({
   name_zh: '',
   description_en: '',
   description_zh: '',
-  category: '',
+  category: 'custom',
   emoji: '🤖',
   color: '#6366f1',
   prompt_en: '',
@@ -22,6 +22,8 @@ const form = ref({
 
 const saving = ref(false)
 const isEdit = ref(false)
+const error = ref('')
+const pluginsConfigText = ref('')
 
 onMounted(() => {
   if (props.template) {
@@ -31,24 +33,47 @@ onMounted(() => {
       name_zh: props.template.name_zh || '',
       description_en: props.template.description_en || '',
       description_zh: props.template.description_zh || '',
-      category: props.template.category || '',
+      category: props.template.category || 'custom',
       emoji: props.template.emoji || '🤖',
       color: props.template.color || '#6366f1',
       prompt_en: props.template.prompt_en || '',
       prompt_zh: props.template.prompt_zh || '',
     }
+    pluginsConfigText.value = props.template.plugins_config
+      ? JSON.stringify(props.template.plugins_config, null, 2)
+      : ''
   }
 })
 
 async function handleSubmit() {
+  error.value = ''
+  const requiredFields = ['name_en', 'name_zh', 'prompt_en', 'prompt_zh']
+  if (requiredFields.some(key => !form.value[key]?.trim())) {
+    error.value = '中英文名称和 Prompt 均为必填项'
+    return
+  }
+
+  let pluginsConfig = null
+  if (pluginsConfigText.value.trim()) {
+    try {
+      pluginsConfig = JSON.parse(pluginsConfigText.value)
+    } catch {
+      error.value = '插件配置必须是有效的 JSON'
+      return
+    }
+  }
+
   saving.value = true
   try {
+    const payload = { ...form.value, plugins_config: pluginsConfig }
     if (isEdit.value) {
-      await updateAgentTemplate(props.template.id, form.value)
+      await updateAgentTemplate(props.template.id, payload)
     } else {
-      await createAgentTemplate(form.value)
+      await createAgentTemplate(payload)
     }
     emit('saved')
+  } catch (err) {
+    error.value = err.message || '保存失败'
   } finally {
     saving.value = false
   }
@@ -58,15 +83,16 @@ async function handleSubmit() {
 <template>
   <div class="agent-form">
     <h3 class="form-title">{{ isEdit ? '编辑 Agent 模板' : '新增 Agent 模板' }}</h3>
+    <div v-if="error" class="form-error">{{ error }}</div>
 
     <div class="form-grid">
       <div class="form-group">
         <label>名称（中文）</label>
-        <input v-model="form.name_zh" type="text" placeholder="例: 代码审查助手" />
+        <input v-model="form.name_zh" type="text" required placeholder="例: 代码审查助手" />
       </div>
       <div class="form-group">
         <label>名称（英文）</label>
-        <input v-model="form.name_en" type="text" placeholder="e.g. Code Review Assistant" />
+        <input v-model="form.name_en" type="text" required placeholder="e.g. Code Review Assistant" />
       </div>
       <div class="form-group">
         <label>描述（中文）</label>
@@ -94,12 +120,21 @@ async function handleSubmit() {
 
     <div class="form-group full">
       <label>Prompt（中文）</label>
-      <textarea v-model="form.prompt_zh" rows="8" placeholder="Agent 系统提示词（中文）"></textarea>
+      <textarea v-model="form.prompt_zh" rows="8" required placeholder="Agent 系统提示词（中文）"></textarea>
     </div>
 
     <div class="form-group full">
       <label>Prompt（英文）</label>
-      <textarea v-model="form.prompt_en" rows="8" placeholder="Agent system prompt (English)"></textarea>
+      <textarea v-model="form.prompt_en" rows="8" required placeholder="Agent system prompt (English)"></textarea>
+    </div>
+
+    <div class="form-group full">
+      <label>插件配置（JSON，可选）</label>
+      <textarea
+        v-model="pluginsConfigText"
+        rows="6"
+        placeholder='{"marketplaces": [], "plugins": []}'
+      ></textarea>
     </div>
 
     <div class="form-actions">
@@ -121,6 +156,15 @@ async function handleSubmit() {
   font-weight: 600;
   color: var(--text-primary);
   margin: 0 0 20px;
+}
+
+.form-error {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--red-dim, rgba(239, 68, 68, 0.1));
+  color: var(--red, #ef4444);
+  font-size: 13px;
 }
 
 .form-grid {
