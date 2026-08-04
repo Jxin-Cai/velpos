@@ -11,12 +11,20 @@ const props = defineProps({
     type: Boolean,
     required: true,
   },
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'dirty-change'])
 
 const { useDialog } = useDialogManager()
-useDialog('settings', useVisibleProxy(props, emit))
+const visibleProxy = useVisibleProxy(props, emit)
+useDialog('settings', {
+  get value() { return !props.embedded && visibleProxy.value },
+  set value(value) { if (!value && !props.embedded) visibleProxy.value = false },
+})
 
 const AUTH_ENV_OPTIONS = [
   { value: 'ANTHROPIC_API_KEY', label: 'ANTHROPIC_API_KEY' },
@@ -41,7 +49,7 @@ function onModelIdChange(form, role, newValue) {
   form.model_config[role.modelKey] = newValue
 }
 
-useEscapeToClose(() => props.visible, () => emit('close'))
+useEscapeToClose(() => !props.embedded && props.visible, () => emit('close'))
 
 const {
   settings,
@@ -73,6 +81,29 @@ const showJsonPreview = ref(false)
 const addForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
 const editForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
 const settingsData = ref(null)
+const settingsDirty = computed(() => Boolean(settings.value && settingsData.value)
+  && JSON.stringify(settingsData.value) !== JSON.stringify(settings.value))
+const addFormDirty = computed(() => showAddForm.value && JSON.stringify(addForm.value) !== JSON.stringify({
+  name: '',
+  host: '',
+  api_key: '',
+  auth_env_name: 'ANTHROPIC_API_KEY',
+  model_config: {},
+}))
+const editFormDirty = computed(() => {
+  if (!editingProfileId.value) return false
+  const profile = profiles.value.find(item => item.profile_id === editingProfileId.value)
+  if (!profile) return true
+  return JSON.stringify(editForm.value) !== JSON.stringify({
+    name: profile.name,
+    host: profile.host || '',
+    api_key: profile.api_key || '',
+    auth_env_name: profile.auth_env_name || 'ANTHROPIC_API_KEY',
+    model_config: { ...(profile.model_config || {}) },
+  })
+})
+const isDirty = computed(() => settingsDirty.value || addFormDirty.value || editFormDirty.value)
+watch(isDirty, value => emit('dirty-change', value), { immediate: true })
 
 const defaultMode = computed({
   get() {
@@ -172,7 +203,7 @@ watch(() => props.visible, (val) => {
     editingProfileId.value = null
     showAddForm.value = false
   }
-})
+}, { immediate: true })
 
 watch(() => settings.value, (val) => {
   if (val) {
@@ -181,17 +212,20 @@ watch(() => settings.value, (val) => {
 })
 
 function cancelAdd() {
+  if (addFormDirty.value && !confirm('新增渠道尚未保存，确定取消吗？')) return
   showAddForm.value = false
   addForm.value = { name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} }
 }
 
 async function submitAdd() {
-  await handleCreate(addForm.value)
+  const created = await handleCreate(addForm.value)
+  if (!created) return
   addForm.value = { name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} }
   showAddForm.value = false
 }
 
 function startEdit(profile) {
+  if (editFormDirty.value && !confirm('当前渠道修改尚未保存，确定切换吗？')) return
   editingProfileId.value = profile.profile_id
   editForm.value = {
     name: profile.name,
@@ -203,15 +237,19 @@ function startEdit(profile) {
 }
 
 async function submitEdit() {
-  await handleUpdate(editingProfileId.value, editForm.value)
+  const updated = await handleUpdate(editingProfileId.value, editForm.value)
+  if (!updated) return
   editingProfileId.value = null
 }
 
 function cancelEdit() {
+  if (editFormDirty.value && !confirm('当前渠道修改尚未保存，确定取消吗？')) return
   editingProfileId.value = null
 }
 
 async function onDelete(profileId) {
+  const profile = profiles.value.find(item => item.profile_id === profileId)
+  if (!confirm(`确定删除模型渠道「${profile?.name || profileId}」吗？`)) return
   if (editingProfileId.value === profileId) {
     editingProfileId.value = null
   }
@@ -248,49 +286,63 @@ async function copyJsonPreview() {
     await navigator.clipboard.writeText(jsonPreviewText.value)
     copyJsonSuccess.value = true
     setTimer(() => { copyJsonSuccess.value = false }, 1500)
-  } catch (err) {
-    console.error('Failed to copy JSON:', err)
+  } catch {
+    error.value = '复制配置失败，请检查浏览器剪贴板权限'
   }
 }
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
-      <div class="dialog">
-        <div class="dialog-header">
-          <h2 id="settings-dialog-title" class="dialog-title">Settings</h2>
-          <button class="close-btn" type="button" aria-label="Close Settings" @click="emit('close')">
+  <Teleport to="body" :disabled="embedded">
+    <div
+      v-if="visible"
+      :class="embedded ? 'embedded-page' : 'dialog-overlay'"
+      :role="embedded ? undefined : 'dialog'"
+      :aria-modal="embedded ? undefined : 'true'"
+      aria-labelledby="settings-dialog-title"
+      @click.self="!embedded && emit('close')"
+    >
+      <div :class="embedded ? 'embedded-surface' : 'dialog'">
+        <div v-if="!embedded" class="dialog-header">
+          <h2 id="settings-dialog-title" class="dialog-title">Claude Code 配置</h2>
+          <button class="close-btn" type="button" aria-label="关闭 Claude Code 配置" @click="emit('close')">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
           </button>
         </div>
+        <div v-else class="embedded-header">
+          <div>
+            <span class="eyebrow">CLAUDE CODE</span>
+            <h1 id="settings-dialog-title">Claude Code 配置</h1>
+            <p>管理 Claude Code 运行参数、API Host、Token 与模型渠道。</p>
+          </div>
+        </div>
 
-        <div v-if="error" class="error-banner">{{ error }}</div>
+        <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
 
         <div v-if="loading" class="loading-state">
           <div class="spinner"></div>
-          Loading settings...
+          正在加载配置…
         </div>
 
         <div v-else class="dialog-body">
           <!-- Section 1: Channel Profiles -->
           <div class="section">
             <div class="section-header">
-              <h3 class="section-title">Channel Profiles</h3>
-              <button v-if="!showAddForm" class="btn-add" @click="showAddForm = true">
+              <h3 class="section-title">模型渠道</h3>
+              <button v-if="!showAddForm" class="btn-add" type="button" @click="showAddForm = true">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
-                Add Channel
+                添加渠道
               </button>
             </div>
 
             <div v-if="showAddForm" class="channel-form">
-              <div class="form-section-label">Basic Info</div>
+              <div class="form-section-label">基本信息</div>
               <div class="form-grid">
                 <div class="form-group">
-                  <label class="form-label">Name <span class="required">*</span></label>
-                  <input class="form-input" v-model="addForm.name" placeholder="e.g. Production" />
+                  <label class="form-label">名称 <span class="required">*</span></label>
+                  <input class="form-input" v-model="addForm.name" placeholder="例如：生产环境" />
                 </div>
                 <div class="form-group">
                   <label class="form-label">Host</label>
@@ -301,13 +353,13 @@ async function copyJsonPreview() {
                   <input class="form-input" v-model="addForm.api_key" type="password" placeholder="sk-ant-..." />
                 </div>
                 <div class="form-group">
-                  <label class="form-label">Auth Env Variable</label>
+                  <label class="form-label">认证环境变量</label>
                   <CustomSelect v-model="addForm.auth_env_name" :options="AUTH_ENV_OPTIONS" />
                 </div>
               </div>
 
               <div class="form-section-label">
-                Model Configuration
+                模型配置
                 <button
                   class="btn-fetch"
                   :disabled="fetchingModels === '_add'"
@@ -316,20 +368,20 @@ async function copyJsonPreview() {
                   <svg v-if="fetchingModels !== '_add'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
                   </svg>
-                  {{ fetchingModels === '_add' ? 'Fetching...' : 'Fetch Models' }}
+                  {{ fetchingModels === '_add' ? '获取中…' : '获取模型' }}
                 </button>
                 <span v-if="(fetchedModels['_add'] || []).length" class="fetch-count">
-                  {{ fetchedModels['_add'].length }} available
+                  可用 {{ fetchedModels['_add'].length }} 个
                 </span>
               </div>
               <div class="model-grid model-grid--3col">
-                <div class="model-grid-header">Role</div>
-                <div class="model-grid-header">Display Name</div>
+                <div class="model-grid-header">角色</div>
+                <div class="model-grid-header">显示名称</div>
                 <div class="model-grid-header">Model ID</div>
 
-                <div class="model-field-label">Fallback</div>
+                <div class="model-field-label">兜底模型</div>
                 <div class="model-field-cell model-field-cell--disabled">
-                  <span class="model-field-hint">overrides all roles</span>
+                  <span class="model-field-hint">覆盖全部角色</span>
                 </div>
                 <div class="model-field-cell">
                   <select
@@ -337,7 +389,7 @@ async function copyJsonPreview() {
                     class="form-select"
                     v-model="addForm.model_config[FALLBACK_MODEL_KEY]"
                   >
-                    <option value="">-- None --</option>
+                    <option value="">-- 无 --</option>
                     <option v-for="opt in getModelOptions('_add')" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
                   <input v-else class="form-input" v-model="addForm.model_config[FALLBACK_MODEL_KEY]" placeholder="ANTHROPIC_MODEL" />
@@ -346,8 +398,8 @@ async function copyJsonPreview() {
                 <template v-for="r in MODEL_ROLES" :key="r.modelKey">
                   <div class="model-field-label">{{ r.role }}</div>
                   <div class="model-field-cell" :class="{ 'model-field-cell--disabled': !r.nameKey }">
-                    <input v-if="r.nameKey" class="form-input" v-model="addForm.model_config[r.nameKey]" placeholder="Display name" />
-                    <span v-else class="model-field-hint">not in /model menu</span>
+                    <input v-if="r.nameKey" class="form-input" v-model="addForm.model_config[r.nameKey]" placeholder="显示名称" />
+                    <span v-else class="model-field-hint">不显示在 /model 菜单</span>
                   </div>
                   <div class="model-field-cell">
                     <select
@@ -356,7 +408,7 @@ async function copyJsonPreview() {
                       :value="addForm.model_config[r.modelKey] || ''"
                       @change="onModelIdChange(addForm, r, $event.target.value)"
                     >
-                      <option value="">-- None --</option>
+                      <option value="">-- 无 --</option>
                       <option v-for="opt in getModelOptions('_add')" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </select>
                     <input
@@ -371,8 +423,8 @@ async function copyJsonPreview() {
               </div>
 
               <div class="form-actions">
-                <button class="btn-save" :disabled="!addForm.name.trim()" @click="submitAdd">Create</button>
-                <button class="btn-cancel" @click="cancelAdd">Cancel</button>
+                <button class="btn-save" type="button" :disabled="!addForm.name.trim()" @click="submitAdd">创建</button>
+                <button class="btn-cancel" type="button" @click="cancelAdd">取消</button>
               </div>
             </div>
 
@@ -388,7 +440,7 @@ async function copyJsonPreview() {
                     <div class="channel-info">
                       <div class="channel-name-row">
                         <span class="channel-name">{{ p.name }}</span>
-                        <span v-if="p.is_active" class="active-badge">Active</span>
+                        <span v-if="p.is_active" class="active-badge">当前启用</span>
                       </div>
                       <span class="channel-host">{{ p.host || 'https://api.anthropic.com (default)' }}</span>
                     </div>
@@ -398,24 +450,24 @@ async function copyJsonPreview() {
                         class="btn-activate"
                         :disabled="operating === p.profile_id"
                         @click="onActivate(p.profile_id)"
-                      >Activate</button>
-                      <button class="btn-edit" @click="startEdit(p)">Edit</button>
+                      >启用</button>
+                      <button class="btn-edit" type="button" @click="startEdit(p)">编辑</button>
                       <button
                         class="btn-delete"
                         :disabled="operating === p.profile_id"
                         @click="onDelete(p.profile_id)"
-                      >Delete</button>
+                      >删除</button>
                     </div>
                   </div>
                 </template>
 
                 <template v-else>
                   <div class="channel-form channel-form--inline">
-                    <div class="form-section-label">Basic Info</div>
+                    <div class="form-section-label">基本信息</div>
                     <div class="form-grid">
                       <div class="form-group">
-                        <label class="form-label">Name <span class="required">*</span></label>
-                        <input class="form-input" v-model="editForm.name" placeholder="Name" />
+                        <label class="form-label">名称 <span class="required">*</span></label>
+                        <input class="form-input" v-model="editForm.name" placeholder="渠道名称" />
                       </div>
                       <div class="form-group">
                         <label class="form-label">Host</label>
@@ -426,13 +478,13 @@ async function copyJsonPreview() {
                         <input class="form-input" v-model="editForm.api_key" type="password" placeholder="sk-ant-..." />
                       </div>
                       <div class="form-group">
-                        <label class="form-label">Auth Env Variable</label>
+                        <label class="form-label">认证环境变量</label>
                         <CustomSelect v-model="editForm.auth_env_name" :options="AUTH_ENV_OPTIONS" />
                       </div>
                     </div>
 
                     <div class="form-section-label">
-                      Model Configuration
+                      模型配置
                       <button
                         class="btn-fetch"
                         :disabled="fetchingModels === p.profile_id"
@@ -441,20 +493,20 @@ async function copyJsonPreview() {
                         <svg v-if="fetchingModels !== p.profile_id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                           <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
                         </svg>
-                        {{ fetchingModels === p.profile_id ? 'Fetching...' : 'Fetch Models' }}
+                        {{ fetchingModels === p.profile_id ? '获取中…' : '获取模型' }}
                       </button>
                       <span v-if="(fetchedModels[p.profile_id] || []).length" class="fetch-count">
-                        {{ fetchedModels[p.profile_id].length }} available
+                        可用 {{ fetchedModels[p.profile_id].length }} 个
                       </span>
                     </div>
                     <div class="model-grid model-grid--3col">
-                      <div class="model-grid-header">Role</div>
-                      <div class="model-grid-header">Display Name</div>
+                      <div class="model-grid-header">角色</div>
+                      <div class="model-grid-header">显示名称</div>
                       <div class="model-grid-header">Model ID</div>
 
-                      <div class="model-field-label">Fallback</div>
+                      <div class="model-field-label">兜底模型</div>
                       <div class="model-field-cell model-field-cell--disabled">
-                        <span class="model-field-hint">overrides all roles</span>
+                        <span class="model-field-hint">覆盖全部角色</span>
                       </div>
                       <div class="model-field-cell">
                         <select
@@ -462,7 +514,7 @@ async function copyJsonPreview() {
                           class="form-select"
                           v-model="editForm.model_config[FALLBACK_MODEL_KEY]"
                         >
-                          <option value="">-- None --</option>
+                          <option value="">-- 无 --</option>
                           <option v-for="opt in getModelOptions(p.profile_id)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                         </select>
                         <input v-else class="form-input" v-model="editForm.model_config[FALLBACK_MODEL_KEY]" placeholder="ANTHROPIC_MODEL" />
@@ -471,8 +523,8 @@ async function copyJsonPreview() {
                       <template v-for="r in MODEL_ROLES" :key="r.modelKey">
                         <div class="model-field-label">{{ r.role }}</div>
                         <div class="model-field-cell" :class="{ 'model-field-cell--disabled': !r.nameKey }">
-                          <input v-if="r.nameKey" class="form-input" v-model="editForm.model_config[r.nameKey]" placeholder="Display name" />
-                          <span v-else class="model-field-hint">not in /model menu</span>
+                          <input v-if="r.nameKey" class="form-input" v-model="editForm.model_config[r.nameKey]" placeholder="显示名称" />
+                          <span v-else class="model-field-hint">不显示在 /model 菜单</span>
                         </div>
                         <div class="model-field-cell">
                           <select
@@ -481,7 +533,7 @@ async function copyJsonPreview() {
                             :value="editForm.model_config[r.modelKey] || ''"
                             @change="onModelIdChange(editForm, r, $event.target.value)"
                           >
-                            <option value="">-- None --</option>
+                            <option value="">-- 无 --</option>
                             <option v-for="opt in getModelOptions(p.profile_id)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                           </select>
                           <input
@@ -496,8 +548,8 @@ async function copyJsonPreview() {
                     </div>
 
                     <div class="form-actions">
-                      <button class="btn-save" :disabled="!editForm.name.trim()" @click="submitEdit">Save</button>
-                      <button class="btn-cancel" @click="cancelEdit">Cancel</button>
+                      <button class="btn-save" type="button" :disabled="!editForm.name.trim()" @click="submitEdit">保存</button>
+                      <button class="btn-cancel" type="button" @click="cancelEdit">取消</button>
                     </div>
                   </div>
                 </template>
@@ -508,15 +560,15 @@ async function copyJsonPreview() {
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.3">
                 <rect x="2" y="7" width="20" height="14" rx="2" ry="2" /><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
               </svg>
-              <span>No channel profiles configured</span>
+              <span>尚未配置模型渠道</span>
             </div>
           </div>
 
           <!-- Section 2: Settings Configuration -->
           <div class="section">
             <div class="section-header">
-              <h3 class="section-title">Settings Configuration</h3>
-              <button class="btn-preview" :class="{ active: showJsonPreview }" @click="showJsonPreview = !showJsonPreview" title="Toggle JSON Preview">
+              <h3 class="section-title">运行配置</h3>
+              <button class="btn-preview" type="button" :class="{ active: showJsonPreview }" :aria-expanded="showJsonPreview" @click="showJsonPreview = !showJsonPreview" title="切换 JSON 预览">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                   <circle cx="12" cy="12" r="3"/>
@@ -525,7 +577,7 @@ async function copyJsonPreview() {
             </div>
             <Transition name="preview-slide">
               <div v-if="showJsonPreview" class="json-preview-wrapper">
-                <button class="json-copy-btn" :class="{ copied: copyJsonSuccess }" @click="copyJsonPreview" title="Copy JSON">
+                <button class="json-copy-btn" type="button" :class="{ copied: copyJsonSuccess }" @click="copyJsonPreview" title="复制 JSON" aria-label="复制 JSON 配置">
                   <svg v-if="!copyJsonSuccess" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -540,15 +592,15 @@ async function copyJsonPreview() {
             <div class="settings-card" v-if="settingsData">
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Permission Mode</label>
-                  <span class="field-desc">Controls tool approval policy: default prompts each time, bypass auto-allows all</span>
+                  <label class="field-label">权限模式</label>
+                  <span class="field-desc">控制工具审批策略；默认模式逐次询问，绕过模式自动允许</span>
                 </div>
                 <CustomSelect v-model="defaultMode" :options="[{ value: 'default', label: 'Default' }, { value: 'acceptEdits', label: 'Accept Edits' }, { value: 'plan', label: 'Plan' }, { value: 'bypassPermissions', label: 'Bypass' }]" />
               </div>
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Completed Onboarding</label>
-                  <span class="field-desc">Skip the first-run onboarding flow on launch</span>
+                  <label class="field-label">已完成引导</label>
+                  <span class="field-desc">启动时跳过首次运行引导</span>
                 </div>
                 <label class="toggle-label">
                   <input type="checkbox" class="toggle-checkbox" v-model="hasCompletedOnboarding" />
@@ -557,15 +609,15 @@ async function copyJsonPreview() {
               </div>
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Effort Level</label>
-                  <span class="field-desc">Reasoning effort: low is fast/cheap, high is thorough</span>
+                  <label class="field-label">推理强度</label>
+                  <span class="field-desc">低强度更快且成本更低，高强度分析更充分</span>
                 </div>
                 <CustomSelect v-model="effortLevel" :options="[{ value: '', label: 'Default' }, { value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]" />
               </div>
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Skip Dangerous Mode Prompt</label>
-                  <span class="field-desc">Suppress the safety confirmation when entering bypass mode</span>
+                  <label class="field-label">跳过危险模式提示</label>
+                  <span class="field-desc">进入绕过权限模式时不再显示安全确认</span>
                 </div>
                 <label class="toggle-label">
                   <input type="checkbox" class="toggle-checkbox" v-model="skipDangerousPrompt" />
@@ -574,8 +626,8 @@ async function copyJsonPreview() {
               </div>
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Disable Non-Essential Traffic</label>
-                  <span class="field-desc">Disables updater, feedback, error reporting and telemetry</span>
+                  <label class="field-label">禁用非必要网络流量</label>
+                  <span class="field-desc">关闭更新、反馈、错误上报和遥测</span>
                 </div>
                 <label class="toggle-label">
                   <input type="checkbox" class="toggle-checkbox" :checked="getEnvVar('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') === '1'" @change="setEnvVar('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', $event.target.checked ? '1' : '')" />
@@ -584,8 +636,8 @@ async function copyJsonPreview() {
               </div>
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Agent Teams (Experimental)</label>
-                  <span class="field-desc">Enable multi-agent collaboration within a session</span>
+                  <label class="field-label">Agent 团队（实验性）</label>
+                  <span class="field-desc">允许会话内多 Agent 协作</span>
                 </div>
                 <label class="toggle-label">
                   <input type="checkbox" class="toggle-checkbox" :checked="getEnvVar('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS') === '1'" @change="setEnvVar('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', $event.target.checked ? '1' : '')" />
@@ -594,8 +646,8 @@ async function copyJsonPreview() {
               </div>
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Tool Search</label>
-                  <span class="field-desc">Enable MCP tool search and dynamic loading</span>
+                  <label class="field-label">工具搜索</label>
+                  <span class="field-desc">启用 MCP 工具搜索与动态加载</span>
                 </div>
                 <label class="toggle-label">
                   <input type="checkbox" class="toggle-checkbox" :checked="getEnvVar('ENABLE_TOOL_SEARCH') === 'true'" @change="setEnvVar('ENABLE_TOOL_SEARCH', $event.target.checked ? 'true' : '')" />
@@ -621,12 +673,12 @@ async function copyJsonPreview() {
 
           <!-- Section 3: User Preferences -->
           <div class="section">
-            <h3 class="section-title">User Preferences</h3>
+            <h3 class="section-title">用户偏好</h3>
             <div class="settings-card">
               <div class="field-row">
                 <div class="field-info">
-                  <label class="field-label">Enter Key Behavior</label>
-                  <span class="field-desc">Choose how Enter and Ctrl+Enter keys behave in the chat input</span>
+                  <label class="field-label">回车键行为</label>
+                  <span class="field-desc">设置聊天输入框中 Enter 与 Ctrl+Enter 的行为</span>
                 </div>
                 <CustomSelect :model-value="enterBehavior" @update:model-value="setEnterBehavior" :options="[{ value: 'enter-send', label: 'Enter to send, Ctrl+Enter for new line' }, { value: 'ctrl-enter-send', label: 'Ctrl+Enter to send, Enter for new line' }]" :display-map="{ 'enter-send': 'Enter to send', 'ctrl-enter-send': 'Ctrl+Enter to send' }" />
               </div>
@@ -637,6 +689,7 @@ async function copyJsonPreview() {
         <div class="dialog-footer">
           <button
             class="btn-primary"
+            type="button"
             :class="{ 'btn-primary--success': saveSuccess }"
             :disabled="saving || loading"
             @click="handleSave"
@@ -644,7 +697,7 @@ async function copyJsonPreview() {
             <svg v-if="saveSuccess" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"/>
             </svg>
-            {{ saving ? 'Saving...' : saveSuccess ? 'Saved' : 'Save' }}
+            {{ saving ? '保存中…' : saveSuccess ? '已保存' : '保存配置' }}
           </button>
         </div>
       </div>
@@ -653,6 +706,55 @@ async function copyJsonPreview() {
 </template>
 
 <style scoped>
+.embedded-page,
+.embedded-surface {
+  width: 100%;
+}
+
+.embedded-surface {
+  padding: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--glass-bg);
+}
+
+.embedded-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.embedded-header h1 {
+  margin: 4px 0 7px;
+  color: var(--text-primary);
+  font-size: 22px;
+  letter-spacing: -.02em;
+}
+
+.embedded-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .14em;
+}
+
+.embedded-surface .dialog-body {
+  padding: 0;
+  overflow: visible;
+}
+
+.embedded-surface .dialog-footer {
+  margin: 20px -24px -24px;
+  padding: 14px 24px;
+}
+
 .dialog-overlay {
   background: var(--dialog-overlay);
   backdrop-filter: blur(8px);
@@ -1360,5 +1462,25 @@ async function copyJsonPreview() {
 .btn-primary--success {
   background: var(--green);
   color: #fff;
+}
+
+@media (max-width: 720px) {
+  .embedded-surface { padding: 16px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-group--full { grid-column: auto; }
+  .model-grid--3col { grid-template-columns: 84px minmax(150px, 1fr) minmax(210px, 1fr); min-width: 500px; }
+  .channel-form { padding: 14px; overflow-x: auto; }
+  .channel-row { align-items: stretch; flex-direction: column; gap: 12px; }
+  .channel-actions { flex-wrap: wrap; }
+  .channel-actions button { min-height: 40px; flex: 1; }
+  .settings-card .field-row { align-items: stretch; flex-direction: column; }
+  .form-input, .form-select { font-size: 16px; }
+  .dialog-footer { position: sticky; bottom: 0; margin: 20px -16px -16px !important; padding: 12px 16px !important; background: var(--layer-base); z-index: 2; }
+  .json-copy-btn { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-primary, .json-copy-btn { transition: none; }
+  .btn-primary:hover:not(:disabled) { transform: none; }
 }
 </style>

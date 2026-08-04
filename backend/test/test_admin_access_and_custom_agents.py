@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from application.agent.agent_application_service import AgentApplicationService
 from application.auth.auth_application_service import AuthApplicationService
@@ -12,6 +13,8 @@ from domain.agent.model.agent_template import AgentTemplate
 from domain.project.model.project import Project
 from domain.shared.business_exception import BusinessException
 from domain.user.model.user import User, UserRole
+from infr.client.claude_plugin_manager import ClaudePluginManager
+from ohs.http.admin_plugin_router import AddMarketplaceRequest
 from ohs.ws import session_ws
 
 
@@ -135,3 +138,91 @@ async def test_rejects_terminal_websocket_when_user_is_not_admin(monkeypatch) ->
     # Assert
     websocket.close.assert_awaited_once_with(code=4003)
     terminal_service.create_pty.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_passes_token_through_process_environment_when_private_marketplace_is_added(
+    monkeypatch,
+) -> None:
+    # Arrange
+    manager = object.__new__(ClaudePluginManager)
+    captured: dict[str, object] = {}
+
+    async def capture_cli(
+        args: list[str],
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> str:
+        captured.update(args=args, cwd=cwd, extra_env=extra_env)
+        return "OK"
+
+    monkeypatch.setattr(manager, "_run_cli", capture_cli)
+
+    # Act
+    await manager.add_marketplace("https://git.example.com/team/plugins.git", "secret-token")
+
+    # Assert
+    assert captured["extra_env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer secret-token"
+    assert "secret-token" not in captured["args"]
+
+
+@pytest.mark.asyncio
+async def test_returns_selected_marketplace_plugins_when_multiple_markets_are_cached(
+    monkeypatch,
+) -> None:
+    # Arrange
+    manager = object.__new__(ClaudePluginManager)
+    monkeypatch.setattr(
+        manager,
+        "_read_available_plugins",
+        lambda: [
+            {"name": "reviewer", "marketplace": "team-market"},
+            {"name": "designer", "marketplace": "other-market"},
+        ],
+    )
+
+    # Act
+    plugins = await manager.list_marketplace_plugins("team-market")
+
+    # Assert
+    assert plugins == [{"name": "reviewer", "marketplace": "team-market"}]
+
+
+@pytest.mark.asyncio
+async def test_passes_token_through_process_environment_when_private_marketplace_is_refreshed(
+    monkeypatch,
+) -> None:
+    # Arrange
+    manager = object.__new__(ClaudePluginManager)
+    captured: dict[str, object] = {}
+
+    async def capture_cli(
+        args: list[str],
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> str:
+        captured.update(args=args, cwd=cwd, extra_env=extra_env)
+        return "OK"
+
+    monkeypatch.setattr(manager, "_run_cli", capture_cli)
+
+    # Act
+    await manager.update_marketplace("private-market", "refresh-token")
+
+    # Assert
+    assert captured["extra_env"] == {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": "Authorization: Bearer refresh-token",
+    }
+
+
+def test_rejects_embedded_credentials_when_marketplace_source_contains_user_info() -> None:
+    # Arrange
+    source = "https://secret-token@git.example.com/team/plugins.git"
+
+    # Act
+    with pytest.raises(ValidationError):
+        AddMarketplaceRequest(source=source)
+
+    # Assert is performed by the exception context.

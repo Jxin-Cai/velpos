@@ -1,143 +1,204 @@
 <script setup>
-import { ref } from 'vue'
-import AgentTemplateTab from './AgentTemplateTab.vue'
-import UserManagementTab from './UserManagementTab.vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { currentUser } from '@shared/lib/authStore'
+import AppLogo from '@shared/ui/AppLogo.vue'
+import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
+import UserIdentity from '@shared/ui/UserIdentity.vue'
 import { SettingsDialog } from '@features/settings-manager'
 import { GitManagerDialog } from '@features/git-manager'
+import AgentTemplateTab from './AgentTemplateTab.vue'
+import ClaudeMarketplacePanel from './ClaudeMarketplacePanel.vue'
+import UserManagementTab from './UserManagementTab.vue'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'logout', 'dirty-change'])
 
-const tabs = [
-  { key: 'agents', label: 'Agent 模板' },
-  { key: 'users', label: '用户管理' },
-  { key: 'settings', label: 'CC 配置' },
-  { key: 'git', label: 'Git 配置' },
+const sections = [
+  {
+    label: 'Agent 模板',
+    items: [
+      { key: 'system-agents', label: '系统 Agent', icon: 'sparkles' },
+      { key: 'custom-agents', label: '自定义 Agent', icon: 'bot' },
+    ],
+  },
+  {
+    label: '开发工具',
+    items: [
+      { key: 'claude-code', label: 'Claude Code 配置', icon: 'terminal' },
+      { key: 'git', label: 'Git 配置', icon: 'git' },
+    ],
+  },
+  {
+    label: '权限',
+    items: [{ key: 'users', label: '用户管理', icon: 'users' }],
+  },
 ]
 
-const activeTab = ref('agents')
-const settingsVisible = ref(false)
-const gitVisible = ref(false)
+const validPages = new Set(sections.flatMap(section => section.items).map(item => item.key))
+const requestedPage = new URLSearchParams(window.location.search).get('adminPage')
+const activePage = ref(validPages.has(requestedPage) ? requestedPage : 'system-agents')
+const visitedPages = reactive(new Set([activePage.value]))
+const mainRef = ref(null)
+const agentFormDirty = ref(false)
+const claudeSettingsDirty = ref(false)
+const marketplaceDirty = ref(false)
+const gitDirty = ref(false)
+const hasUnsavedChanges = computed(() => agentFormDirty.value || claudeSettingsDirty.value || marketplaceDirty.value || gitDirty.value)
+const pageTitle = computed(() => sections.flatMap(section => section.items).find(item => item.key === activePage.value)?.label || '')
+const previousDocumentTitle = document.title
 
-function selectTab(tab) {
-  activeTab.value = tab.key
-  if (tab.key === 'settings') settingsVisible.value = true
-  if (tab.key === 'git') gitVisible.value = true
+function canLeaveCurrentPage() {
+  return !hasUnsavedChanges.value || confirm('管理后台中有尚未保存的配置，确定离开并丢弃修改吗？')
 }
+
+function selectPage(page, { history = true } = {}) {
+  if (!validPages.has(page) || page === activePage.value) return
+  activePage.value = page
+  visitedPages.add(page)
+  if (history) {
+    const url = new URL(window.location.href)
+    url.searchParams.set('surface', 'admin')
+    url.searchParams.set('adminPage', page)
+    window.history.pushState({}, '', url)
+  }
+  nextTick(() => mainRef.value?.focus({ preventScroll: true }))
+}
+
+function handleClose() {
+  if (canLeaveCurrentPage()) emit('close')
+}
+
+function handleLogout() {
+  if (canLeaveCurrentPage()) emit('logout')
+}
+
+function handlePopState() {
+  const page = new URLSearchParams(window.location.search).get('adminPage')
+  const normalizedPage = validPages.has(page) ? page : 'system-agents'
+  selectPage(normalizedPage, { history: false })
+}
+
+function handleBeforeUnload(event) {
+  if (!hasUnsavedChanges.value) return
+  event.preventDefault()
+}
+
+onMounted(() => {
+  window.addEventListener('popstate', handlePopState)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  if (!validPages.has(requestedPage)) {
+    const url = new URL(window.location.href)
+    url.searchParams.set('adminPage', activePage.value)
+    window.history.replaceState({}, '', url)
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('popstate', handlePopState)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  document.title = previousDocumentTitle
+})
+watch(hasUnsavedChanges, value => emit('dirty-change', value), { immediate: true })
+watch(pageTitle, value => { document.title = `${value} · Velpos 管理后台` }, { immediate: true })
 </script>
 
 <template>
-  <div class="admin-page">
-    <header class="admin-header">
-      <div class="admin-header-left">
-        <button class="glass-btn" @click="emit('close')" title="返回">
+  <div class="admin-app">
+    <header class="admin-topbar">
+      <div class="brand-area">
+        <AppLogo prefix="admin" />
+        <span class="surface-badge">管理后台</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="front-switch" type="button" @click="handleClose">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="15 18 9 12 15 6"/>
+            <path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/>
           </svg>
+          返回工作台
         </button>
-        <h1 class="admin-title">管理面板</h1>
+        <ThemeSwitcher />
+        <UserIdentity :user="currentUser" @logout="handleLogout" />
       </div>
-      <nav class="admin-tabs">
-        <button
-          v-for="tab in tabs"
-          :key="tab.key"
-          class="admin-tab"
-          :class="{ active: activeTab === tab.key }"
-          @click="selectTab(tab)"
-        >
-          {{ tab.label }}
-        </button>
-      </nav>
     </header>
-    <main class="admin-body">
-      <AgentTemplateTab v-if="activeTab === 'agents'" />
-      <UserManagementTab v-else-if="activeTab === 'users'" />
-      <div v-else-if="activeTab === 'settings'" class="admin-launcher">
-        <p>管理 Claude Code 设置、模型渠道和认证配置。</p>
-        <button class="glass-btn primary" @click="settingsVisible = true">打开 CC 配置</button>
-      </div>
-      <div v-else-if="activeTab === 'git'" class="admin-launcher">
-        <p>管理全局 Git 身份和 SSH 密钥。</p>
-        <button class="glass-btn primary" @click="gitVisible = true">打开 Git 配置</button>
-      </div>
-    </main>
-    <SettingsDialog :visible="settingsVisible" @close="settingsVisible = false" />
-    <GitManagerDialog :visible="gitVisible" @close="gitVisible = false" />
+
+    <div class="admin-shell">
+      <aside class="admin-sidebar" aria-label="后台配置导航">
+        <div class="sidebar-heading">
+          <span>ADMIN</span>
+          <strong>配置中心</strong>
+        </div>
+        <nav>
+          <section v-for="section in sections" :key="section.label" class="nav-section">
+            <h2>{{ section.label }}</h2>
+            <button
+              v-for="item in section.items"
+              :key="item.key"
+              class="nav-item"
+              :class="{ active: activePage === item.key }"
+              type="button"
+              :aria-current="activePage === item.key ? 'page' : undefined"
+              :aria-label="item.label"
+              :title="item.label"
+              @click="selectPage(item.key)"
+            >
+              <svg v-if="item.icon === 'sparkles'" viewBox="0 0 24 24"><path d="m12 3-1.2 3.8L7 8l3.8 1.2L12 13l1.2-3.8L17 8l-3.8-1.2L12 3Z"/><path d="m5 14-.8 2.2L2 17l2.2.8L5 20l.8-2.2L8 17l-2.2-.8L5 14Z"/></svg>
+              <svg v-else-if="item.icon === 'bot'" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>
+              <svg v-else-if="item.icon === 'terminal'" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+              <svg v-else-if="item.icon === 'git'" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="6" cy="18" r="2"/><path d="M6 8v8M8 6h4a6 6 0 0 1 6 6v4"/></svg>
+              <svg v-else viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <span>{{ item.label }}</span>
+              <i
+                v-if="(item.key === 'custom-agents' && agentFormDirty) || (item.key === 'claude-code' && (claudeSettingsDirty || marketplaceDirty)) || (item.key === 'git' && gitDirty)"
+                class="unsaved-dot"
+                aria-label="有未保存修改"
+              ></i>
+            </button>
+          </section>
+        </nav>
+        <div class="sidebar-footer">仅管理员可访问</div>
+      </aside>
+
+      <main ref="mainRef" class="admin-content" tabindex="-1">
+        <div class="page-context">
+          <span>管理后台 / {{ pageTitle }}</span>
+        </div>
+        <AgentTemplateTab v-if="visitedPages.has('system-agents')" v-show="activePage === 'system-agents'" page="system" />
+        <AgentTemplateTab v-if="visitedPages.has('custom-agents')" v-show="activePage === 'custom-agents'" page="custom" @dirty-change="agentFormDirty = $event" />
+        <div v-if="visitedPages.has('claude-code')" v-show="activePage === 'claude-code'" class="stacked-pages">
+          <SettingsDialog :visible="true" embedded @dirty-change="claudeSettingsDirty = $event" />
+          <ClaudeMarketplacePanel @dirty-change="marketplaceDirty = $event" />
+        </div>
+        <GitManagerDialog v-if="visitedPages.has('git')" v-show="activePage === 'git'" :visible="true" embedded @dirty-change="gitDirty = $event" />
+        <UserManagementTab v-if="visitedPages.has('users')" v-show="activePage === 'users'" />
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.admin-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: var(--layer-workspace);
-}
-
-.admin-header {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-}
-
-.admin-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.admin-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
-}
-
-.admin-tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.admin-tab {
-  padding: 6px 14px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.admin-tab:hover {
-  background: var(--layer-active);
-  color: var(--text-primary);
-}
-
-.admin-tab.active {
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-
-.admin-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-}
-
-.admin-launcher {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 200px;
-  color: var(--text-muted);
-  font-size: 14px;
-  flex-direction: column;
-  gap: 12px;
-}
+.admin-app { display: flex; flex-direction: column; width: 100%; height: 100vh; background: var(--layer-workspace); color: var(--text-primary); }
+.admin-topbar { display: flex; align-items: center; justify-content: space-between; min-height: 58px; padding: 0 22px; border-bottom: 1px solid var(--border-subtle); background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); }
+.brand-area, .topbar-actions { display: flex; align-items: center; gap: 12px; }
+.surface-badge { padding: 3px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.front-switch { display: flex; align-items: center; min-height: 36px; gap: 7px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.front-switch:hover, .front-switch:focus-visible { border-color: var(--border); background: var(--layer-active); color: var(--text-primary); outline: none; }
+.admin-shell { display: flex; min-height: 0; flex: 1; }
+.admin-sidebar { display: flex; flex: 0 0 238px; flex-direction: column; padding: 22px 14px 16px; border-right: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--layer-base) 82%, transparent); }
+.sidebar-heading { display: flex; flex-direction: column; gap: 3px; padding: 0 10px 18px; }
+.sidebar-heading span { color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .16em; }
+.sidebar-heading strong { font-size: 16px; }
+.nav-section { margin-bottom: 20px; }
+.nav-section h2 { margin: 0 10px 7px; color: var(--text-muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.nav-item { display: flex; align-items: center; width: 100%; min-height: 44px; gap: 10px; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: background .18s, color .18s; }
+.nav-item svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.nav-item:hover { background: var(--layer-hover); color: var(--text-primary); }
+.nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.unsaved-dot { width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--orange, #f59e0b); }
+.sidebar-footer { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 10px; }
+.admin-content { min-width: 0; flex: 1; overflow-y: auto; padding: 18px clamp(20px, 4vw, 58px) 56px; }
+.admin-content:focus { outline: none; }
+.page-context { max-width: 1080px; margin: 0 auto 18px; color: var(--text-muted); font-size: 11px; }
+.stacked-pages { display: flex; max-width: 1080px; margin: 0 auto; flex-direction: column; gap: 28px; }
+@media (max-width: 720px) { .admin-sidebar { flex-basis: 64px; padding-inline: 8px; } .sidebar-heading strong, .nav-section h2, .nav-item span, .sidebar-footer { display: none; } .sidebar-heading { align-items: center; padding-inline: 0; } .nav-item { justify-content: center; } .front-switch { min-width: 44px; min-height: 44px; justify-content:center; font-size: 0; } .admin-topbar { padding-inline: 10px; } .surface-badge { display:none; } .admin-content { padding-inline:14px; } }
+@media (prefers-reduced-motion: reduce) { .nav-item, .front-switch { transition: none; } }
 </style>

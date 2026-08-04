@@ -44,6 +44,7 @@ from ohs.http.auth_router import router as auth_router
 from ohs.http.flow_router import router as flow_router
 from ohs.http.admin_agent_template_router import router as admin_agent_template_router
 from ohs.http.admin_user_router import router as admin_user_router
+from ohs.http.admin_plugin_router import router as admin_plugin_router
 from ohs.ws.session_ws import router as ws_router
 from ohs.auth_dependency import AuthMiddleware
 from ohs.cors_config import DEFAULT_CORS_ORIGINS as _DEFAULT_CORS_ORIGINS
@@ -498,6 +499,7 @@ app.include_router(team_router)
 app.include_router(flow_router)
 app.include_router(admin_agent_template_router)
 app.include_router(admin_user_router)
+app.include_router(admin_plugin_router)
 
 
 @app.exception_handler(BusinessException)

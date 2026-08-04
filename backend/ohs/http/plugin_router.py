@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from application.plugin.plugin_application_service import PluginApplicationService
+from ohs.auth_dependency import require_admin
 from ohs.dependencies import get_plugin_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.plugin_dto import (
@@ -18,7 +19,11 @@ from ohs.http.dto.plugin_dto import (
     PluginUpgradeAllRequest,
 )
 
-router = APIRouter(prefix="/api/plugins", tags=["Plugin"])
+router = APIRouter(
+    prefix="/api/plugins",
+    tags=["Plugin"],
+    dependencies=[Depends(require_admin)],
+)
 
 ServiceDep = Annotated[
     PluginApplicationService,

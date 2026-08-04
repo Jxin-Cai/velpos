@@ -43,11 +43,12 @@ class PluginManager(ABC):
         ...
 
     @abstractmethod
-    async def add_marketplace(self, source: str) -> str:
+    async def add_marketplace(self, source: str, token: str = "") -> str:
         """Add a plugin marketplace.
 
         Args:
             source: Marketplace source (GitHub repo like "owner/repo", git URL, or local path).
+            token: Optional bearer token injected into the Git subprocess environment.
 
         Returns:
             CLI output message.
@@ -55,11 +56,17 @@ class PluginManager(ABC):
         ...
 
     @abstractmethod
-    async def update_marketplace(self, name: str | None = None) -> str:
+    async def list_marketplace_plugins(self, name: str) -> list[dict[str, Any]]:
+        """List plugins exposed by one locally configured marketplace."""
+        ...
+
+    @abstractmethod
+    async def update_marketplace(self, name: str | None = None, token: str = "") -> str:
         """Update marketplace(s) from their source.
 
         Args:
             name: Marketplace name to update. If None, updates all marketplaces.
+            token: Optional bearer token injected into the Git subprocess environment.
 
         Returns:
             CLI output message.

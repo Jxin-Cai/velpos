@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, watch, provide, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { initAuth, logout, isAdmin } from '@shared/lib/authStore'
+import { initAuth, logout, isAdmin, currentUser } from '@shared/lib/authStore'
 import { LoginPage } from '@pages/login'
 import { applyVbReviews, fetchSessionTimelineEvents, useSession } from '@entities/session'
 import { useProject } from '@entities/project'
@@ -22,6 +22,7 @@ import { AdminPage, AdminButton } from '@features/admin-panel'
 import ThemeSwitcher from '@shared/ui/ThemeSwitcher.vue'
 import GlobalShortcutInterceptor from '@shared/ui/GlobalShortcutInterceptor.vue'
 import AppLogo from '@shared/ui/AppLogo.vue'
+import UserIdentity from '@shared/ui/UserIdentity.vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
 import { useHotkeyHint } from '@shared/lib/useHotkeyHint'
 
@@ -82,7 +83,8 @@ const ready = ref(false)
 const initError = ref(null)
 const needsLogin = ref(false)
 
-const adminVisible = ref(false)
+const adminVisible = ref(new URLSearchParams(window.location.search).get('surface') === 'admin')
+const adminHasUnsavedChanges = ref(false)
 const terminalDrawerVisible = ref(false)
 const terminalDockHeight = ref(0)
 const workspaceVisible = ref(false)
@@ -716,6 +718,10 @@ watch(currentSessionId, (newId, oldId) => {
 })
 
 async function handleAuthenticated() {
+  if (!isAdmin.value && adminVisible.value) {
+    adminVisible.value = false
+    updateSurfaceUrl(false, true)
+  }
   needsLogin.value = false
   initError.value = null
   ready.value = false
@@ -723,6 +729,9 @@ async function handleAuthenticated() {
 }
 
 function handleAuthRequired() {
+  adminVisible.value = false
+  adminHasUnsavedChanges.value = false
+  updateSurfaceUrl(false, true)
   logout()
   initError.value = null
   needsLogin.value = true
@@ -736,6 +745,42 @@ function handleAuthRequired() {
     connection.close()
   }
   _connections.clear()
+}
+
+function openAdmin() {
+  if (!isAdmin.value || adminVisible.value) return
+  terminalDrawerVisible.value = false
+  adminVisible.value = true
+  updateSurfaceUrl(true)
+}
+
+function closeAdmin() {
+  adminVisible.value = false
+  adminHasUnsavedChanges.value = false
+  updateSurfaceUrl(false)
+}
+
+function updateSurfaceUrl(showAdmin, replace = false) {
+  const url = new URL(window.location.href)
+  if (showAdmin) {
+    url.searchParams.set('surface', 'admin')
+  } else {
+    url.searchParams.delete('surface')
+    url.searchParams.delete('adminPage')
+  }
+  window.history[replace ? 'replaceState' : 'pushState']({}, '', url)
+}
+
+function handleBrowserNavigation() {
+  const wantsAdmin = new URLSearchParams(window.location.search).get('surface') === 'admin'
+  if (!wantsAdmin && adminVisible.value && adminHasUnsavedChanges.value) {
+    if (!confirm('管理后台中有未保存的 Agent 模板，确定离开吗？')) {
+      window.history.forward()
+      return
+    }
+    adminHasUnsavedChanges.value = false
+  }
+  adminVisible.value = wantsAdmin && isAdmin.value
 }
 
 async function bootApp() {
@@ -764,6 +809,7 @@ async function bootApp() {
 
 onMounted(async () => {
   window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired)
+  window.addEventListener('popstate', handleBrowserNavigation)
 
   let authed
   try {
@@ -788,6 +834,10 @@ onMounted(async () => {
   }
 
   if (authed) {
+    if (!isAdmin.value && adminVisible.value) {
+      adminVisible.value = false
+      updateSurfaceUrl(false, true)
+    }
     await bootApp()
   }
 
@@ -810,6 +860,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   // Clean up event listener
   window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired)
+  window.removeEventListener('popstate', handleBrowserNavigation)
   window.removeEventListener('vp-session-imported', handleSessionImported)
   window.removeEventListener('vp-schedules-changed', loadScheduleCounts)
   stopHotkeyHintListening()
@@ -847,7 +898,7 @@ useGlobalHotkeys({
   keys: ['Ctrl+P', 'Cmd+P'],
   handler: () => {
     if (!isAdmin.value) return true
-    adminVisible.value = true
+    openAdmin()
     return false
   },
   priority: 100
@@ -921,6 +972,14 @@ useGlobalHotkeys({
       </div>
     </template>
 
+    <!-- Admin is an independent application surface, not nested in the workspace. -->
+    <AdminPage
+      v-else-if="adminVisible && isAdmin"
+      @close="closeAdmin"
+      @logout="handleAuthRequired"
+      @dirty-change="adminHasUnsavedChanges = $event"
+    />
+
     <!-- Real UI: shown after ready or on error -->
     <template v-else-if="!needsLogin">
       <header class="app-header">
@@ -939,8 +998,9 @@ useGlobalHotkeys({
           <WorkingSessionsButton @navigate="handleNotificationNavigate" />
           <WorkspaceButton :active="workspaceVisible" @click="workspaceVisible = !workspaceVisible" />
           <TerminalButton v-if="isAdmin" :active="terminalDrawerVisible" @click="terminalDrawerVisible = !terminalDrawerVisible" />
-          <AdminButton v-if="isAdmin" @click="adminVisible = true" />
+          <AdminButton v-if="isAdmin" @click="openAdmin" />
           <ThemeSwitcher />
+          <UserIdentity :user="currentUser" @logout="handleAuthRequired" />
         </div>
       </header>
 
@@ -992,11 +1052,7 @@ useGlobalHotkeys({
           </button>
         </div>
         <main class="app-main">
-          <AdminPage
-            v-if="adminVisible"
-            @close="adminVisible = false"
-          />
-          <div v-else-if="initError" class="init-error">
+          <div v-if="initError" class="init-error">
             <div class="error-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"/>

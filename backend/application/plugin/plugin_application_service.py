@@ -32,9 +32,9 @@ class PluginApplicationService:
         logger.info("Upgrading all plugins (project=%s)", project_dir)
         return await self._plugin_manager.upgrade_all_plugins(project_dir)
 
-    async def update_marketplace(self, name: str | None = None) -> str:
+    async def update_marketplace(self, name: str | None = None, token: str = "") -> str:
         logger.info("Updating marketplace: %s", name or "all")
-        return await self._plugin_manager.update_marketplace(name)
+        return await self._plugin_manager.update_marketplace(name, token)
 
     async def remove_marketplace(self, name: str) -> str:
         logger.info("Removing marketplace: %s", name)
@@ -42,3 +42,10 @@ class PluginApplicationService:
 
     async def list_marketplaces(self) -> list[dict[str, Any]]:
         return await self._plugin_manager.list_marketplaces()
+
+    async def add_marketplace(self, source: str, token: str = "") -> str:
+        logger.info("Adding Claude plugin marketplace")
+        return await self._plugin_manager.add_marketplace(source, token)
+
+    async def list_marketplace_plugins(self, name: str) -> list[dict[str, Any]]:
+        return await self._plugin_manager.list_marketplace_plugins(name)

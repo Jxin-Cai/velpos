@@ -133,17 +133,29 @@ class ClaudePluginManager(PluginManagerPort):
             cwd=project_dir,
         )
 
-    async def add_marketplace(self, source: str) -> str:
+    async def add_marketplace(self, source: str, token: str = "") -> str:
         return await self._run_cli(
             ["plugin", "marketplace", "add", source],
             cwd=str(Path.home()),
+            extra_env=self._git_auth_env(token),
         )
 
-    async def update_marketplace(self, name: str | None = None) -> str:
+    async def list_marketplace_plugins(self, name: str) -> list[dict[str, Any]]:
+        return [
+            plugin
+            for plugin in self._read_available_plugins()
+            if plugin.get("marketplace") == name
+        ]
+
+    async def update_marketplace(self, name: str | None = None, token: str = "") -> str:
         args = ["plugin", "marketplace", "update"]
         if name:
             args.append(name)
-        return await self._run_cli(args, cwd=str(Path.home()))
+        return await self._run_cli(
+            args,
+            cwd=str(Path.home()),
+            extra_env=self._git_auth_env(token),
+        )
 
     async def upgrade_plugin(self, plugin: str, project_dir: str) -> str:
         return await self._run_cli(
@@ -200,6 +212,7 @@ class ClaudePluginManager(PluginManagerPort):
         try:
             data = json.loads(marketplaces_json.read_text())
         except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to read Claude marketplace registry", exc_info=True)
             return []
         if not isinstance(data, dict):
             return []
@@ -225,26 +238,37 @@ class ClaudePluginManager(PluginManagerPort):
             data = json.loads(marketplaces_json.read_text())
             return name in data
         except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to inspect Claude marketplace registry", exc_info=True)
             return False
 
-    async def _run_cli(self, args: list[str], cwd: str) -> str:
+    async def _run_cli(
+        self,
+        args: list[str],
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> str:
         cmd = [self._cli_path, *args]
-        logger.info("Running CLI command: %s (cwd=%s)", " ".join(cmd), cwd)
+        log_args = list(args)
+        if log_args[:3] == ["plugin", "marketplace", "add"]:
+            log_args[3:] = ["<marketplace-source>"]
+        log_command = " ".join([self._cli_path, *log_args])
+        logger.info("Running CLI command: %s (cwd=%s)", log_command, cwd)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, **(extra_env or {})},
         )
         stdout, stderr = await proc.communicate()
         output = stdout.decode().strip()
         err_output = stderr.decode().strip()
 
         if proc.returncode != 0:
-            logger.error("CLI command failed: %s, stderr: %s", " ".join(cmd), err_output)
+            logger.error("CLI command failed: %s", log_command)
             raise RuntimeError(f"CLI command failed: {err_output or output}")
 
-        logger.info("CLI command succeeded: %s", output[:200])
+        logger.info("CLI command succeeded: %s", log_command)
         return output or "OK"
 
     def _read_available_plugins(self) -> list[dict[str, Any]]:
@@ -257,6 +281,7 @@ class ClaudePluginManager(PluginManagerPort):
         try:
             data = json.loads(marketplaces_json.read_text())
         except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to read Claude marketplace registry", exc_info=True)
             return result
 
         for mkt_name, mkt_info in data.items():
@@ -269,6 +294,11 @@ class ClaudePluginManager(PluginManagerPort):
             try:
                 manifest = json.loads(manifest_path.read_text())
             except (json.JSONDecodeError, OSError):
+                logger.warning(
+                    "Failed to read Claude marketplace manifest for %s",
+                    mkt_name,
+                    exc_info=True,
+                )
                 continue
             for plugin in manifest.get("plugins", []):
                 result.append({
@@ -279,6 +309,16 @@ class ClaudePluginManager(PluginManagerPort):
                 })
 
         return result
+
+    @staticmethod
+    def _git_auth_env(token: str) -> dict[str, str] | None:
+        if not token:
+            return None
+        return {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.extraHeader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+        }
 
     def _read_installed_plugins(self) -> dict[str, list[dict[str, Any]]]:
         """Read installed_plugins.json."""

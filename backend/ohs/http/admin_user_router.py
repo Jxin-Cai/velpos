@@ -31,7 +31,7 @@ RepoDep = Annotated[UserRepository, Depends(_get_user_repo)]
 
 
 class UpdateRoleRequest(BaseModel):
-    role: str
+    role: UserRole
 
 
 class UpdateStatusRequest(BaseModel):
@@ -65,10 +65,7 @@ async def update_user_role(
     if user is None:
         raise BusinessException(f"User not found: {user_id}")
 
-    try:
-        new_role = UserRole(request.role)
-    except ValueError:
-        raise BusinessException(f"Invalid role: {request.role}")
+    new_role = request.role
 
     if user.id == admin.id and new_role != UserRole.ADMIN:
         raise BusinessException("Administrators cannot demote their own account")

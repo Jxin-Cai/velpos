@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { getGitConfig, setGitConfig, listSshKeys, generateSshKey } from '../api/gitApi'
 import { useDialogManager, useVisibleProxy, useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTimeout } from '@shared/lib/useTimeout'
@@ -9,13 +9,21 @@ const props = defineProps({
     type: Boolean,
     required: true,
   },
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'dirty-change'])
 
 const { useDialog } = useDialogManager()
-useDialog('git-manager', useVisibleProxy(props, emit))
-useEscapeToClose(() => props.visible, () => emit('close'))
+const visibleProxy = useVisibleProxy(props, emit)
+useDialog('git-manager', {
+  get value() { return !props.embedded && visibleProxy.value },
+  set value(value) { if (!value && !props.embedded) visibleProxy.value = false },
+})
+useEscapeToClose(() => !props.embedded && props.visible, () => emit('close'))
 
 const loading = ref(false)
 const saving = ref(false)
@@ -25,6 +33,8 @@ const error = ref('')
 const userName = ref('')
 const userEmail = ref('')
 const configSaved = ref(false)
+const initialUserName = ref('')
+const initialUserEmail = ref('')
 
 // SSH keys
 const sshKeys = ref([])
@@ -33,6 +43,10 @@ const showGenForm = ref(false)
 const genKeyType = ref('ed25519')
 const genComment = ref('')
 const copiedKey = ref('')
+const isDirty = computed(() => userName.value !== initialUserName.value
+  || userEmail.value !== initialUserEmail.value
+  || (showGenForm.value && (genKeyType.value !== 'ed25519' || Boolean(genComment.value))))
+watch(isDirty, value => emit('dirty-change', value), { immediate: true })
 const { set: setTimer } = useTimeout()
 let _loadDataSeq = 0
 
@@ -49,6 +63,8 @@ async function loadData() {
     if (seq !== _loadDataSeq) return
     userName.value = config.user_name || ''
     userEmail.value = config.user_email || ''
+    initialUserName.value = userName.value
+    initialUserEmail.value = userEmail.value
     sshKeys.value = keys.keys || []
   } catch (e) {
     if (seq !== _loadDataSeq) return
@@ -66,6 +82,8 @@ async function handleSaveConfig() {
     const result = await setGitConfig(userName.value, userEmail.value)
     userName.value = result.user_name
     userEmail.value = result.user_email
+    initialUserName.value = userName.value
+    initialUserEmail.value = userEmail.value
     configSaved.value = true
     setTimer(() => { configSaved.value = false }, 2000)
   } catch (e) {
@@ -92,6 +110,12 @@ async function handleGenerate() {
   }
 }
 
+function cancelGenerate() {
+  if (genComment.value && !confirm('SSH 密钥信息尚未生成，确定取消吗？')) return
+  showGenForm.value = false
+  genComment.value = ''
+}
+
 async function copyPublicKey(publicKey, keyName) {
   try {
     await navigator.clipboard.writeText(publicKey)
@@ -115,14 +139,21 @@ watch(() => props.visible, (val) => {
     loadData()
     showGenForm.value = false
   }
-})
+}, { immediate: true })
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')" role="dialog" aria-modal="true" aria-labelledby="git-dialog-title">
-      <div class="dialog">
-        <div class="dialog-header">
+  <Teleport to="body" :disabled="embedded">
+    <div
+      v-if="visible"
+      :class="embedded ? 'embedded-page' : 'dialog-overlay'"
+      :role="embedded ? undefined : 'dialog'"
+      :aria-modal="embedded ? undefined : 'true'"
+      aria-labelledby="git-dialog-title"
+      @click.self="!embedded && emit('close')"
+    >
+      <div :class="embedded ? 'embedded-surface' : 'dialog'">
+        <div v-if="!embedded" class="dialog-header">
           <h2 id="git-dialog-title">Git Management</h2>
           <button class="close-btn" type="button" aria-label="Close Git Management" @click="emit('close')">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -131,16 +162,21 @@ watch(() => props.visible, (val) => {
             </svg>
           </button>
         </div>
+        <div v-else class="embedded-header">
+          <span class="eyebrow">GIT</span>
+          <h1 id="git-dialog-title">Git 配置</h1>
+          <p>管理全局提交身份与本机 SSH 密钥。</p>
+        </div>
 
-        <div v-if="error" class="error-bar">{{ error }}</div>
+        <div v-if="error" class="error-bar" role="alert">{{ error }}</div>
 
-        <div v-if="loading" class="loading-state">Loading...</div>
+        <div v-if="loading" class="loading-state">正在加载 Git 配置…</div>
 
         <div v-else class="dialog-body">
           <!-- Git Config Section -->
           <div class="section">
-            <h3 class="section-title">Git Identity</h3>
-            <p class="section-desc">Configure the global git user for commits.</p>
+            <h3 class="section-title">提交身份</h3>
+            <p class="section-desc">配置全局 Git 提交用户名和邮箱。</p>
             <div class="field-row">
               <label>user.name</label>
               <input
@@ -163,9 +199,10 @@ watch(() => props.visible, (val) => {
               <button
                 class="btn-primary"
                 :disabled="saving"
+                type="button"
                 @click="handleSaveConfig"
               >
-                {{ saving ? 'Saving...' : configSaved ? 'Saved' : 'Save' }}
+                {{ saving ? '保存中…' : configSaved ? '已保存' : '保存身份' }}
               </button>
             </div>
           </div>
@@ -174,30 +211,31 @@ watch(() => props.visible, (val) => {
           <div class="section">
             <div class="section-header">
               <div>
-                <h3 class="section-title">SSH Keys</h3>
-                <p class="section-desc">Manage SSH keys for GitHub authentication.</p>
+                <h3 class="section-title">SSH 密钥</h3>
+                <p class="section-desc">管理用于 Git 托管平台认证的本机 SSH 密钥。</p>
               </div>
               <button
                 v-if="!showGenForm"
                 class="btn-secondary"
+                type="button"
                 @click="showGenForm = true"
               >
-                + Generate Key
+                生成密钥
               </button>
             </div>
 
             <!-- Generate form -->
             <div v-if="showGenForm" class="gen-form">
               <div class="field-row">
-                <label>Type</label>
+                <label>密钥类型</label>
                 <select v-model="genKeyType" class="field-input">
-                  <option value="ed25519">Ed25519 (recommended)</option>
+                  <option value="ed25519">Ed25519（推荐）</option>
                   <option value="rsa">RSA</option>
                   <option value="ecdsa">ECDSA</option>
                 </select>
               </div>
               <div class="field-row">
-                <label>Comment</label>
+                <label>备注</label>
                 <input
                   v-model="genComment"
                   type="text"
@@ -208,23 +246,25 @@ watch(() => props.visible, (val) => {
               <div class="gen-actions">
                 <button
                   class="btn-primary"
+                  type="button"
                   :disabled="generating"
                   @click="handleGenerate"
                 >
-                  {{ generating ? 'Generating...' : 'Generate' }}
+                  {{ generating ? '生成中…' : '生成密钥' }}
                 </button>
                 <button
                   class="btn-secondary"
-                  @click="showGenForm = false"
+                  type="button"
+                  @click="cancelGenerate"
                 >
-                  Cancel
+                  取消
                 </button>
               </div>
             </div>
 
             <!-- Key list -->
             <div v-if="sshKeys.length === 0 && !showGenForm" class="empty-state">
-              No SSH keys found. Generate one to get started.
+              尚未发现 SSH 密钥，可以先生成一个。
             </div>
             <div v-for="key in sshKeys" :key="key.name" class="key-card">
               <div class="key-info">
@@ -233,9 +273,10 @@ watch(() => props.visible, (val) => {
               </div>
               <button
                 class="btn-copy"
+                type="button"
                 :class="{ copied: copiedKey === key.name }"
                 @click="copyPublicKey(key.public_key, key.name)"
-                :title="copiedKey === key.name ? 'Copied!' : 'Copy public key'"
+                :title="copiedKey === key.name ? '已复制' : '复制公钥'"
               >
                 <svg v-if="copiedKey !== key.name" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -244,7 +285,7 @@ watch(() => props.visible, (val) => {
                 <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
-                {{ copiedKey === key.name ? 'Copied' : 'Copy' }}
+                {{ copiedKey === key.name ? '已复制' : '复制' }}
               </button>
             </div>
           </div>
@@ -255,6 +296,14 @@ watch(() => props.visible, (val) => {
 </template>
 
 <style scoped>
+.embedded-page { width: 100%; max-width: 1080px; margin: 0 auto; }
+.embedded-surface { width: 100%; padding: 24px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--glass-bg); }
+.embedded-header { margin-bottom: 24px; }
+.embedded-header h1 { margin: 4px 0 7px; color: var(--text-primary); font-size: 22px; letter-spacing: -.02em; }
+.embedded-header p { margin: 0; color: var(--text-muted); font-size: 13px; }
+.eyebrow { color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .14em; }
+.embedded-surface .dialog-body { padding: 0; overflow: visible; }
+
 .dialog-overlay {
   background: var(--dialog-overlay);
   backdrop-filter: blur(8px);
@@ -505,5 +554,16 @@ select.field-input {
 .btn-copy.copied {
   color: var(--status-success, #34c759);
   border-color: var(--status-success, #34c759);
+}
+
+@media (max-width: 720px) {
+  .embedded-surface { padding: 16px; }
+  .field-row { align-items: stretch; flex-direction: column; gap: 5px; }
+  .field-row label { min-width: 0; }
+  .field-input { min-height: 42px; font-size: 16px; }
+  .section-header, .key-card { align-items: stretch; flex-direction: column; }
+  .section-header .btn-secondary { min-height: 44px; }
+  .btn-copy { min-height: 40px; justify-content: center; margin: 10px 0 0; }
+  .gen-actions button, .section-actions button { min-height: 44px; flex: 1; }
 }
 </style>

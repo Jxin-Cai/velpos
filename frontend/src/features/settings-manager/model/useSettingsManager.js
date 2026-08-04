@@ -58,8 +58,10 @@ export function useSettingsManager() {
     try {
       await createChannelProfile(form)
       await loadData()
+      return true
     } catch (err) {
       error.value = err.message || 'Failed to create channel profile'
+      return false
     }
   }
 
@@ -68,8 +70,10 @@ export function useSettingsManager() {
     try {
       await updateChannelProfile(profileId, form)
       await loadData()
+      return true
     } catch (err) {
       error.value = err.message || 'Failed to update channel profile'
+      return false
     }
   }
 

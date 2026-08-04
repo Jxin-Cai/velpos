@@ -1359,6 +1359,7 @@ function formatMaxTokens(n) {
           </svg>
         </button>
         <button
+          v-if="isAdmin"
           class="toolbar-btn"
           :disabled="!currentSessionId"
           aria-label="Manage plugins"
@@ -2021,6 +2022,7 @@ function formatMaxTokens(n) {
     </Teleport>
 
     <PluginManagerDialog
+      v-if="isAdmin"
       :visible="pluginDialogVisible"
       :project-dir="projectDir"
       @close="pluginDialogVisible = false"
