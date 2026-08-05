@@ -76,8 +76,7 @@ class ImChannelApplicationService:
 
     async def list_available_channels(self, user_id: int | None = None) -> list[dict[str, Any]]:
         """返回所有已注册渠道类型, 每个类型下嵌套其实例列表."""
-        from infr.config.app_config import app_config
-        if user_id is not None and app_config.mode == "pro":
+        if user_id is not None and self._mode == "pro":
             all_inits = await self._init_repo.find_all_by_user_id(user_id)
         else:
             all_inits = await self._init_repo.find_all()
@@ -545,175 +544,207 @@ class ImChannelApplicationService:
         ).hexdigest()
         source_message_id = f"im:{source_digest}"[:64]
 
-        # Add "working" reaction for Lark channels
+        async with self._inbound_reaction_scope(adapter, binding, message_id):
+            try:
+                response = await self._execute_inbound(
+                    binding, content, source_message_id,
+                    delivery_channel_id, message_id, reply_ctx_base,
+                    attachments,
+                )
+                if response:
+                    await self._send_inbound_reply(
+                        binding, response, reply_ctx_base,
+                        f"inbox:{delivery_channel_id}:{message_id}:response",
+                    )
+            except RetryableInboundError:
+                raise
+            except Exception as exc:
+                logger.error("[IM-process] Failed to process inbound: session=%s", binding.session_id, exc_info=True)
+                try:
+                    await self._send_inbound_reply(
+                        binding,
+                        f"[Error] {str(exc)[:200]}",
+                        reply_ctx_base,
+                        f"inbox:{delivery_channel_id}:{message_id}:processing-error",
+                    )
+                except Exception:
+                    logger.warning("[IM-process] Failed to send error notification to IM", exc_info=True)
+                raise
+
+    @asynccontextmanager
+    async def _inbound_reaction_scope(
+        self, adapter: ImChannelAdapter, binding: ImBinding, message_id: str,
+    ) -> AsyncIterator[None]:
         reaction_id = ""
-        if hasattr(adapter, 'add_reaction') and message_id:
+        if hasattr(adapter, "add_reaction") and message_id:
             try:
                 reaction_id = await adapter.add_reaction(binding, message_id, "OnIt")
             except Exception:
                 logger.debug("[IM-process] add_reaction failed, continuing", exc_info=True)
-
-        from infr.config.database import async_session_factory
-
         try:
-            async with async_session_factory() as db_session:
-                session_service = await self._session_service_factory(db_session)
-                session_service.suppress_outbound_callbacks()
-                try:
-                    session = await session_service.get_session(binding.session_id)
-                except BusinessException:
-                    logger.warning("[IM-process] Session %s no longer exists, skipping", binding.session_id)
-                    return
-                attachment_refs = list(attachments or [])
-                if attachment_refs and self._stage_inbound_attachments:
-                    attachment_refs = await self._stage_inbound_attachments(
-                        session,
-                        attachment_refs,
-                    )
-                if session.is_running:
-                    # Check if waiting for user input (AskUserQuestion / permission)
-                    if await self._try_resolve_pending_response(binding.session_id, content):
-                        logger.info("[IM-process] Resolved pending user response via IM: session=%s", binding.session_id)
-                        return
-                    raise RetryableInboundError("Session is busy")
-
-                existing_index = next(
-                    (
-                        index
-                        for index, message in enumerate(session.messages)
-                        if message.message_type == MessageType.USER
-                        and message.content.get("message_id") == source_message_id
-                    ),
-                    None,
-                )
-                if existing_index is not None:
-                    response = self._extract_response_after(session, existing_index)
-                    if response:
-                        await self._send_inbound_reply(
-                            binding,
-                            response,
-                            reply_ctx_base,
-                            f"inbox:{delivery_channel_id}:{message_id}:response",
-                        )
-                        return
-                    result_error = self._extract_result_error_after(
-                        session,
-                        existing_index,
-                    )
-                    if result_error:
-                        await self._send_inbound_reply(
-                            binding,
-                            f"[Error] {result_error[:500]}",
-                            reply_ctx_base,
-                            f"inbox:{delivery_channel_id}:{message_id}:query-error",
-                        )
-                        return
-
-                if self._connection_manager:
-                    user_msg = Message.create(
-                        message_type=MessageType.USER,
-                        content={
-                            "message_id": source_message_id,
-                            "text": content,
-                            "source": binding.channel_type.value,
-                            "attachments": attachment_refs,
-                        },
-                    )
-                    await self._connection_manager.broadcast(
-                        binding.session_id,
-                        {"event": "message", "data": {"type": user_msg.message_type.value, "content": user_msg.content}},
-                    )
-
-                command = self._build_inbound_query_command(
-                    binding,
-                    content,
-                    source_message_id,
-                    attachment_refs,
-                )
-                msg_count_before = session.message_count
-                await session_service.run_claude_query(command)
-                try:
-                    await db_session.commit()
-                except Exception:
-                    logger.warning("[IM-process] db_session commit failed after query: session=%s", binding.session_id, exc_info=True)
-
-            # Use a fresh DB session to read result — the previous session
-            # may be invalidated if run_claude_query hit a DB error internally
-            async with async_session_factory() as db_session2:
-                session_service2 = await self._session_service_factory(db_session2)
-                session = await session_service2.get_session(binding.session_id)
-
-                user_index = next(
-                    (
-                        index
-                        for index, message in enumerate(session.messages)
-                        if message.message_type == MessageType.USER
-                        and message.content.get("message_id") == source_message_id
-                    ),
-                    None,
-                )
-                response = (
-                    self._extract_response_after(session, user_index)
-                    if user_index is not None
-                    else ""
-                )
-                if not response:
-                    result_error = (
-                        self._extract_result_error_after(session, user_index)
-                        if user_index is not None
-                        else ""
-                    )
-                    if result_error:
-                        await self._send_inbound_reply(
-                            binding,
-                            f"[Error] {result_error[:500]}",
-                            reply_ctx_base,
-                            f"inbox:{delivery_channel_id}:{message_id}:query-error",
-                        )
-                        return
-                    logger.warning(
-                        "[IM-process] No response for inbound request: "
-                        "session=%s message_id=%s before=%s after=%s",
-                        binding.session_id,
-                        source_message_id,
-                        msg_count_before,
-                        session.message_count,
-                    )
-                    raise RetryableInboundError(
-                        "Inbound query did not produce an assistant response"
-                    )
-
-            if response:
-                await self._send_inbound_reply(
-                    binding,
-                    response,
-                    reply_ctx_base,
-                    f"inbox:{delivery_channel_id}:{message_id}:response",
-                )
-            else:
-                logger.warning("[IM-process] No response extracted: session=%s", binding.session_id)
-
-        except RetryableInboundError:
-            raise
-        except Exception as exc:
-            logger.error("[IM-process] Failed to process inbound: session=%s", binding.session_id, exc_info=True)
-            try:
-                await self._send_inbound_reply(
-                    binding,
-                    f"[Error] {str(exc)[:200]}",
-                    reply_ctx_base,
-                    f"inbox:{delivery_channel_id}:{message_id}:processing-error",
-                )
-            except Exception:
-                logger.warning("[IM-process] Failed to send error notification to IM", exc_info=True)
-            raise
+            yield
         finally:
-            # Remove "working" reaction
-            if reaction_id and hasattr(adapter, 'remove_reaction'):
+            if reaction_id and hasattr(adapter, "remove_reaction"):
                 try:
                     await adapter.remove_reaction(binding, message_id, reaction_id)
                 except Exception:
                     logger.debug("[IM-process] remove_reaction failed", exc_info=True)
+
+    async def _execute_inbound(
+        self,
+        binding: ImBinding,
+        content: str,
+        source_message_id: str,
+        delivery_channel_id: str,
+        message_id: str,
+        reply_ctx_base: dict[str, str],
+        attachments: list[dict[str, Any]] | None,
+    ) -> str:
+        """Execute the inbound query and return the assistant response text (or empty)."""
+        async with self._session_service_context_factory() as session_service:
+            session_service.suppress_outbound_callbacks()
+            try:
+                session = await session_service.get_session(binding.session_id)
+            except BusinessException:
+                logger.warning("[IM-process] Session %s no longer exists, skipping", binding.session_id)
+                return ""
+
+            attachment_refs = list(attachments or [])
+            if attachment_refs and self._stage_inbound_attachments:
+                attachment_refs = await self._stage_inbound_attachments(session, attachment_refs)
+
+            if session.is_running:
+                if await self._try_resolve_pending_response(binding.session_id, content):
+                    logger.info("[IM-process] Resolved pending user response via IM: session=%s", binding.session_id)
+                    return ""
+                raise RetryableInboundError("Session is busy")
+
+            cached = self._try_cached_inbound_response(
+                session, source_message_id, binding, reply_ctx_base,
+                delivery_channel_id, message_id,
+            )
+            if cached is not None:
+                return cached
+
+            await self._broadcast_inbound_user_message(binding, content, source_message_id, attachment_refs)
+
+            command = self._build_inbound_query_command(binding, content, source_message_id, attachment_refs)
+            msg_count_before = session.message_count
+            await session_service.run_claude_query(command)
+            try:
+                await session_service.commit()
+            except Exception:
+                logger.warning("[IM-process] commit failed after query: session=%s", binding.session_id, exc_info=True)
+
+        return await self._read_inbound_result(
+            binding, source_message_id, msg_count_before,
+            delivery_channel_id, message_id, reply_ctx_base,
+        )
+
+    def _try_cached_inbound_response(
+        self,
+        session: Any,
+        source_message_id: str,
+        binding: ImBinding,
+        reply_ctx_base: dict[str, str],
+        delivery_channel_id: str,
+        message_id: str,
+    ) -> str | None:
+        """Check if this message was already processed. Returns response/error string, or None if not cached."""
+        existing_index = next(
+            (
+                index
+                for index, message in enumerate(session.messages)
+                if message.message_type == MessageType.USER
+                and message.content.get("message_id") == source_message_id
+            ),
+            None,
+        )
+        if existing_index is None:
+            return None
+
+        response = self._extract_response_after(session, existing_index)
+        if response:
+            return response
+        result_error = self._extract_result_error_after(session, existing_index)
+        if result_error:
+            return f"[Error] {result_error[:500]}"
+        return None
+
+    async def _broadcast_inbound_user_message(
+        self, binding: ImBinding, content: str, source_message_id: str, attachment_refs: list,
+    ) -> None:
+        if not self._connection_manager:
+            return
+        user_msg = Message.create(
+            message_type=MessageType.USER,
+            content={
+                "message_id": source_message_id,
+                "text": content,
+                "source": binding.channel_type.value,
+                "attachments": attachment_refs,
+            },
+        )
+        await self._connection_manager.broadcast(
+            binding.session_id,
+            {"event": "message", "data": {"type": user_msg.message_type.value, "content": user_msg.content}},
+        )
+
+    async def _read_inbound_result(
+        self,
+        binding: ImBinding,
+        source_message_id: str,
+        msg_count_before: int,
+        delivery_channel_id: str,
+        message_id: str,
+        reply_ctx_base: dict[str, str],
+    ) -> str:
+        """Read query result from a fresh DB session after execution."""
+        async with self._session_service_context_factory() as session_service:
+            session = await session_service.get_session(binding.session_id)
+
+            user_index = next(
+                (
+                    index
+                    for index, message in enumerate(session.messages)
+                    if message.message_type == MessageType.USER
+                    and message.content.get("message_id") == source_message_id
+                ),
+                None,
+            )
+            response = (
+                self._extract_response_after(session, user_index)
+                if user_index is not None
+                else ""
+            )
+            if response:
+                return response
+
+            result_error = (
+                self._extract_result_error_after(session, user_index)
+                if user_index is not None
+                else ""
+            )
+            if result_error:
+                await self._send_inbound_reply(
+                    binding,
+                    f"[Error] {result_error[:500]}",
+                    reply_ctx_base,
+                    f"inbox:{delivery_channel_id}:{message_id}:query-error",
+                )
+                return ""
+
+            logger.warning(
+                "[IM-process] No response for inbound request: "
+                "session=%s message_id=%s before=%s after=%s",
+                binding.session_id,
+                source_message_id,
+                msg_count_before,
+                session.message_count,
+            )
+            raise RetryableInboundError(
+                "Inbound query did not produce an assistant response"
+            )
 
     @staticmethod
     def _build_inbound_query_command(
@@ -1003,27 +1034,22 @@ class ImChannelApplicationService:
 
         binding.update_config(routing_ctx)
 
-        from infr.config.database import async_session_factory
-        from infr.repository.im_binding_repository_impl import ImBindingRepositoryImpl
-        from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
+        if not self._binding_context_factory:
+            logger.warning("[IM-process] No binding_context_factory, cannot persist reply context")
+            return
 
         try:
-            async with async_session_factory() as db_session:
-                repo = ImBindingRepositoryImpl(db_session)
-                fresh = await repo.find_by_session_id(binding.session_id)
+            async with self._binding_context_factory() as (binding_repo, init_repo):
+                fresh = await binding_repo.find_by_session_id(binding.session_id)
                 if fresh:
                     fresh.update_config(routing_ctx)
-                    await repo.save(fresh)
+                    await binding_repo.save(fresh)
 
-                # Persist to channel instance (实例级路由)
                 if binding.channel_id:
-                    init_repo = ChannelInitRepositoryImpl(db_session)
                     ci = await init_repo.find_by_id(binding.channel_id)
                     if ci:
                         ci.update_config(routing_ctx)
                         await init_repo.save(ci)
-
-                await db_session.commit()
         except Exception:
             logger.warning(
                 "[IM-process] Failed to persist reply context for session=%s",

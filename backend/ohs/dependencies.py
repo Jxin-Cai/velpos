@@ -79,14 +79,13 @@ from infr.repository.team_repository_impl import TeamRepositoryImpl
 from infr.repository.wish_card_repository_impl import WishCardRepositoryImpl
 from infr.repository.usage_governance_repository_impl import UsageGovernanceRepositoryImpl
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
+from infr.workspace.workspace_root_resolver_impl import WorkspaceRootResolverImpl
 from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.team.model.status import ExecutionFailureCategory, ExecutionFailurePhase
 from ohs.session_event_coordinator import SessionEventCoordinator
 from ohs.im_delivery_coordinator import ImDeliveryCoordinator
 
 logger = logging.getLogger(__name__)
-
-from infr.workspace.workspace_root_resolver_impl import WorkspaceRootResolverImpl
 
 _workspace_root_resolver = WorkspaceRootResolverImpl()
 _connection_manager = ConnectionManager()
@@ -574,6 +573,8 @@ async def get_im_channel_application_service(
         accept_inbound_fn=_im_delivery_coordinator.accept_inbound,
         enqueue_outbound_fn=_im_delivery_coordinator.enqueue_outbound,
         stage_inbound_attachments_fn=_stage_inbound_attachments,
+        session_service_context_factory=_session_service_context,
+        binding_context_factory=_binding_repos_context,
     )
 
 
@@ -616,6 +617,24 @@ async def _create_session_service(
         execution_lock_factory=acquire_session_execution_lock,
         sync_card_execution_fn=_sync_card_execution,
     )
+
+
+@asynccontextmanager
+async def _session_service_context():
+    """Provide a SessionApplicationService with its own managed DB session."""
+    from infr.config.database import async_session_factory
+    async with async_session_factory() as db_session:
+        svc = await _create_session_service(db_session)
+        yield svc
+
+
+@asynccontextmanager
+async def _binding_repos_context():
+    """Provide (ImBindingRepository, ChannelInitRepository) with their own managed DB session."""
+    from infr.config.database import async_session_factory
+    async with async_session_factory() as db_session:
+        yield ImBindingRepositoryImpl(db_session), ChannelInitRepositoryImpl(db_session)
+        await db_session.commit()
 
 
 async def get_session_run_timeline_service(

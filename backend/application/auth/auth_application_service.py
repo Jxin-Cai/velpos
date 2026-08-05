@@ -5,6 +5,7 @@ import hmac
 import logging
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import jwt
 
 from domain.user.model.user import User, UserRole
@@ -77,6 +78,11 @@ class AuthApplicationService:
         if not self._verify_password(password, user.hashed_password):
             raise BusinessException("Invalid username or password", "AUTH_FAILED")
 
+        # Lazy migration: re-hash legacy PBKDF2 passwords with bcrypt
+        if not user.hashed_password.startswith("$2b$"):
+            user.hashed_password = self._hash_password(password)
+            await self._user_repo.save(user)
+
         token = self._generate_token(user)  # instance method – uses self._jwt_secret
         return user, token
 
@@ -99,13 +105,14 @@ class AuthApplicationService:
         }
         return jwt.encode(payload, self._jwt_secret, algorithm=_ALGORITHM)
 
-    def _hash_password(self, password: str) -> str:
-        salt = self._jwt_secret[:16]
-        return hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), salt.encode(), 100_000
-        ).hex()
+    @staticmethod
+    def _hash_password(password: str) -> str:
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
     def _verify_password(self, password: str, hashed: str) -> bool:
+        if hashed.startswith("$2b$") or hashed.startswith("$2a$"):
+            return bcrypt.checkpw(password.encode(), hashed.encode())
+        # Legacy PBKDF2 path for passwords hashed before bcrypt migration
         salt = self._jwt_secret[:16]
         computed = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), salt.encode(), 100_000

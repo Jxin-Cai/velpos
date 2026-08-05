@@ -298,6 +298,274 @@ async function loadTraceSpans(sessionId) {
   }
 }
 
+function _handleConnected(sessionId, data, { sess, proj }) {
+  console.debug('[VP] WS connected:', {
+    session: data.session?.session_id,
+    messageCount: data.messages?.length || 0,
+    resultCount: data.messages?.filter(m => m.type === 'result').length || 0,
+  })
+  updateSessionFor(sessionId, data.session)
+  if (data.messages) {
+    setMessagesFor(sessionId, data.messages, {
+      ...data.session,
+      message_window: data.message_window,
+      user_message_markers: data.user_message_markers,
+    })
+  }
+  setStatusFor(sessionId, data.session.status || 'idle')
+  syncRecoveryState(sessionId, data.session)
+  updateSessionInList(sessionId, data.session)
+  if (data.session.status === 'running') {
+    markWorking(sessionId, { sessionName: sess?.name || data.session.name || '', projectName: proj?.name || '' })
+  } else {
+    markDone(sessionId)
+  }
+  loadLatestRunSteps(sessionId)
+  loadTimelineEvents(sessionId)
+  loadTraceSpans(sessionId)
+}
+
+function _handleMessage(sessionId, data, { sess, proj }) {
+  if (getCancelingFor(sessionId) && data.data?.type === 'result' && data.data?.content?.is_error) {
+    return
+  }
+  addMessageTo(sessionId, data.data)
+  if (data.data?.type === 'result' && data.data.content?.is_error) {
+    addNotification({
+      sessionId,
+      sessionName: sess?.name || '',
+      projectName: proj?.name || '',
+      type: NOTIFICATION_TYPE.ERROR,
+      message: data.data.content?.text || '',
+    })
+  }
+}
+
+function _handleStatusChange(sessionId, data, { sess, proj }) {
+  setStatusFor(sessionId, data.status)
+  updateSessionFor(sessionId, {
+    waiting_for_slot: false,
+    waiting_reason: null,
+    slot_queue_position: null,
+  })
+  updateSessionInList(sessionId, { status: data.status })
+  if (data.status === 'running') {
+    if (data.prompt && data.message_id) {
+      removeMessageByClientIdFor(sessionId, data.message_id)
+      addMessageTo(sessionId, {
+        type: 'user',
+        content: {
+          message_id: data.message_id,
+          run_id: data.run_id || '',
+          text: data.prompt,
+          ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+        },
+      })
+    }
+    markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
+  } else {
+    markDone(sessionId)
+    maybeCloseIdle(sessionId)
+  }
+}
+
+function _handleError(sessionId, data, { sess, proj }) {
+  if (!getCancelingFor(sessionId)) {
+    setErrorFor(sessionId, data.message)
+    addNotification({
+      sessionId,
+      sessionName: sess?.name || '',
+      projectName: proj?.name || '',
+      type: NOTIFICATION_TYPE.ERROR,
+      message: data.message || '',
+    })
+  }
+}
+
+function _handlePromptStarted(sessionId, data) {
+  setSteeringQueuedFor(sessionId, false)
+  setQueuedCommandFor(sessionId, null)
+  if (data.duplicate) return
+  removeMessageByClientIdFor(sessionId, data.message_id)
+  addMessageTo(sessionId, {
+    type: 'user',
+    content: {
+      message_id: data.message_id || '',
+      text: data.prompt || '',
+      ...(data.image_count ? { image_count: data.image_count } : {}),
+      ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+    },
+  })
+}
+
+function _handleMessageSteered(sessionId, data) {
+  setSteeringQueuedFor(sessionId, false)
+  setQueuedCommandFor(sessionId, null)
+  removeMessageByClientIdFor(sessionId, data.message_id)
+  addMessageTo(sessionId, {
+    type: 'user',
+    content: {
+      message_id: data.message_id || '',
+      run_id: data.run_id || '',
+      text: data.prompt || '',
+      steered: true,
+      ...(data.image_count ? { image_count: data.image_count } : {}),
+      ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+    },
+  })
+}
+
+function _handleCancelRewind(sessionId, data) {
+  setCancelingFor(sessionId, false)
+  showCancelledHintFor(sessionId)
+  updateSessionFor(sessionId, data.session)
+  if (data.messages) {
+    setMessagesFor(sessionId, data.messages, {
+      ...data.session,
+      message_window: data.message_window,
+      user_message_markers: data.user_message_markers,
+    })
+  }
+  setStatusFor(sessionId, data.session.status || 'idle')
+  updateSessionFor(sessionId, { waiting_for_slot: false })
+  setQueuedFor(sessionId, false)
+  updateSessionInList(sessionId, data.session)
+  markDone(sessionId)
+  if (data.prompt && sessionId === currentSessionId.value) {
+    setRestoredPrompt(data.prompt)
+  }
+}
+
+function _handleStatus(sessionId, data, { sess, proj }) {
+  const sessionUpdate = { ...data.session }
+  if (!sessionUpdate.git_branch) {
+    delete sessionUpdate.git_branch
+  }
+  updateSessionFor(sessionId, sessionUpdate)
+  if (data.session.status === 'running' || data.session.status === 'idle') {
+    updateSessionFor(sessionId, {
+      waiting_for_slot: false,
+      waiting_reason: null,
+      slot_queue_position: null,
+    })
+  }
+  setStatusFor(sessionId, data.session.status || 'idle')
+  syncRecoveryState(sessionId, data.session)
+  updateSessionInList(sessionId, data.session)
+  if (data.session.status === 'running') {
+    markWorking(sessionId, {
+      sessionName: sess?.name || data.session.name || '',
+      projectName: proj?.name || '',
+    })
+  } else {
+    markDone(sessionId)
+    maybeCloseIdle(sessionId)
+  }
+}
+
+function _handleInteractiveRequest(sessionId, data, { sess, proj }) {
+  const interactionType = data.event === 'user_choice_request' ? 'user_choice' : 'permission'
+  const content = interactionType === 'user_choice'
+    ? { interaction_type: interactionType, tool_name: data.tool_name, questions: data.questions }
+    : { interaction_type: interactionType, tool_name: data.tool_name, tool_input: data.tool_input }
+  addMessageTo(sessionId, { type: 'interactive', content })
+  addNotification({
+    sessionId,
+    sessionName: sess?.name || '',
+    projectName: proj?.name || '',
+    type: NOTIFICATION_TYPE.AUTH_REQUIRED,
+  })
+}
+
+const _wsEventHandlers = {
+  connected: _handleConnected,
+  message: _handleMessage,
+  status_change: _handleStatusChange,
+  error: _handleError,
+  protocol_error: _handleError,
+  ws_disconnected(sessionId, _data, { sess }) {
+    if (sess?.status === 'running') setStatusFor(sessionId, 'reconnecting')
+  },
+  info() {},
+  message_queued(sessionId, data) {
+    setSteeringQueuedFor(sessionId, false)
+    removeMessageByClientIdFor(sessionId, data.message_id)
+    setQueuedCommandFor(sessionId, {
+      message_id: data.message_id || '',
+      prompt: data.prompt || '',
+      image_count: data.image_count || 0,
+      attachment_count: data.attachment_count || 0,
+    })
+  },
+  prompt_started: _handlePromptStarted,
+  queue_started: _handlePromptStarted,
+  message_steered: _handleMessageSteered,
+  steer_failed(sessionId, data) {
+    setSteeringQueuedFor(sessionId, false)
+    setErrorFor(sessionId, data.message || 'Unable to steer the queued message')
+  },
+  queue_cleared(sessionId) {
+    setSteeringQueuedFor(sessionId, false)
+    setQueuedCommandFor(sessionId, null)
+  },
+  resource_waiting(sessionId, data) {
+    updateSessionFor(sessionId, {
+      waiting_for_slot: true,
+      waiting_reason: data.status || 'waiting_slot',
+      slot_queue_position: data.queue_position || null,
+      slot_capacity: data.capacity || null,
+    })
+  },
+  resource_acquired(sessionId, data) {
+    updateSessionFor(sessionId, {
+      waiting_for_slot: false,
+      waiting_reason: null,
+      slot_queue_position: null,
+      slot_capacity: data.capacity || null,
+    })
+  },
+  context_usage(sessionId, data) {
+    updateSessionFor(sessionId, { last_input_tokens: data.last_input_tokens || 0 })
+  },
+  stream_waiting(sessionId, _data, { sess, proj }) {
+    setStatusFor(sessionId, 'running')
+    updateSessionInList(sessionId, { status: 'running' })
+    markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
+  },
+  auto_continue(sessionId, data, { sess, proj }) {
+    setStatusFor(sessionId, 'running')
+    updateSessionInList(sessionId, { status: 'running' })
+    markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
+    addMessageTo(sessionId, {
+      type: 'system',
+      content: { subtype: 'auto_continue', attempt: data.attempt, max: data.max },
+    })
+  },
+  run_step_started(sessionId, data) { upsertRunStepFor(sessionId, data.step) },
+  run_step_progress(sessionId, data) { upsertRunStepFor(sessionId, data.step) },
+  run_step_completed(sessionId, data) { upsertRunStepFor(sessionId, data.step) },
+  run_step_failed(sessionId, data) { upsertRunStepFor(sessionId, data.step) },
+  timeline_event(sessionId, data) { upsertTimelineEventFor(sessionId, data.timeline_event) },
+  trace_span(sessionId, data) { upsertTraceSpanFor(sessionId, data.span) },
+  trace_run_started(sessionId, data) { linkUserMessageToRunFor(sessionId, data.message_id, data.run_id) },
+  user_choice_request: _handleInteractiveRequest,
+  permission_request: _handleInteractiveRequest,
+  im_unbound(sessionId, _data, { isCurrent }) {
+    if (isCurrent) { resetImState(); fetchImStatus(sessionId); fetchImChannels() }
+  },
+  vb_started(sessionId, _data, { isCurrent }) {
+    if (isCurrent) { vbRunning.value = true; vbMessage.value = 'Codex is applying review comments…' }
+  },
+  vb_completed(sessionId, _data, { isCurrent }) {
+    if (isCurrent) { vbRunning.value = false; vbMessage.value = 'Review changes applied'; vbRefresh?.(); vbRefresh = null }
+  },
+  vb_failed(sessionId, data, { isCurrent }) {
+    if (isCurrent) { vbRunning.value = false; vbMessage.value = data.message || 'Could not apply review changes'; vbRefresh = null }
+  },
+  cancel_rewind: _handleCancelRewind,
+  status: _handleStatus,
+}
+
 function setupUnifiedHandler(connection, sessionId) {
   connection.onEvent((data) => {
     const isCurrent = (currentSessionId.value === sessionId)
@@ -305,347 +573,10 @@ function setupUnifiedHandler(connection, sessionId) {
     const proj = sess?.project_id
       ? projects.value.find(p => p.id === sess.project_id)
       : null
+    const ctx = { isCurrent, sess, proj }
 
-    switch (data.event) {
-      case 'connected':
-        console.debug('[VP] WS connected:', {
-          session: data.session?.session_id,
-          messageCount: data.messages?.length || 0,
-          resultCount: data.messages?.filter(m => m.type === 'result').length || 0,
-        })
-        updateSessionFor(sessionId, data.session)
-        if (data.messages) {
-          setMessagesFor(sessionId, data.messages, {
-            ...data.session,
-            message_window: data.message_window,
-            user_message_markers: data.user_message_markers,
-          })
-        }
-        setStatusFor(sessionId, data.session.status || 'idle')
-        syncRecoveryState(sessionId, data.session)
-        updateSessionInList(sessionId, data.session)
-        if (data.session.status === 'running') {
-          markWorking(sessionId, { sessionName: sess?.name || data.session.name || '', projectName: proj?.name || '' })
-        } else {
-          markDone(sessionId)
-        }
-        loadLatestRunSteps(sessionId)
-        loadTimelineEvents(sessionId)
-        loadTraceSpans(sessionId)
-        break
-
-      case 'message':
-        if (getCancelingFor(sessionId)
-            && data.data?.type === 'result'
-            && data.data?.content?.is_error) {
-          break
-        }
-        addMessageTo(sessionId, data.data)
-        if (data.data && data.data.type === 'result') {
-          if (data.data.content?.is_error) {
-            addNotification({
-              sessionId,
-              sessionName: sess?.name || '',
-              projectName: proj?.name || '',
-              type: NOTIFICATION_TYPE.ERROR,
-              message: data.data.content?.text || '',
-            })
-          }
-        }
-        break
-
-      case 'status_change':
-        setStatusFor(sessionId, data.status)
-        updateSessionFor(sessionId, {
-          waiting_for_slot: false,
-          waiting_reason: null,
-          slot_queue_position: null,
-        })
-        updateSessionInList(sessionId, { status: data.status })
-        if (data.status === 'running') {
-          // A Team execution can start server-side after the user opens its
-          // freshly-created session. In that path there is no client-originated
-          // `prompt_started` event, so hydrate the persisted user prompt from
-          // the status event. Replacing by message ID also keeps normal sends
-          // idempotent when both events arrive.
-          if (data.prompt && data.message_id) {
-            removeMessageByClientIdFor(sessionId, data.message_id)
-            addMessageTo(sessionId, {
-              type: 'user',
-              content: {
-                message_id: data.message_id,
-                run_id: data.run_id || '',
-                text: data.prompt,
-                ...(data.attachments?.length ? { attachments: data.attachments } : {}),
-              },
-            })
-          }
-          markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
-        } else {
-          markDone(sessionId)
-          maybeCloseIdle(sessionId)
-        }
-        break
-
-      case 'error':
-      case 'protocol_error':
-        if (!getCancelingFor(sessionId)) {
-          setErrorFor(sessionId, data.message)
-          addNotification({
-            sessionId,
-            sessionName: sess?.name || '',
-            projectName: proj?.name || '',
-            type: NOTIFICATION_TYPE.ERROR,
-            message: data.message || '',
-          })
-        }
-        break
-
-      case 'ws_disconnected':
-        if (sess?.status === 'running') {
-          setStatusFor(sessionId, 'reconnecting')
-        }
-        break
-
-      case 'info':
-        break
-
-      case 'message_queued':
-        setSteeringQueuedFor(sessionId, false)
-        removeMessageByClientIdFor(sessionId, data.message_id)
-        setQueuedCommandFor(sessionId, {
-          message_id: data.message_id || '',
-          prompt: data.prompt || '',
-          image_count: data.image_count || 0,
-          attachment_count: data.attachment_count || 0,
-        })
-        break
-
-      case 'prompt_started':
-      case 'queue_started':
-        setSteeringQueuedFor(sessionId, false)
-        setQueuedCommandFor(sessionId, null)
-        if (data.duplicate) {
-          break
-        }
-        removeMessageByClientIdFor(sessionId, data.message_id)
-        addMessageTo(sessionId, {
-          type: 'user',
-          content: {
-            message_id: data.message_id || '',
-            text: data.prompt || '',
-            ...(data.image_count ? { image_count: data.image_count } : {}),
-            ...(data.attachments?.length ? { attachments: data.attachments } : {}),
-          },
-        })
-        break
-
-      case 'message_steered':
-        setSteeringQueuedFor(sessionId, false)
-        setQueuedCommandFor(sessionId, null)
-        removeMessageByClientIdFor(sessionId, data.message_id)
-        addMessageTo(sessionId, {
-          type: 'user',
-          content: {
-            message_id: data.message_id || '',
-            run_id: data.run_id || '',
-            text: data.prompt || '',
-            steered: true,
-            ...(data.image_count ? { image_count: data.image_count } : {}),
-            ...(data.attachments?.length ? { attachments: data.attachments } : {}),
-          },
-        })
-        break
-
-      case 'steer_failed':
-        setSteeringQueuedFor(sessionId, false)
-        setErrorFor(sessionId, data.message || 'Unable to steer the queued message')
-        break
-
-      case 'queue_cleared':
-        setSteeringQueuedFor(sessionId, false)
-        setQueuedCommandFor(sessionId, null)
-        break
-
-      case 'resource_waiting':
-        updateSessionFor(sessionId, {
-          waiting_for_slot: true,
-          waiting_reason: data.status || 'waiting_slot',
-          slot_queue_position: data.queue_position || null,
-          slot_capacity: data.capacity || null,
-        })
-        break
-
-      case 'resource_acquired':
-        updateSessionFor(sessionId, {
-          waiting_for_slot: false,
-          waiting_reason: null,
-          slot_queue_position: null,
-          slot_capacity: data.capacity || null,
-        })
-        break
-
-      case 'context_usage':
-        updateSessionFor(sessionId, {
-          last_input_tokens: data.last_input_tokens || 0,
-        })
-        break
-
-      case 'stream_waiting':
-        setStatusFor(sessionId, 'running')
-        updateSessionInList(sessionId, { status: 'running' })
-        markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
-        break
-
-      case 'auto_continue':
-        setStatusFor(sessionId, 'running')
-        updateSessionInList(sessionId, { status: 'running' })
-        markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
-        addMessageTo(sessionId, {
-          type: 'system',
-          content: {
-            subtype: 'auto_continue',
-            attempt: data.attempt,
-            max: data.max,
-          },
-        })
-        break
-
-      case 'run_step_started':
-      case 'run_step_progress':
-      case 'run_step_completed':
-      case 'run_step_failed':
-        upsertRunStepFor(sessionId, data.step)
-        break
-
-      case 'timeline_event':
-        upsertTimelineEventFor(sessionId, data.timeline_event)
-        break
-
-      case 'trace_span':
-        upsertTraceSpanFor(sessionId, data.span)
-        break
-
-      case 'trace_run_started':
-        linkUserMessageToRunFor(sessionId, data.message_id, data.run_id)
-        break
-
-      case 'user_choice_request':
-        addMessageTo(sessionId, {
-          type: 'interactive',
-          content: {
-            interaction_type: 'user_choice',
-            tool_name: data.tool_name,
-            questions: data.questions,
-          },
-        })
-        addNotification({
-          sessionId,
-          sessionName: sess?.name || '',
-          projectName: proj?.name || '',
-          type: NOTIFICATION_TYPE.AUTH_REQUIRED,
-        })
-        break
-
-      case 'permission_request':
-        addMessageTo(sessionId, {
-          type: 'interactive',
-          content: {
-            interaction_type: 'permission',
-            tool_name: data.tool_name,
-            tool_input: data.tool_input,
-          },
-        })
-        addNotification({
-          sessionId,
-          sessionName: sess?.name || '',
-          projectName: proj?.name || '',
-          type: NOTIFICATION_TYPE.AUTH_REQUIRED,
-        })
-        break
-
-      case 'im_unbound':
-        if (isCurrent) {
-          resetImState()
-          fetchImStatus(sessionId)
-          fetchImChannels()
-        }
-        break
-
-      case 'vb_started':
-        if (isCurrent) {
-          vbRunning.value = true
-          vbMessage.value = 'Codex is applying review comments…'
-        }
-        break
-
-      case 'vb_completed':
-        if (isCurrent) {
-          vbRunning.value = false
-          vbMessage.value = 'Review changes applied'
-          vbRefresh?.()
-          vbRefresh = null
-        }
-        break
-
-      case 'vb_failed':
-        if (isCurrent) {
-          vbRunning.value = false
-          vbMessage.value = data.message || 'Could not apply review changes'
-          vbRefresh = null
-        }
-        break
-
-      case 'cancel_rewind':
-        setCancelingFor(sessionId, false)
-        showCancelledHintFor(sessionId)
-        updateSessionFor(sessionId, data.session)
-        if (data.messages) {
-          setMessagesFor(sessionId, data.messages, {
-            ...data.session,
-            message_window: data.message_window,
-            user_message_markers: data.user_message_markers,
-          })
-        }
-        setStatusFor(sessionId, data.session.status || 'idle')
-        updateSessionFor(sessionId, { waiting_for_slot: false })
-        setQueuedFor(sessionId, false)
-        updateSessionInList(sessionId, data.session)
-        markDone(sessionId)
-        if (data.prompt && sessionId === currentSessionId.value) {
-          setRestoredPrompt(data.prompt)
-        }
-        break
-
-      case 'status': {
-        // Don't overwrite git_branch with empty string
-        const sessionUpdate = { ...data.session }
-        if (!sessionUpdate.git_branch) {
-          delete sessionUpdate.git_branch
-        }
-        updateSessionFor(sessionId, sessionUpdate)
-        if (data.session.status === 'running' || data.session.status === 'idle') {
-          updateSessionFor(sessionId, {
-            waiting_for_slot: false,
-            waiting_reason: null,
-            slot_queue_position: null,
-          })
-        }
-        setStatusFor(sessionId, data.session.status || 'idle')
-        syncRecoveryState(sessionId, data.session)
-        updateSessionInList(sessionId, data.session)
-        if (data.session.status === 'running') {
-          markWorking(sessionId, {
-            sessionName: sess?.name || data.session.name || '',
-            projectName: proj?.name || '',
-          })
-        } else {
-          markDone(sessionId)
-          maybeCloseIdle(sessionId)
-        }
-        break
-      }
-    }
+    const handler = _wsEventHandlers[data.event]
+    if (handler) handler(sessionId, data, ctx)
   })
 }
 
