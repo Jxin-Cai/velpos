@@ -54,6 +54,14 @@ async def update_settings(
     data: Annotated[dict[str, Any], Body(...)],
     service: ServiceDep,
 ) -> ApiResponse[dict]:
+    if app_config.mode == "pro":
+        env = data.get("env")
+        if isinstance(env, dict):
+            current = await service.get_settings()
+            current_env = current.get("env", {})
+            for key in _SENSITIVE_ENV_KEYS:
+                if env.get(key) == "********" and key in current_env:
+                    env[key] = current_env[key]
     result = await service.update_settings(data)
     return ApiResponse.success(result)
 
