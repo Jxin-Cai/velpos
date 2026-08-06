@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -111,6 +112,44 @@ async def test_rejects_login_when_account_is_disabled() -> None:
 
     # Assert
     assert exc_info.value.code == "ACCOUNT_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_upgrades_password_hash_when_legacy_user_logs_in() -> None:
+    # Arrange
+    jwt_secret = "test-secret-for-password-hashing"
+    password = "password"
+    legacy_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode(),
+        jwt_secret[:16].encode(),
+        100_000,
+    ).hex()
+    user = User.reconstitute(
+        id=2,
+        username="legacy-user",
+        display_name="Legacy User",
+        role=UserRole.MEMBER,
+        hashed_password=legacy_hash,
+        created_at=datetime.now(),
+    )
+    repository = SimpleNamespace(
+        find_by_username=AsyncMock(return_value=user),
+        save=AsyncMock(return_value=user),
+    )
+    service = AuthApplicationService(
+        repository,
+        jwt_secret=jwt_secret,
+        jwt_expire_minutes=60,
+        mode="pro",
+    )
+
+    # Act
+    logged_in_user, _ = await service.login("legacy-user", password)
+
+    # Assert
+    assert logged_in_user.hashed_password.startswith("$2b$")
+    repository.save.assert_awaited_once_with(logged_in_user)
 
 
 @pytest.mark.asyncio

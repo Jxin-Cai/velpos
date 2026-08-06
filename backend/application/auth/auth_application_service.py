@@ -80,7 +80,7 @@ class AuthApplicationService:
 
         # Lazy migration: re-hash legacy PBKDF2 passwords with bcrypt
         if not user.hashed_password.startswith("$2b$"):
-            user.hashed_password = self._hash_password(password)
+            user.update_password(self._hash_password(password))
             await self._user_repo.save(user)
 
         token = self._generate_token(user)  # instance method – uses self._jwt_secret
