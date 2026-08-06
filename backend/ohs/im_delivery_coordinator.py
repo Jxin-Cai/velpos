@@ -211,10 +211,12 @@ class ImDeliveryCoordinator:
                     return True
 
                 from ohs.dependencies import (
+                    _binding_repos_context,
+                    _session_service_context,
+                    _stage_inbound_attachments,
                     get_claude_agent_gateway,
                     get_connection_manager,
                     get_create_session_service_factory,
-                    _stage_inbound_attachments,
                 )
 
                 gateway = get_claude_agent_gateway()
@@ -228,6 +230,8 @@ class ImDeliveryCoordinator:
                     resolve_user_response_fn=gateway.resolve_user_response,
                     enqueue_outbound_fn=self.enqueue_outbound,
                     stage_inbound_attachments_fn=_stage_inbound_attachments,
+                    session_service_context_factory=_session_service_context,
+                    binding_context_factory=_binding_repos_context,
                 )
                 await service.process_inbound_event(
                     binding,

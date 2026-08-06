@@ -601,6 +601,10 @@ class ImChannelApplicationService:
         attachments: list[dict[str, Any]] | None,
     ) -> str:
         """Execute the inbound query and return the assistant response text (or empty)."""
+        if self._session_service_context_factory is None:
+            raise RuntimeError(
+                "IM inbound processing requires a session service context factory"
+            )
         async with self._session_service_context_factory() as session_service:
             session_service.suppress_outbound_callbacks()
             try:

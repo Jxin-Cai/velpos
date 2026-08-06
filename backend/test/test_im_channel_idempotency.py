@@ -203,6 +203,32 @@ async def test_forwards_idempotency_key_when_wechat_message_is_sent():
     )
 
 
+@pytest.mark.asyncio
+async def test_reports_configuration_error_when_inbound_context_factory_is_missing():
+    # Arrange
+    service = ImChannelApplicationService(
+        registry=Mock(),
+        binding_repo=Mock(),
+        init_repo=Mock(),
+    )
+    binding = _binding(ImChannelType.WEIXIN, {"bot_token": "token"})
+
+    # Act / Assert
+    with pytest.raises(
+        RuntimeError,
+        match="requires a session service context factory",
+    ):
+        await service._execute_inbound(
+            binding,
+            "hello",
+            "source-message",
+            "channel1",
+            "message1",
+            {"sender_id": "user"},
+            None,
+        )
+
+
 def test_treats_failed_result_as_error_when_assistant_output_is_partial():
     # Arrange
     session = SimpleNamespace(
