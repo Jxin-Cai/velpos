@@ -14,10 +14,9 @@ const emit = defineEmits(['close', 'logout', 'dirty-change'])
 
 const sections = [
   {
-    label: 'Agent 模板',
+    label: '管理',
     items: [
-      { key: 'system-agents', label: '系统 Agent', icon: 'sparkles' },
-      { key: 'custom-agents', label: '自定义 Agent', icon: 'bot' },
+      { key: 'agents', label: 'Agent 模板', icon: 'bot' },
     ],
   },
   {
@@ -35,7 +34,7 @@ const sections = [
 
 const validPages = new Set(sections.flatMap(section => section.items).map(item => item.key))
 const requestedPage = new URLSearchParams(window.location.search).get('adminPage')
-const activePage = ref(validPages.has(requestedPage) ? requestedPage : 'system-agents')
+const activePage = ref(validPages.has(requestedPage) ? requestedPage : 'agents')
 const visitedPages = reactive(new Set([activePage.value]))
 const mainRef = ref(null)
 const agentFormDirty = ref(false)
@@ -73,7 +72,7 @@ function handleLogout() {
 
 function handlePopState() {
   const page = new URLSearchParams(window.location.search).get('adminPage')
-  const normalizedPage = validPages.has(page) ? page : 'system-agents'
+  const normalizedPage = validPages.has(page) ? page : 'agents'
   selectPage(normalizedPage, { history: false })
 }
 
@@ -140,14 +139,13 @@ watch(pageTitle, value => { document.title = `${value} · Velpos 管理后台` }
               :title="item.label"
               @click="selectPage(item.key)"
             >
-              <svg v-if="item.icon === 'sparkles'" viewBox="0 0 24 24"><path d="m12 3-1.2 3.8L7 8l3.8 1.2L12 13l1.2-3.8L17 8l-3.8-1.2L12 3Z"/><path d="m5 14-.8 2.2L2 17l2.2.8L5 20l.8-2.2L8 17l-2.2-.8L5 14Z"/></svg>
-              <svg v-else-if="item.icon === 'bot'" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>
+              <svg v-if="item.icon === 'bot'" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>
               <svg v-else-if="item.icon === 'terminal'" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
               <svg v-else-if="item.icon === 'git'" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="6" cy="18" r="2"/><path d="M6 8v8M8 6h4a6 6 0 0 1 6 6v4"/></svg>
               <svg v-else viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               <span>{{ item.label }}</span>
               <i
-                v-if="(item.key === 'custom-agents' && agentFormDirty) || (item.key === 'claude-code' && (claudeSettingsDirty || marketplaceDirty)) || (item.key === 'git' && gitDirty)"
+                v-if="(item.key === 'agents' && agentFormDirty) || (item.key === 'claude-code' && (claudeSettingsDirty || marketplaceDirty)) || (item.key === 'git' && gitDirty)"
                 class="unsaved-dot"
                 aria-label="有未保存修改"
               ></i>
@@ -161,13 +159,14 @@ watch(pageTitle, value => { document.title = `${value} · Velpos 管理后台` }
         <div class="page-context">
           <span>管理后台 / {{ pageTitle }}</span>
         </div>
-        <AgentTemplateTab v-if="visitedPages.has('system-agents')" v-show="activePage === 'system-agents'" page="system" />
-        <AgentTemplateTab v-if="visitedPages.has('custom-agents')" v-show="activePage === 'custom-agents'" page="custom" @dirty-change="agentFormDirty = $event" />
+        <AgentTemplateTab v-if="visitedPages.has('agents')" v-show="activePage === 'agents'" @dirty-change="agentFormDirty = $event" />
         <div v-if="visitedPages.has('claude-code')" v-show="activePage === 'claude-code'" class="stacked-pages">
           <SettingsDialog :visible="true" embedded @dirty-change="claudeSettingsDirty = $event" />
           <ClaudeMarketplacePanel @dirty-change="marketplaceDirty = $event" />
         </div>
-        <GitManagerDialog v-if="visitedPages.has('git')" v-show="activePage === 'git'" :visible="true" embedded @dirty-change="gitDirty = $event" />
+        <div v-if="visitedPages.has('git')" v-show="activePage === 'git'">
+          <GitManagerDialog :visible="true" embedded @dirty-change="gitDirty = $event" />
+        </div>
         <UserManagementTab v-if="visitedPages.has('users')" v-show="activePage === 'users'" />
       </main>
     </div>
