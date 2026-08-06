@@ -4,10 +4,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Awaitable, Callable
 
-from application.session.command.create_session_command import CreateSessionCommand
-from infr.client.claude_settings_env import resolve_default_model
 from application.team_board.execution_dispatch import dispatch_execution_query
 from application.team_board.team_workspace_helpers import (
+    create_execution_session,
     ensure_agent_project,
     prepare_execution_workspace,
 )
@@ -74,10 +73,9 @@ class ExecutionReconciliationService:
                     reconciled.append(execution.id)
             except Exception:
                 logger.exception("reconciliation failed for execution %s", execution.id)
-        flow_engine = getattr(self, "_flow_engine", None)
-        if flow_engine is not None:
+        if self._flow_engine is not None:
             try:
-                reconciled.extend(await flow_engine.reconcile_active_plans())
+                reconciled.extend(await self._flow_engine.reconcile_active_plans())
             except Exception:
                 logger.exception("flow plan reconciliation failed")
         return reconciled
@@ -211,7 +209,7 @@ class ExecutionReconciliationService:
             await self._card_repo.save(card)
             return True
 
-        if session.is_running or getattr(session, "is_compacting", False):
+        if session.is_running or session.is_compacting:
             return False
         if (
             not ignore_terminal_session_grace
@@ -234,8 +232,7 @@ class ExecutionReconciliationService:
             ),
             None,
         )
-        terminal_session_sync_fn = getattr(self, "_terminal_session_sync_fn", None)
-        if terminal_session_sync_fn is not None:
+        if self._terminal_session_sync_fn is not None:
             succeeded = (
                 terminal_result is not None
                 and terminal_result.content.get("is_error") is not True
@@ -254,7 +251,7 @@ class ExecutionReconciliationService:
                     "Session ended without a terminal result "
                     f"(status={session_status})"
                 )
-            await terminal_session_sync_fn(
+            await self._terminal_session_sync_fn(
                 session,
                 succeeded=succeeded,
                 reason=reason,
@@ -382,20 +379,13 @@ class ExecutionReconciliationService:
             "完成工作后，请在最终回复中简洁说明：本阶段结论、已完成、"
             "关键决策、产物、验证、待处理事项和下一阶段建议。",
         ]
-        session_cmd = CreateSessionCommand(
-            model=resolve_default_model(),
-            project_id=agent_project_id,
-            project_dir=workspace_path,
-            name=f"[{team.name}] {card.title}",
-            card_execution_id=execution.id,
-            agent_slot_id=execution.agent_slot_id,
+        return await create_execution_session(
+            session_service=self._session_service,
+            connection_manager=self._connection_manager,
+            team=team,
+            card=card,
+            execution=execution,
+            agent_project_id=agent_project_id,
+            workspace_path=workspace_path,
+            prompt_parts=prompt_parts,
         )
-        session = await self._session_service.create_session(session_cmd)
-        if self._connection_manager is not None:
-            await self._connection_manager.broadcast_global({
-                "event": "team_session_created",
-                "team_id": team.id,
-                "project_id": agent_project_id,
-                "session_id": session.session_id,
-            })
-        return session, "\n\n".join(prompt_parts)

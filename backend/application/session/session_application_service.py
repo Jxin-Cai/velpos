@@ -453,7 +453,7 @@ class SessionApplicationService:
             )
 
         if self._trace_collector is not None:
-            self._trace_collector.discard_session(session_id)
+            await self._trace_collector.discard_session(session_id)
         await self._claude_agent_gateway.cleanup_session(session_id)
         await self._query_engine.cleanup_session_state(session_id)
 

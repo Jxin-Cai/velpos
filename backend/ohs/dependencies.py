@@ -357,6 +357,21 @@ _trace_collector = _create_trace_collector()
 _claude_agent_gateway.set_trace_collector(_trace_collector)
 
 
+def _merge_observability_hooks(
+    session_id: str,
+    run_id_ref: list[str],
+    trace_collector,
+    hooks: dict | None,
+) -> dict | None:
+    from application.session.trace_hooks import create_observability_hooks, merge_hooks
+
+    obs_hooks = create_observability_hooks(session_id, run_id_ref, trace_collector)
+    return merge_hooks(hooks, obs_hooks)
+
+
+_claude_agent_gateway.set_hooks_merge_fn(_merge_observability_hooks)
+
+
 async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
     from infr.config.database import async_session_factory
 

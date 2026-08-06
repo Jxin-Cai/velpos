@@ -115,6 +115,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._client_lock = asyncio.Lock()
         # Trace collector for observability hooks (set externally)
         self._trace_collector: Any | None = None
+        self._hooks_merge_fn: Callable | None = None
         # session_id -> run_id ref (mutable list for hook closures to track current run)
         self._trace_run_id_refs: dict[str, list[str]] = {}
 
@@ -150,6 +151,12 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         """Set the TraceCollector for observability hooks injection."""
         self._trace_collector = collector
 
+    def set_hooks_merge_fn(
+        self, fn: Callable[[str, list[str], Any, dict | None], dict | None]
+    ) -> None:
+        """Inject the observability hooks merge strategy from application layer."""
+        self._hooks_merge_fn = fn
+
     def update_trace_run_id(self, session_id: str, run_id: str) -> None:
         """Update the current run_id for a session's trace hooks."""
         ref = self._trace_run_id_refs.get(session_id)
@@ -163,15 +170,15 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     ) -> dict | None:
         if not self._trace_collector or not self._trace_collector.enabled:
             return hooks
-        from application.session.trace_hooks import create_observability_hooks, merge_hooks
+        if self._hooks_merge_fn is None:
+            return hooks
 
         run_id_ref = self._trace_run_id_refs.get(session_id)
         if run_id_ref is None:
             run_id_ref = [""]
             self._trace_run_id_refs[session_id] = run_id_ref
 
-        obs_hooks = create_observability_hooks(session_id, run_id_ref, self._trace_collector)
-        return merge_hooks(hooks, obs_hooks)
+        return self._hooks_merge_fn(session_id, run_id_ref, self._trace_collector, hooks)
 
     async def _persist_pending_request_context(
         self,

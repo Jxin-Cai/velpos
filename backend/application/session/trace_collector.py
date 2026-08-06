@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 from collections.abc import Callable
@@ -558,9 +559,10 @@ class TraceCollector:
             self._dirty_new.clear()
             self._dirty_update.clear()
             self._pending_broadcasts.clear()
-
-        new_spans = [self._buffer[sid] for sid in new_ids if sid in self._buffer]
-        update_spans = [self._buffer[sid] for sid in update_ids if sid in self._buffer]
+            new_spans = [copy.copy(self._buffer[sid]) for sid in new_ids if sid in self._buffer]
+            update_spans = [copy.copy(self._buffer[sid]) for sid in update_ids if sid in self._buffer]
+            for span in new_spans + update_spans:
+                span.metadata = dict(span.metadata)
 
         persisted = False
         try:
@@ -615,19 +617,20 @@ class TraceCollector:
             for sid in completed_ids[:len(completed_ids) - 200]:
                 self._buffer.pop(sid, None)
 
-    def discard_session(self, session_id: str) -> None:
+    async def discard_session(self, session_id: str) -> None:
         """Forget buffered data before a session is permanently deleted."""
-        span_ids = {
-            span_id for span_id, span in self._buffer.items()
-            if span.session_id == session_id
-        }
-        for span_id in span_ids:
-            self._buffer.pop(span_id, None)
-        self._dirty_new.difference_update(span_ids)
-        self._dirty_update.difference_update(span_ids)
-        self._pending_broadcasts = [
-            item for item in self._pending_broadcasts if item[0] != session_id
-        ]
+        async with self._lock:
+            span_ids = {
+                span_id for span_id, span in self._buffer.items()
+                if span.session_id == session_id
+            }
+            for span_id in span_ids:
+                self._buffer.pop(span_id, None)
+            self._dirty_new.difference_update(span_ids)
+            self._dirty_update.difference_update(span_ids)
+            self._pending_broadcasts = [
+                item for item in self._pending_broadcasts if item[0] != session_id
+            ]
 
     @staticmethod
     async def _persist(
