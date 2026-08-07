@@ -159,7 +159,7 @@ class ClaudePluginManager(PluginManagerPort):
 
     async def upgrade_plugin(self, plugin: str, project_dir: str) -> str:
         return await self._run_cli(
-            ["plugin", "install", plugin, "-s", "project"],
+            ["plugin", "update", plugin, "-s", "project"],
             cwd=project_dir,
         )
 
@@ -189,7 +189,7 @@ class ClaudePluginManager(PluginManagerPort):
         for plugin_key in project_plugins:
             try:
                 output = await self._run_cli(
-                    ["plugin", "install", plugin_key, "-s", "project"],
+                    ["plugin", "update", plugin_key, "-s", "project"],
                     cwd=project_dir,
                 )
                 results.append(f"{plugin_key}: {output}")

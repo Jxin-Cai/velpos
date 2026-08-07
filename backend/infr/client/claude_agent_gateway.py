@@ -602,6 +602,21 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         async with self._client_lock:
             await self._disconnect_unlocked(session_id)
 
+    async def disconnect_by_cwd(self, cwd: str) -> int:
+        """Disconnect all connected sessions whose project_dir matches *cwd*.
+
+        Returns the number of sessions disconnected.
+        """
+        targets = [
+            sid for sid, session_cwd in self._session_cwds.items()
+            if session_cwd == cwd and sid in self._clients
+        ]
+        for sid in targets:
+            await self.disconnect(sid)
+        if targets:
+            logger.info("disconnect_by_cwd: 断开 %d 个连接 (cwd=%s)", len(targets), cwd)
+        return len(targets)
+
     async def _disconnect_unlocked(self, session_id: str) -> None:
         pump = self._event_pumps.pop(session_id, None)
         if pump is not None:

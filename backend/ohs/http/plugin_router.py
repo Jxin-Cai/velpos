@@ -5,8 +5,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from application.plugin.plugin_application_service import PluginApplicationService
+from infr.client.claude_agent_gateway import ClaudeAgentGateway
 from ohs.auth_dependency import require_admin
-from ohs.dependencies import get_plugin_application_service
+from ohs.dependencies import get_claude_agent_gateway, get_plugin_application_service
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.plugin_dto import (
     MarketplaceInfo,
@@ -29,6 +30,7 @@ ServiceDep = Annotated[
     PluginApplicationService,
     Depends(get_plugin_application_service),
 ]
+GatewayDep = Annotated[ClaudeAgentGateway, Depends(get_claude_agent_gateway)]
 
 
 @router.get("", summary="List plugins")
@@ -63,8 +65,10 @@ async def uninstall_plugin(
 async def upgrade_plugin(
     request: PluginActionRequest,
     service: ServiceDep,
+    gateway: GatewayDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.upgrade_plugin(request.plugin, request.project_dir)
+    await gateway.disconnect_by_cwd(request.project_dir)
     return ApiResponse.success(PluginActionResponse(message=message))
 
 
@@ -72,8 +76,10 @@ async def upgrade_plugin(
 async def upgrade_all_plugins(
     request: PluginUpgradeAllRequest,
     service: ServiceDep,
+    gateway: GatewayDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.upgrade_all_plugins(request.project_dir)
+    await gateway.disconnect_by_cwd(request.project_dir)
     return ApiResponse.success(PluginActionResponse(message=message))
 
 

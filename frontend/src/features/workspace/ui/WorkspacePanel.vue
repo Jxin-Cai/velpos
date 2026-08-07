@@ -740,6 +740,11 @@ function handleKeydown(event) {
       cancelPendingReview()
       return
     }
+    if (contentFullscreen.value) {
+      contentFullscreen.value = false
+      fullscreenReviewOpen.value = false
+      return
+    }
     emit('close')
   }
 }
@@ -1034,11 +1039,21 @@ function nextDifference() {
         aria-label="File content"
       >
         <header class="viewer-header">
-          <div>
-            <strong>{{ selectedFile.path }}</strong>
-            <span>{{ selectedFile.size }} bytes</span>
-            <span v-if="selectedFile.truncated">truncated</span>
-            <span v-if="selectedFile.is_binary">binary</span>
+          <div class="viewer-file-identity">
+            <span class="viewer-file-icon" :class="`file-kind-${fileIconKind(selectedFile.path)}`" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>
+              </svg>
+            </span>
+            <div>
+              <strong :title="selectedFile.path">{{ selectedFile.path }}</strong>
+              <div class="viewer-file-meta">
+                <span>{{ selectedFile.size.toLocaleString() }} bytes</span>
+                <span>{{ fileExtension.toUpperCase() || 'FILE' }}</span>
+                <span v-if="selectedFile.truncated" class="viewer-file-warning">Truncated</span>
+                <span v-if="selectedFile.is_binary">Binary</span>
+              </div>
+            </div>
           </div>
           <div class="viewer-actions">
             <span v-if="copyStatus" class="viewer-copy-status" role="status">{{ copyStatus }}</span>
@@ -1173,7 +1188,7 @@ function nextDifference() {
           </div>
           <div v-else-if="showRenderedPreview" class="rendered-preview-shell">
             <div class="preview-review-guide">
-              <span>Rendered preview is read-only. Switch to line selection to add comments.</span>
+              <span>{{ renderedPreviewType === 'html' ? 'Interactive preview · use the page naturally, or switch modes to review its source.' : 'Rendered preview · switch to line selection to add comments.' }}</span>
               <button class="secondary-btn" @click="setFileViewMode('review')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4 4h10a4 4 0 0 1 4 4z"/>
@@ -1431,7 +1446,7 @@ function nextDifference() {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 280px;
+  grid-template-columns: 252px minmax(0, 1fr) 264px;
 }
 
 .workspace-drawer {
@@ -1451,12 +1466,17 @@ function nextDifference() {
   background: var(--bg-primary);
 }
 
+.file-content-panel:not(.fullscreen) {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 54%, transparent);
+}
+
 .rendered-preview-shell {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--layer-base);
 }
 
 .preview-review-guide {
@@ -1465,10 +1485,10 @@ function nextDifference() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
-  background: var(--bg-secondary);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, var(--bg-primary));
   font-size: 11px;
   line-height: 1.4;
 }
@@ -1786,9 +1806,10 @@ function nextDifference() {
 }
 
 .viewer-header {
-  padding: 10px 12px;
+  min-height: 62px;
+  padding: 10px 12px 10px 14px;
   border-bottom-color: var(--border-subtle);
-  background: var(--bg-secondary);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, var(--bg-primary));
 }
 
 .workspace-header h2 {
@@ -1805,19 +1826,71 @@ function nextDifference() {
   color: var(--text-muted);
 }
 
+.viewer-file-identity {
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.viewer-file-identity > div {
+  min-width: 0;
+}
+
+.viewer-file-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+  margin: 0;
+}
+
+.viewer-file-icon.file-kind-code { color: var(--purple); }
+.viewer-file-icon.file-kind-image { color: var(--green); }
+.viewer-file-icon.file-kind-data { color: var(--yellow); }
+
 .viewer-header strong {
   color: var(--text-primary);
   display: block;
-  max-width: 320px;
+  max-width: 360px;
   overflow: hidden;
+  font: 600 12px/1.35 var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.viewer-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.viewer-file-meta span {
+  margin: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: var(--layer-active);
+  font: 9px/1.45 var(--font-mono);
+}
+
+.viewer-file-meta .viewer-file-warning {
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
 }
 
 .viewer-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1827,7 +1900,7 @@ function nextDifference() {
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: 8px;
   background: var(--bg-primary);
 }
 
@@ -2983,6 +3056,10 @@ function nextDifference() {
   .viewer-text-action span {
     display: none;
   }
+
+  .viewer-header strong {
+    max-width: 240px;
+  }
 }
 
 @media (max-width: 620px) {
@@ -3027,11 +3104,21 @@ function nextDifference() {
 
   .viewer-header {
     align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .viewer-actions {
+    width: 100%;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
+  }
+
+  .viewer-file-identity {
+    width: calc(100% - 40px);
+  }
+
+  .viewer-header strong {
+    max-width: calc(100vw - 92px);
   }
 }
 </style>

@@ -48,8 +48,8 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
     <button
       type="button"
       class="preview-fullscreen-button"
-      :aria-label="fullscreen ? 'Exit fullscreen' : 'Open fullscreen'"
-      :title="fullscreen ? 'Exit fullscreen' : 'Open fullscreen'"
+      :aria-label="fullscreen ? 'Exit expanded preview' : 'Expand preview'"
+      :title="fullscreen ? 'Exit expanded preview' : 'Expand preview'"
       @click="$emit('toggle-fullscreen')"
     >
       <svg v-if="!fullscreen" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -58,7 +58,7 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
       <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M8 3v3a2 2 0 0 1-2 2H3M16 3v3a2 2 0 0 0 2 2h3M8 21v-3a2 2 0 0 0-2-2H3M16 21v-3a2 2 0 0 1 2-2h3"/>
       </svg>
-      <span>{{ fullscreen ? 'Exit' : 'Fullscreen' }}</span>
+      <span>{{ fullscreen ? 'Exit expanded view' : 'Expand preview' }}</span>
     </button>
   </div>
 </template>
@@ -66,17 +66,17 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
 <style scoped>
 .preview-controls {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 38px;
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 8px;
   background: var(--bg-primary);
 }
 
 .preview-controls button {
-  min-width: 32px;
-  height: 32px;
+  min-width: 38px;
+  height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -113,7 +113,10 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
 }
 
 .preview-fullscreen-button {
-  min-width: 84px !important;
+  min-width: 132px !important;
+  color: var(--accent) !important;
+  background: var(--accent-dim) !important;
+  box-shadow: inset 1px 0 0 var(--border-subtle);
 }
 
 .preview-control-divider {
@@ -124,7 +127,7 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
 
 @media (max-width: 1280px) {
   .preview-fullscreen-button {
-    min-width: 32px !important;
+    min-width: 38px !important;
   }
 
   .preview-fullscreen-button span {

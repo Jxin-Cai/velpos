@@ -14,6 +14,7 @@ class ExecutionEventDto(BaseModel):
     tool_name: str | None = None
     is_error: bool = False
     error_message: str | None = None
+    error_source: str | None = None
     error_category: str | None = None
     retry_of_tool_use_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

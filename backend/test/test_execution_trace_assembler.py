@@ -1,7 +1,10 @@
 from domain.session.model.execution_trace import (
     AgentLoop,
     ExecutionAgent,
+    ExecutionEvent,
+    ExecutionEventType,
     ExecutionTask,
+    LoopDetailPage,
     ProjectionProvenance,
 )
 from ohs.http.assembler.execution_trace_assembler import ExecutionTraceAssembler
@@ -67,3 +70,22 @@ def test_maps_agent_failure_when_assembling_tree() -> None:
 
     # Assert
     assert response.error_message == "API Error: 503 NO_AVAILABLE_CHANNEL"
+
+
+def test_preserves_error_source_when_assembling_loop_detail() -> None:
+    # Arrange
+    event = ExecutionEvent(
+        type=ExecutionEventType.TOOL_RESULT,
+        source_uuid="result-1",
+        is_error=True,
+        error_message="Plugin permission denied",
+        error_source="permission",
+        error_category="permission_denied",
+    )
+    page = LoopDetailPage(items=(event,), next_cursor=None, total=1)
+
+    # Act
+    response = ExecutionTraceAssembler.to_loop_detail_response(page)
+
+    # Assert
+    assert response.items[0].error_source == "permission"

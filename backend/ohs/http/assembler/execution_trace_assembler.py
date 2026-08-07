@@ -120,6 +120,7 @@ class ExecutionTraceAssembler:
             tool_name=event.tool_name,
             is_error=event.is_error,
             error_message=event.error_message,
+            error_source=event.error_source,
             error_category=event.error_category,
             retry_of_tool_use_id=event.retry_of_tool_use_id,
             metadata=event.metadata,

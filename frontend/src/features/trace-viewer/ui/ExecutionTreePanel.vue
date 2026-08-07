@@ -3,6 +3,8 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useSession } from '@entities/session'
 import { useExecutionTree } from '../model/useExecutionTree'
 import { useTimelineWaterfall } from '../model/useTimelineWaterfall'
+import { fetchExecutionTree, fetchLoopDetail } from '../api/traceApi'
+import { buildExecutionErrorReport, downloadExecutionErrorReport } from '../lib/executionErrorExport'
 import ExecutionTreeRow from './ExecutionTreeRow.vue'
 import ExecutionDetailViewer from './ExecutionDetailViewer.vue'
 import InlineSubagentTree from './InlineSubagentTree.vue'
@@ -37,6 +39,8 @@ const {
 } = useExecutionTree()
 
 const execFilter = ref('all')
+const exportingErrors = ref(false)
+const exportError = ref('')
 
 const selectedLoop = computed(() => {
   if (!selectedLoopId.value) return null
@@ -75,6 +79,27 @@ const requestSummary = computed(() => {
 })
 
 const totalErrors = computed(() => tasks.value.reduce((count, task) => count + (task.error_count || 0), 0))
+const hasErrors = computed(() => totalErrors.value > 0 || Boolean(tree.value?.error_message))
+
+async function exportAllErrors() {
+  if (!tree.value || exportingErrors.value) return
+  exportingErrors.value = true
+  exportError.value = ''
+  try {
+    const report = await buildExecutionErrorReport({
+      sessionId: currentSessionId.value,
+      runId: props.runId,
+      rootTree: tree.value,
+      fetchTree: fetchExecutionTree,
+      fetchDetail: fetchLoopDetail,
+    })
+    downloadExecutionErrorReport(report)
+  } catch (err) {
+    exportError.value = err?.message || 'Failed to collect error details'
+  } finally {
+    exportingErrors.value = false
+  }
+}
 
 function subagentsForLoop(loop) {
   if (loop?.subagents?.length) return loop.subagents
@@ -192,13 +217,29 @@ watch(selectedLoopId, async (loopId) => {
             </div>
           </section>
           <!-- Filter bar -->
-          <nav v-if="totalErrors > 0" class="exec-filter-bar" aria-label="Execution filter">
-            <button type="button" class="exec-filter-chip" :class="{ active: execFilter === 'all' }" @click="execFilter = 'all'">All</button>
-            <button type="button" class="exec-filter-chip exec-filter-chip--error" :class="{ active: execFilter === 'errors' }" @click="execFilter = 'errors'">
-              Errors only
-              <span class="filter-count">{{ totalErrors }}</span>
+          <div v-if="hasErrors" class="exec-error-actions">
+            <nav class="exec-filter-bar" aria-label="Execution filter">
+              <button type="button" class="exec-filter-chip" :class="{ active: execFilter === 'all' }" @click="execFilter = 'all'">All</button>
+              <button v-if="totalErrors > 0" type="button" class="exec-filter-chip exec-filter-chip--error" :class="{ active: execFilter === 'errors' }" @click="execFilter = 'errors'">
+                Errors only
+                <span class="filter-count">{{ totalErrors }}</span>
+              </button>
+            </nav>
+            <button
+              type="button"
+              class="download-errors-btn"
+              :disabled="exportingErrors"
+              :aria-busy="exportingErrors"
+              @click="exportAllErrors"
+            >
+              <span v-if="exportingErrors" class="exec-spinner" aria-hidden="true"></span>
+              <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M3 10v3h10v-3M8 2v8M5 7l3 3 3-3"/>
+              </svg>
+              {{ exportingErrors ? 'Collecting errors…' : 'Download all errors' }}
             </button>
-          </nav>
+          </div>
+          <p v-if="exportError" class="download-errors-error" role="alert">{{ exportError }}</p>
 
           <!-- Waterfall timeline (width = time duration) -->
           <div v-if="waterfall.segments.length > 1" class="timeline-waterfall-wrapper">
@@ -363,12 +404,18 @@ watch(selectedLoopId, async (loopId) => {
 .exec-empty p { margin: 0; color: var(--text-secondary); font-size: 13px; }
 .subagent-inline-state { padding: 10px 14px 10px 60px; color: var(--text-tertiary); font-size: 11px; }
 .subagent-inline-state--error { color: var(--color-error, #ef4444); }
-.exec-filter-bar { display: flex; gap: 4px; padding: 6px 10px 2px; }
+.exec-error-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 6px 10px 2px; }
+.exec-filter-bar { display: flex; gap: 4px; }
 .exec-filter-chip { min-height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-primary); color: var(--text-tertiary); font-size: 11px; font-weight: 500; cursor: pointer; transition: all 120ms ease; }
 .exec-filter-chip:hover { border-color: var(--text-accent); color: var(--text-primary); }
 .exec-filter-chip.active { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 8%, var(--bg-primary)); color: var(--text-accent); font-weight: 600; }
 .exec-filter-chip--error.active { border-color: var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error) 8%, var(--bg-primary)); color: var(--color-error, #ef4444); }
 .filter-count { padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+.download-errors-btn { min-height: 32px; display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--color-error, #ef4444) 32%, var(--border-subtle)); border-radius: 6px; background: color-mix(in srgb, var(--color-error, #ef4444) 7%, var(--bg-primary)); color: var(--color-error, #ef4444); font-size: 11px; font-weight: 600; cursor: pointer; transition: background 140ms ease, border-color 140ms ease; }
+.download-errors-btn:hover:not(:disabled) { border-color: var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error, #ef4444) 12%, var(--bg-primary)); }
+.download-errors-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+.download-errors-btn:disabled { cursor: wait; opacity: .7; }
+.download-errors-error { margin: 6px 10px 2px; color: var(--color-error, #ef4444); font-size: 11px; overflow-wrap: anywhere; }
 .timeline-waterfall-wrapper { margin: 8px 10px 4px; }
 .timeline-waterfall-legend { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; padding: 0 2px; }
 .legend-label { color: var(--text-tertiary); font-size: 9px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
