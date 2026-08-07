@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from enum import Enum
 from typing import Any, AsyncContextManager
 
 from domain.shared.async_utils import safe_create_task
@@ -28,9 +30,21 @@ from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
 
+_WEIXIN_PROGRESS_ACK_DELAY_SECONDS = 8.0
+
 
 class RetryableInboundError(RuntimeError):
     pass
+
+
+class TerminalInboundError(RuntimeError):
+    pass
+
+
+class _WeixinTaskStatus(str, Enum):
+    COMPLETED = "已完成"
+    FAILED = "未完成"
+    RETRYING = "执行异常，正在重试"
 
 
 class ImChannelApplicationService:
@@ -543,33 +557,128 @@ class ImChannelApplicationService:
             f"{delivery_channel_id}:{message_id}".encode("utf-8")
         ).hexdigest()
         source_message_id = f"im:{source_digest}"[:64]
+        task_code = source_digest[:6].upper()
+        started_at = time.monotonic()
+        progress_task: asyncio.Task[None] | None = None
 
         async with self._inbound_reaction_scope(adapter, binding, message_id):
             try:
+                if binding.channel_type == ImChannelType.WEIXIN:
+                    progress_task = safe_create_task(
+                        self._send_delayed_inbound_ack(
+                            binding,
+                            reply_ctx_base,
+                            delivery_channel_id,
+                            message_id,
+                            task_code,
+                        ),
+                        name=f"weixin-progress-{task_code}",
+                    )
                 response = await self._execute_inbound(
                     binding, content, source_message_id,
                     delivery_channel_id, message_id, reply_ctx_base,
                     attachments,
                 )
                 if response:
+                    if binding.channel_type == ImChannelType.WEIXIN:
+                        response = self._format_weixin_task_result(
+                            task_code,
+                            _WeixinTaskStatus.COMPLETED,
+                            response,
+                            time.monotonic() - started_at,
+                        )
                     await self._send_inbound_reply(
                         binding, response, reply_ctx_base,
                         f"inbox:{delivery_channel_id}:{message_id}:response",
                     )
-            except RetryableInboundError:
+            except TerminalInboundError as exc:
+                error_content = f"[Error] {str(exc)[:500]}"
+                if binding.channel_type == ImChannelType.WEIXIN:
+                    error_content = self._format_weixin_task_result(
+                        task_code,
+                        _WeixinTaskStatus.FAILED,
+                        f"原因：{str(exc)[:500]}",
+                        time.monotonic() - started_at,
+                    )
+                await self._send_inbound_reply(
+                    binding,
+                    error_content,
+                    reply_ctx_base,
+                    f"inbox:{delivery_channel_id}:{message_id}:query-error",
+                )
+            except RetryableInboundError as exc:
+                if (
+                    binding.channel_type == ImChannelType.WEIXIN
+                    and str(exc) == "Session is busy"
+                ):
+                    await self._send_inbound_reply(
+                        binding,
+                        (
+                            f"任务 {task_code} · 等待中\n\n"
+                            "当前会话仍有任务在执行。这条消息已收到，系统会稍后自动重试。"
+                        ),
+                        reply_ctx_base,
+                        f"inbox:{delivery_channel_id}:{message_id}:busy",
+                    )
                 raise
             except Exception as exc:
                 logger.error("[IM-process] Failed to process inbound: session=%s", binding.session_id, exc_info=True)
                 try:
+                    error_content = f"[Error] {str(exc)[:200]}"
+                    if binding.channel_type == ImChannelType.WEIXIN:
+                        error_content = self._format_weixin_task_result(
+                            task_code,
+                            _WeixinTaskStatus.RETRYING,
+                            f"系统会自动重试。原因：{str(exc)[:200]}",
+                            time.monotonic() - started_at,
+                        )
                     await self._send_inbound_reply(
                         binding,
-                        f"[Error] {str(exc)[:200]}",
+                        error_content,
                         reply_ctx_base,
                         f"inbox:{delivery_channel_id}:{message_id}:processing-error",
                     )
                 except Exception:
                     logger.warning("[IM-process] Failed to send error notification to IM", exc_info=True)
                 raise
+            finally:
+                if progress_task is not None:
+                    progress_task.cancel()
+                    await asyncio.gather(progress_task, return_exceptions=True)
+
+    async def _send_delayed_inbound_ack(
+        self,
+        binding: ImBinding,
+        reply_context: dict[str, Any],
+        delivery_channel_id: str,
+        message_id: str,
+        task_code: str,
+    ) -> None:
+        await asyncio.sleep(_WEIXIN_PROGRESS_ACK_DELAY_SECONDS)
+        await self._send_inbound_reply(
+            binding,
+            (
+                f"任务 {task_code} · 已开始\n\n"
+                "正在执行你的请求，完成后会发送结果。"
+            ),
+            reply_context,
+            f"inbox:{delivery_channel_id}:{message_id}:started",
+        )
+
+    @staticmethod
+    def _format_weixin_task_result(
+        task_code: str,
+        status: _WeixinTaskStatus,
+        content: str,
+        elapsed_seconds: float,
+    ) -> str:
+        total_seconds = max(0, round(elapsed_seconds))
+        if total_seconds < 60:
+            duration = f"{total_seconds} 秒"
+        else:
+            minutes, seconds = divmod(total_seconds, 60)
+            duration = f"{minutes} 分 {seconds} 秒"
+        return f"任务 {task_code} · {status.value} · 用时 {duration}\n\n{content.strip()}"
 
     @asynccontextmanager
     async def _inbound_reaction_scope(
@@ -672,7 +781,7 @@ class ImChannelApplicationService:
             return response
         result_error = self._extract_result_error_after(session, existing_index)
         if result_error:
-            return f"[Error] {result_error[:500]}"
+            raise TerminalInboundError(result_error[:500])
         return None
 
     async def _broadcast_inbound_user_message(
@@ -730,13 +839,7 @@ class ImChannelApplicationService:
                 else ""
             )
             if result_error:
-                await self._send_inbound_reply(
-                    binding,
-                    f"[Error] {result_error[:500]}",
-                    reply_ctx_base,
-                    f"inbox:{delivery_channel_id}:{message_id}:query-error",
-                )
-                return ""
+                raise TerminalInboundError(result_error[:500])
 
             logger.warning(
                 "[IM-process] No response for inbound request: "

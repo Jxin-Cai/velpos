@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any
 
 from domain.shared.async_utils import safe_create_task
@@ -18,6 +21,26 @@ from domain.im_binding.model.im_binding import ImBinding
 from infr.im.weixin.weixin_api import WeixinApiClient, DEFAULT_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+_TYPING_TICKET_TTL_SECONDS = 600
+_TYPING_KEEPALIVE_SECONDS = 5
+_MAX_TEXT_CHUNK_LENGTH = 3800
+_TEXT_CHUNK_SEND_DELAY_SECONDS = 0.1
+
+
+class _TypingStatus(IntEnum):
+    TYPING = 1
+    CANCEL = 2
+
+
+@dataclass(frozen=True)
+class _TypingSession:
+    task: asyncio.Task[None]
+    api: WeixinApiClient
+    bot_token: str
+    user_id: str
+    ticket: str
+
 
 WEIXIN_CHANNEL_SPEC = ImChannelSpec(
     channel_type=ImChannelType.WEIXIN,
@@ -51,6 +74,9 @@ class WeixinAdapter(ImChannelAdapter):
         self._on_messages: dict[str, Any] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
         self._listen_lock = asyncio.Lock()
+        self._typing_lock = asyncio.Lock()
+        self._typing_tickets: dict[str, tuple[str, float]] = {}
+        self._typing_sessions: dict[str, _TypingSession] = {}
 
     # ── Initialization ──
 
@@ -62,6 +88,10 @@ class WeixinAdapter(ImChannelAdapter):
             await self._api.get_config(bot_token, "", "")
             return True
         except Exception:
+            logger.warning(
+                "[WeChat-adapter] Stored credentials failed validation",
+                exc_info=True,
+            )
             return False
 
     async def initialize(self, params: dict) -> InitResult:
@@ -359,23 +389,65 @@ class WeixinAdapter(ImChannelAdapter):
         if not to_user_id:
             raise RuntimeError("WeChat routing target is unavailable")
 
-        base_url = binding.config.get("base_url", "")
-        api = WeixinApiClient(base_url) if base_url else self._api
+        api = self._api_for_binding(binding)
 
+        chunks = self._split_text(content)
         logger.info(
-            "[WeChat-adapter] Sending message: to=%s content=%.100s",
+            "[WeChat-adapter] Sending message: to=%s length=%d chunks=%d",
             to_user_id,
-            content,
+            len(content),
+            len(chunks),
         )
-        response = await api.send_text_message(
-            bot_token,
-            to_user_id,
-            content,
-            context_token,
-            idempotency_key=idempotency_key,
+        external_message_id = ""
+        for index, chunk in enumerate(chunks):
+            if index > 0:
+                await asyncio.sleep(_TEXT_CHUNK_SEND_DELAY_SECONDS)
+            chunk_key = idempotency_key
+            if idempotency_key and len(chunks) > 1:
+                chunk_key = (
+                    f"{idempotency_key}:chunk:{index + 1}:{len(chunks)}"
+                )
+            response = await api.send_text_message(
+                bot_token,
+                to_user_id,
+                chunk,
+                context_token,
+                idempotency_key=chunk_key,
+            )
+            current_message_id = str(
+                response.get("message_id") or response.get("msg_id") or ""
+            )
+            if current_message_id:
+                external_message_id = current_message_id
+        logger.info(
+            "[WeChat-adapter] Message sent successfully: chunks=%d",
+            len(chunks),
         )
-        logger.info("[WeChat-adapter] Message sent successfully")
-        return str(response.get("message_id") or response.get("msg_id") or "")
+        return external_message_id
+
+    @staticmethod
+    def _split_text(content: str) -> list[str]:
+        remaining = content
+        if len(remaining) <= _MAX_TEXT_CHUNK_LENGTH:
+            return [remaining]
+
+        chunks: list[str] = []
+        while len(remaining) > _MAX_TEXT_CHUNK_LENGTH:
+            boundary = _MAX_TEXT_CHUNK_LENGTH
+            for separator in ("\n\n", "\n", "。", " "):
+                candidate = remaining.rfind(
+                    separator,
+                    _MAX_TEXT_CHUNK_LENGTH // 2,
+                    _MAX_TEXT_CHUNK_LENGTH + 1,
+                )
+                if candidate >= 0:
+                    boundary = candidate + len(separator)
+                    break
+            chunks.append(remaining[:boundary])
+            remaining = remaining[boundary:]
+        if remaining:
+            chunks.append(remaining)
+        return chunks
 
     async def close(self) -> None:
         """Shutdown adapter — stop all poll loops across all channels."""
@@ -398,6 +470,7 @@ class WeixinAdapter(ImChannelAdapter):
             self._on_messages.clear()
             self._stop_events.clear()
             self._poll_tasks.clear()
+        await self._stop_all_typing_sessions()
         logger.info("[WeChat-adapter] Adapter closed, %d channels stopped", len(channel_ids))
 
     # ── Routing context — WeChat needs context_token in addition to sender_id ──
@@ -416,16 +489,120 @@ class WeixinAdapter(ImChannelAdapter):
 
     async def add_reaction(
         self, binding: ImBinding, message_id: str, _reaction: str,
-    ) -> None:
+    ) -> str:
         bot_token = binding.config.get("bot_token", "")
         user_id = binding.config.get("last_sender_id", "")
-        if bot_token and user_id:
-            await self._api.send_typing(bot_token, user_id, message_id, 1)
+        if not bot_token or not user_id:
+            return ""
+
+        api = self._api_for_binding(binding)
+        ticket = await self._get_typing_ticket(api, binding, user_id)
+        if not ticket:
+            return ""
+
+        reaction_id = f"{binding.channel_id or binding.id}:{message_id}"
+        await api.send_typing(
+            bot_token,
+            user_id,
+            ticket,
+            _TypingStatus.TYPING,
+        )
+        keepalive = safe_create_task(
+            self._run_typing_keepalive(api, bot_token, user_id, ticket),
+            name=f"weixin-typing-{binding.channel_id or binding.id}",
+        )
+        async with self._typing_lock:
+            previous = self._typing_sessions.pop(reaction_id, None)
+            self._typing_sessions[reaction_id] = _TypingSession(
+                task=keepalive,
+                api=api,
+                bot_token=bot_token,
+                user_id=user_id,
+                ticket=ticket,
+            )
+        if previous is not None:
+            previous.task.cancel()
+            await asyncio.gather(previous.task, return_exceptions=True)
+        return reaction_id
 
     async def remove_reaction(
-        self, binding: ImBinding, message_id: str, _reaction: str,
+        self, binding: ImBinding, message_id: str, reaction: str,
     ) -> None:
-        bot_token = binding.config.get("bot_token", "")
-        user_id = binding.config.get("last_sender_id", "")
-        if bot_token and user_id:
-            await self._api.send_typing(bot_token, user_id, message_id, 0)
+        reaction_id = reaction or f"{binding.channel_id or binding.id}:{message_id}"
+        async with self._typing_lock:
+            session = self._typing_sessions.pop(reaction_id, None)
+        if session is None:
+            return
+
+        session.task.cancel()
+        await asyncio.gather(session.task, return_exceptions=True)
+        await session.api.send_typing(
+            session.bot_token,
+            session.user_id,
+            session.ticket,
+            _TypingStatus.CANCEL,
+        )
+
+    def _api_for_binding(self, binding: ImBinding) -> WeixinApiClient:
+        base_url = binding.config.get("base_url", "")
+        return WeixinApiClient(base_url) if base_url else self._api
+
+    async def _get_typing_ticket(
+        self,
+        api: WeixinApiClient,
+        binding: ImBinding,
+        user_id: str,
+    ) -> str:
+        now = time.monotonic()
+        cache_key = f"{binding.channel_id or binding.id}:{user_id}"
+        async with self._typing_lock:
+            cached = self._typing_tickets.get(cache_key)
+            if cached is not None and cached[1] > now:
+                return cached[0]
+
+            response = await api.get_config(
+                binding.config.get("bot_token", ""),
+                user_id,
+                binding.config.get("last_context_token", ""),
+            )
+            ticket = str(response.get("typing_ticket") or "").strip()
+            if not ticket:
+                logger.warning(
+                    "[WeChat-adapter] getconfig returned no typing ticket: channel=%s user=%s",
+                    binding.channel_id or binding.id,
+                    user_id,
+                )
+                return ""
+            self._typing_tickets[cache_key] = (
+                ticket,
+                now + _TYPING_TICKET_TTL_SECONDS,
+            )
+            return ticket
+
+    @staticmethod
+    async def _run_typing_keepalive(
+        api: WeixinApiClient,
+        bot_token: str,
+        user_id: str,
+        ticket: str,
+    ) -> None:
+        while True:
+            await asyncio.sleep(_TYPING_KEEPALIVE_SECONDS)
+            await api.send_typing(
+                bot_token,
+                user_id,
+                ticket,
+                _TypingStatus.TYPING,
+            )
+
+    async def _stop_all_typing_sessions(self) -> None:
+        async with self._typing_lock:
+            sessions = list(self._typing_sessions.values())
+            self._typing_sessions.clear()
+        for session in sessions:
+            session.task.cancel()
+        if sessions:
+            await asyncio.gather(
+                *(session.task for session in sessions),
+                return_exceptions=True,
+            )

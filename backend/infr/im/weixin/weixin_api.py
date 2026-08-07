@@ -115,19 +115,16 @@ class WeixinApiClient:
         status: int,
     ) -> None:
         """POST /ilink/bot/sendtyping — send typing indicator."""
-        try:
-            await self._post(
-                bot_token,
-                "sendtyping",
-                {
-                    "ilink_user_id": ilink_user_id,
-                    "typing_ticket": typing_ticket,
-                    "status": status,
-                    "base_info": {"channel_version": CHANNEL_VERSION},
-                },
-            )
-        except Exception:
-            pass  # typing is best-effort
+        await self._post(
+            bot_token,
+            "sendtyping",
+            {
+                "ilink_user_id": ilink_user_id,
+                "typing_ticket": typing_ticket,
+                "status": status,
+                "base_info": {"channel_version": CHANNEL_VERSION},
+            },
+        )
 
     async def get_config(
         self,

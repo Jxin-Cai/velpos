@@ -126,8 +126,9 @@ class ImChannelAdapter(ABC):
 
     async def add_reaction(
         self, binding: ImBinding, message_id: str, reaction: str,
-    ) -> None:
-        """添加表情."""
+    ) -> str:
+        """添加表情并返回可用于移除的标识；不支持时返回空串."""
+        return ""
 
     async def remove_reaction(
         self, binding: ImBinding, message_id: str, reaction: str,
