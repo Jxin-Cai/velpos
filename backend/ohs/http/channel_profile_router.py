@@ -96,3 +96,13 @@ async def activate_profile(
     profile = await service.activate_profile(profile_id)
     response = ChannelProfileResponse.from_domain(profile)
     return ApiResponse.success(response)
+
+
+@router.post("/{profile_id}/sync", summary="Sync channel profile env to settings.json")
+async def sync_profile_env(
+    profile_id: str,
+    service: ServiceDep,
+) -> ApiResponse[ChannelProfileResponse]:
+    profile = await service.sync_profile_env(profile_id)
+    response = ChannelProfileResponse.from_domain(profile)
+    return ApiResponse.success(response)

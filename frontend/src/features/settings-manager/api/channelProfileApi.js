@@ -20,6 +20,10 @@ export function activateChannelProfile(profileId) {
   return post(`/channel-profiles/${profileId}/activate`)
 }
 
+export function syncChannelProfile(profileId) {
+  return post(`/channel-profiles/${profileId}/sync`)
+}
+
 export function fetchModelsForChannel(host, apiKey) {
   return post('/settings/fetch-models', { host, api_key: apiKey })
 }

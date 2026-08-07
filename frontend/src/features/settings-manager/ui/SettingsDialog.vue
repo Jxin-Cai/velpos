@@ -66,6 +66,7 @@ const {
   handleUpdate,
   handleDelete,
   handleActivate,
+  handleSync,
   handleFetchModels,
 } = useSettingsManager()
 
@@ -260,6 +261,10 @@ async function onActivate(profileId) {
   await handleActivate(profileId)
 }
 
+async function onSync(profileId) {
+  await handleSync(profileId)
+}
+
 function onFetchModelsForAdd() {
   handleFetchModels('_add', addForm.value.host, addForm.value.api_key)
 }
@@ -451,6 +456,12 @@ async function copyJsonPreview() {
                         :disabled="operating === p.profile_id"
                         @click="onActivate(p.profile_id)"
                       >启用</button>
+                      <button
+                        v-if="p.is_active"
+                        class="btn-sync"
+                        :disabled="operating === p.profile_id"
+                        @click="onSync(p.profile_id)"
+                      >{{ operating === p.profile_id ? '同步中…' : '同步' }}</button>
                       <button class="btn-edit" type="button" @click="startEdit(p)">编辑</button>
                       <button
                         class="btn-delete"
@@ -1204,6 +1215,26 @@ async function copyJsonPreview() {
 }
 
 .btn-activate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-sync {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--blue, #58a6ff);
+  color: var(--blue, #58a6ff);
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.btn-sync:hover {
+  background: var(--blue-dim, rgba(88, 166, 255, 0.1));
+}
+
+.btn-sync:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

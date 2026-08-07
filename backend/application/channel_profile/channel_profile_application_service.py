@@ -120,6 +120,19 @@ class ChannelProfileApplicationService:
 
         return profile
 
+    async def sync_profile_env(self, profile_id: str) -> ChannelProfile:
+        """Sync the specified profile's env vars into settings.json.
+
+        Removes stale channel env keys, writes the profile's env vars,
+        and disconnects SDK subprocesses so they pick up the new env.
+        Does not change the profile's is_active status.
+        """
+        profile = await self._profile_repository.find_by_id(profile_id)
+        if profile is None:
+            raise BusinessException("Channel profile not found")
+        await self._sync_env_and_disconnect(profile)
+        return profile
+
     async def _sync_env_and_disconnect(self, profile: ChannelProfile) -> None:
         await self._settings_file_gateway.remove_env_keys(self._CHANNEL_ENV_KEYS)
         await self._settings_file_gateway.update_env_section(

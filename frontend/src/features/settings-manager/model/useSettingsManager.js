@@ -6,6 +6,7 @@ import {
   updateChannelProfile,
   deleteChannelProfile,
   activateChannelProfile,
+  syncChannelProfile,
   fetchModelsForChannel,
 } from '../api/channelProfileApi'
 
@@ -103,6 +104,18 @@ export function useSettingsManager() {
     }
   }
 
+  async function handleSync(profileId) {
+    operating.value = profileId
+    error.value = null
+    try {
+      await syncChannelProfile(profileId)
+    } catch (err) {
+      error.value = err.message || 'Failed to sync channel profile'
+    } finally {
+      operating.value = null
+    }
+  }
+
   async function handleFetchModels(key, host, apiKey) {
     fetchingModels.value = key
     error.value = null
@@ -131,6 +144,7 @@ export function useSettingsManager() {
     handleUpdate,
     handleDelete,
     handleActivate,
+    handleSync,
     handleFetchModels,
   }
 }
