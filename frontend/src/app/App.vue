@@ -668,6 +668,8 @@ function handleAuthRequired() {
   needsLogin.value = true
   ready.value = true
 
+  setCurrentSessionId(null)
+
   if (globalEventConnection) {
     globalEventConnection.close()
     globalEventConnection = null
