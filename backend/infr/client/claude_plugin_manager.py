@@ -158,10 +158,12 @@ class ClaudePluginManager(PluginManagerPort):
         )
 
     async def upgrade_plugin(self, plugin: str, project_dir: str) -> str:
-        return await self._run_cli(
-            ["plugin", "update", plugin, "-s", "project"],
-            cwd=project_dir,
-        )
+        _, marketplace = self._parse_plugin_key(plugin)
+        outputs: list[str] = []
+        if marketplace:
+            outputs.append(await self.update_marketplace(marketplace))
+        outputs.append(await self._reinstall_plugin(plugin, project_dir))
+        return "\n".join(outputs)
 
     async def upgrade_all_plugins(self, project_dir: str) -> str:
         installed = self._read_installed_plugins()
@@ -186,18 +188,55 @@ class ClaudePluginManager(PluginManagerPort):
             return "No project-scoped plugins to upgrade."
 
         results: list[str] = []
-        for plugin_key in project_plugins:
+        marketplace_errors: dict[str, RuntimeError] = {}
+        marketplaces = {
+            marketplace
+            for plugin_key in project_plugins
+            if (marketplace := self._parse_plugin_key(plugin_key)[1])
+        }
+        for marketplace in sorted(marketplaces):
             try:
-                output = await self._run_cli(
-                    ["plugin", "update", plugin_key, "-s", "project"],
-                    cwd=project_dir,
+                await self.update_marketplace(marketplace)
+            except RuntimeError as error:
+                marketplace_errors[marketplace] = error
+                logger.warning(
+                    "Failed to refresh marketplace %s before plugin upgrades",
+                    marketplace,
+                    exc_info=True,
                 )
+
+        for plugin_key in project_plugins:
+            _, marketplace = self._parse_plugin_key(plugin_key)
+            if marketplace in marketplace_errors:
+                results.append(
+                    f"{plugin_key}: FAILED - marketplace refresh failed: "
+                    f"{marketplace_errors[marketplace]}"
+                )
+                continue
+            try:
+                output = await self._reinstall_plugin(plugin_key, project_dir)
                 results.append(f"{plugin_key}: {output}")
-            except RuntimeError as e:
-                results.append(f"{plugin_key}: FAILED - {e}")
-                logger.warning("Failed to upgrade plugin %s: %s", plugin_key, e)
+            except RuntimeError as error:
+                results.append(f"{plugin_key}: FAILED - {error}")
+                logger.warning(
+                    "Failed to upgrade plugin %s",
+                    plugin_key,
+                    exc_info=True,
+                )
 
         return "\n".join(results)
+
+    async def _reinstall_plugin(self, plugin: str, project_dir: str) -> str:
+        """Replace a project plugin so content changes are not hidden by stale caches."""
+        uninstall_output = await self._run_cli(
+            ["plugin", "uninstall", plugin, "-s", "project"],
+            cwd=project_dir,
+        )
+        install_output = await self._run_cli(
+            ["plugin", "install", plugin, "-s", "project"],
+            cwd=project_dir,
+        )
+        return f"{uninstall_output}\n{install_output}"
 
     async def remove_marketplace(self, name: str) -> str:
         return await self._run_cli(

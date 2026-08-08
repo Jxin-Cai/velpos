@@ -425,11 +425,19 @@ async def terminal_websocket_endpoint(
         await websocket.close(code=4003)
         return
     await websocket.accept()
-    init = await websocket.receive_json()
-    cwd = init.get("cwd") if isinstance(init, dict) else None
-    cols = int(init.get("cols") or 120) if isinstance(init, dict) else 120
-    rows = int(init.get("rows") or 30) if isinstance(init, dict) else 30
-    terminal = await terminal_service.create_pty(cwd=cwd, cols=cols, rows=rows)
+    try:
+        init = await websocket.receive_json()
+        cwd = init.get("cwd") if isinstance(init, dict) else None
+        cols = int(init.get("cols") or 120) if isinstance(init, dict) else 120
+        rows = int(init.get("rows") or 30) if isinstance(init, dict) else 30
+        terminal = await terminal_service.create_pty(cwd=cwd, cols=cols, rows=rows)
+    except WebSocketDisconnect:
+        return
+    except (TypeError, ValueError, OSError) as exc:
+        logger.warning("Terminal initialization failed: %s", exc)
+        await websocket.send_json({"event": "error", "message": "Unable to start the terminal."})
+        await websocket.close(code=1003)
+        return
     terminal_id = terminal["terminal_id"]
     await websocket.send_json({"event": "ready", **terminal})
 
@@ -438,6 +446,7 @@ async def terminal_websocket_endpoint(
             chunk = await terminal_service.read_pty(terminal_id)
             if not chunk:
                 await websocket.send_json({"event": "closed"})
+                await websocket.close(code=1000)
                 break
             await websocket.send_json({"event": "output", "data": chunk})
 
@@ -460,8 +469,12 @@ async def terminal_websocket_endpoint(
         pass
     finally:
         output_task.cancel()
-        with contextlib.suppress(Exception):
+        try:
             await output_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Terminal output relay failed", extra={"terminal_id": terminal_id})
         await terminal_service.close_pty(terminal_id)
 
 

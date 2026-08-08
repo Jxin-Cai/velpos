@@ -88,6 +88,7 @@ class ExecutionTraceQueryService:
 
         transcript_path: str | None = None
         agent_id = "main"
+        seed_tasks: list[dict[str, Any]] | None = None
         spans = await self._trace_span_repository.find_by_run(session_id, run_id)
 
         agent_span = None
@@ -143,6 +144,8 @@ class ExecutionTraceQueryService:
                     if self._contains_task_create(continuation_records):
                         records = continuation_records
                         projection_spans = continuation_spans
+                if not self._contains_task_create(records):
+                    seed_tasks = self._extract_task_definitions(all_records)
             except TranscriptNotFoundError:
                 logger.warning(
                     "session transcript not found; reconstructing execution tree from spans",
@@ -166,6 +169,7 @@ class ExecutionTraceQueryService:
             projection_spans,
             agent_id,
             default_model=default_model,
+            seed_tasks=seed_tasks,
         )
         outcome_span = agent_span or self._run_outcome_span(spans)
         agent = self._apply_trace_outcome(agent, outcome_span)
@@ -312,6 +316,124 @@ class ExecutionTraceQueryService:
         if not isinstance(request, str):
             return False
         return _CONTINUATION_REQUEST_PATTERN.fullmatch(request) is not None
+
+    @classmethod
+    def _extract_task_definitions(cls, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Extract task definitions from TaskCreate calls and their results.
+
+        Scans the full transcript for TaskCreate tool_use blocks and their
+        corresponding tool_result responses, building a list of task
+        definitions that can seed the projector's task dict.
+        """
+        pending_creates: dict[str, dict[str, Any]] = {}
+        resolved_tasks: list[dict[str, Any]] = []
+
+        for record in records:
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role") or record.get("type")
+            content = message.get("content")
+            blocks = content if isinstance(content, list) else ()
+
+            if role == "assistant":
+                for block in blocks:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    name = block.get("name")
+                    value = block.get("input")
+                    if not isinstance(value, dict):
+                        continue
+                    is_create = (
+                        name == "TaskCreate"
+                        or (
+                            name == "Task"
+                            and (value.get("subject") is not None or value.get("activeForm") is not None)
+                            and value.get("taskId") is None
+                            and value.get("task_id") is None
+                        )
+                    )
+                    if is_create:
+                        tool_id = block.get("id")
+                        if tool_id:
+                            pending_creates[tool_id] = {
+                                "subject": value.get("subject"),
+                                "description": value.get("description"),
+                                "status": value.get("status") or "pending",
+                            }
+            elif role == "user":
+                for block in blocks:
+                    if not isinstance(block, dict) or block.get("type") != "tool_result":
+                        continue
+                    tool_id = block.get("tool_use_id")
+                    if tool_id not in pending_creates:
+                        continue
+                    seed = pending_creates.pop(tool_id)
+                    resolved_id = cls._parse_created_task_id(block.get("content"))
+                    if resolved_id:
+                        seed["id"] = resolved_id
+                        resolved_tasks.append(seed)
+
+        for tool_id, seed in pending_creates.items():
+            seed["id"] = f"pending:{tool_id}"
+            resolved_tasks.append(seed)
+
+        if not resolved_tasks:
+            return None
+
+        tasks_by_id = {task["id"]: task for task in resolved_tasks}
+        for record in records:
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role") or record.get("type")
+            if role != "assistant":
+                continue
+            content = message.get("content")
+            blocks = content if isinstance(content, list) else ()
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name = block.get("name")
+                value = block.get("input")
+                if not isinstance(value, dict):
+                    continue
+                is_update = (
+                    name == "TaskUpdate"
+                    or (
+                        name == "Task"
+                        and (value.get("taskId") is not None or value.get("task_id") is not None)
+                        and value.get("status") is not None
+                    )
+                )
+                if not is_update:
+                    continue
+                task_id = str(value.get("taskId") or value.get("task_id") or "")
+                if task_id in tasks_by_id and value.get("status"):
+                    tasks_by_id[task_id]["status"] = value["status"]
+
+        return resolved_tasks
+
+    @staticmethod
+    def _parse_created_task_id(content: Any) -> str | None:
+        """Parse the task ID from a TaskCreate tool_result content."""
+        _TASK_CREATED_RE = re.compile(r"Task\s+#?([A-Za-z0-9_-]+)\s+created", re.IGNORECASE)
+        if isinstance(content, str):
+            match = _TASK_CREATED_RE.search(content)
+            return match.group(1) if match else None
+        if isinstance(content, dict):
+            direct_id = content.get("taskId") or content.get("task_id") or content.get("id")
+            if isinstance(direct_id, str) and direct_id:
+                return direct_id
+            return ExecutionTraceQueryService._parse_created_task_id(
+                content.get("text") or content.get("content"),
+            )
+        if isinstance(content, (list, tuple)):
+            for item in content:
+                task_id = ExecutionTraceQueryService._parse_created_task_id(item)
+                if task_id:
+                    return task_id
+        return None
 
     @staticmethod
     def _contains_task_create(records: list[dict[str, Any]]) -> bool:

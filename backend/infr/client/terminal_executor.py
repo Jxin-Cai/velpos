@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import fcntl
 import logging
 import os
@@ -74,10 +75,7 @@ class TerminalExecutor:
 
     async def create_pty(self, cwd: str | None = None, cols: int = 120, rows: int = 30) -> dict[str, Any]:
         resolved_cwd = cwd if cwd and os.path.isdir(cwd) else os.getcwd()
-        if sys.platform == "darwin" and os.path.exists("/bin/zsh"):
-            shell = "/bin/zsh"
-        else:
-            shell = os.environ.get("SHELL") or "/bin/bash"
+        shell = os.environ.get("SHELL") or ("/bin/zsh" if sys.platform == "darwin" else "/bin/bash")
         if not os.path.exists(shell):
             shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
 
@@ -86,6 +84,7 @@ class TerminalExecutor:
         env.setdefault("TERM", "xterm-256color")
         env.setdefault("COLORTERM", "truecolor")
         env.setdefault("BASH_SILENCE_DEPRECATION_WARNING", "1")
+        env["TERM_PROGRAM"] = "Velpos"
         shell_args = self._shell_args(shell)
 
         pid, master_fd = pty.fork()
@@ -122,8 +121,11 @@ class TerminalExecutor:
                     return ""
                 await asyncio.sleep(0.03)
                 continue
-            except OSError:
-                return ""
+            except OSError as exc:
+                if exc.errno in {errno.EIO, errno.EBADF}:
+                    return ""
+                logger.exception("Failed to read PTY output", extra={"terminal_id": terminal_id})
+                raise
             if data:
                 return data.decode("utf-8", errors="replace")
             return ""
@@ -138,8 +140,11 @@ class TerminalExecutor:
             except BlockingIOError:
                 await asyncio.sleep(0.01)
                 continue
-            except OSError:
-                return
+            except OSError as exc:
+                if exc.errno in {errno.EIO, errno.EBADF}:
+                    return
+                logger.exception("Failed to write PTY input", extra={"terminal_id": terminal_id})
+                raise
             remaining = remaining[written:]
 
     async def resize_pty(self, terminal_id: str, cols: int, rows: int) -> None:
@@ -153,12 +158,13 @@ class TerminalExecutor:
             return
         try:
             os.close(session.master_fd)
-        except OSError:
-            pass
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                logger.exception("Failed to close PTY file descriptor", extra={"terminal_id": terminal_id})
         if not self._is_pty_alive(session):
             return
         try:
-            os.killpg(session.pid, signal.SIGTERM)
+            self._signal_pty_process(session, signal.SIGTERM)
         except ProcessLookupError:
             return
         deadline = time.monotonic() + 2
@@ -167,9 +173,13 @@ class TerminalExecutor:
                 return
             await asyncio.sleep(0.05)
         try:
-            os.killpg(session.pid, signal.SIGKILL)
+            self._signal_pty_process(session, signal.SIGKILL)
         except ProcessLookupError:
-            pass
+            return
+        for _ in range(20):
+            if not self._is_pty_alive(session):
+                return
+            await asyncio.sleep(0.01)
 
     async def open_path(self, path: str, app: str | None = None) -> dict[str, Any]:
         if sys.platform == "darwin":
@@ -287,12 +297,11 @@ class TerminalExecutor:
         return ""
 
     def _shell_args(self, shell: str) -> list[str]:
-        shell_name = os.path.basename(shell)
-        if shell_name == "bash":
-            return [shell, "--noprofile", "--norc", "-i"]
-        if shell_name in {"sh", "zsh"}:
-            return [shell, "-i"]
-        return [shell]
+        # Integrated terminals should load interactive configuration (prompt,
+        # aliases and completion) without rerunning login-only profile scripts.
+        # This mirrors editors such as VS Code and avoids startup scripts that
+        # assume a full desktop login session.
+        return [shell, "-i"]
 
     def _get_pty_session(self, terminal_id: str) -> PtySession:
         session = self._pty_sessions.get(terminal_id)
@@ -306,6 +315,17 @@ class TerminalExecutor:
         except ChildProcessError:
             return False
         return finished_pid == 0
+
+    def _signal_pty_process(self, session: PtySession, sig: signal.Signals) -> None:
+        """Signal the PTY process tree without assuming forkpty setup has won the race."""
+        try:
+            process_group_id = os.getpgid(session.pid)
+        except ProcessLookupError:
+            raise
+        if process_group_id == session.pid:
+            os.killpg(process_group_id, sig)
+            return
+        os.kill(session.pid, sig)
 
     def _set_pty_size(self, fd: int, cols: int, rows: int) -> None:
         safe_cols = max(20, min(int(cols or 120), 300))

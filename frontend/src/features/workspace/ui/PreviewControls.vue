@@ -48,8 +48,8 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
     <button
       type="button"
       class="preview-fullscreen-button"
-      :aria-label="fullscreen ? 'Exit expanded preview' : 'Expand preview'"
-      :title="fullscreen ? 'Exit expanded preview' : 'Expand preview'"
+      :aria-label="fullscreen ? 'Exit fullscreen preview' : 'Open fullscreen preview'"
+      :title="fullscreen ? 'Exit fullscreen preview' : 'Open fullscreen preview'"
       @click="$emit('toggle-fullscreen')"
     >
       <svg v-if="!fullscreen" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -58,7 +58,7 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
       <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M8 3v3a2 2 0 0 1-2 2H3M16 3v3a2 2 0 0 0 2 2h3M8 21v-3a2 2 0 0 0-2-2H3M16 21v-3a2 2 0 0 1 2-2h3"/>
       </svg>
-      <span>{{ fullscreen ? 'Exit expanded view' : 'Expand preview' }}</span>
+      <span>{{ fullscreen ? 'Exit fullscreen' : 'Fullscreen' }}</span>
     </button>
   </div>
 </template>

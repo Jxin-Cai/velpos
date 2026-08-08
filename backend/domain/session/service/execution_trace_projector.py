@@ -42,11 +42,23 @@ class ExecutionTraceProjector:
         spans: Iterable[TraceSpan] = (),
         agent_id: str = "main",
         default_model: str | None = None,
+        seed_tasks: Iterable[Mapping[str, Any]] | None = None,
     ) -> ExecutionAgent:
         normalized_records = self._coalesce_assistant_turns(records)
         projection_spans = list(spans)
         span_by_tool = self._subagent_spans_by_tool(projection_spans)
         tasks = {self.IMPLICIT_TASK_ID: _TaskState(self.IMPLICIT_TASK_ID, "Direct execution", False, status="in_progress")}
+        if seed_tasks:
+            for seed in seed_tasks:
+                task_id = seed.get("id")
+                if task_id and task_id != self.IMPLICIT_TASK_ID:
+                    tasks[task_id] = _TaskState(
+                        id=task_id,
+                        subject=seed.get("subject") or task_id,
+                        explicit=True,
+                        description=seed.get("description"),
+                        status=seed.get("status") or "pending",
+                    )
         dependencies: list[TaskDependency] = []
         subagents: list[SubagentPlaceholder] = []
         loops: list[AgentLoop] = []
