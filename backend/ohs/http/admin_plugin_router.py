@@ -17,6 +17,14 @@ router = APIRouter(
     dependencies=[Depends(require_admin)],
 )
 
+_CLI_PREFIX = "CLI command failed: "
+
+
+def _extract_cli_message(error: str) -> str:
+    if error.startswith(_CLI_PREFIX):
+        return error[len(_CLI_PREFIX):]
+    return error
+
 ServiceDep = Annotated[
     PluginApplicationService,
     Depends(get_plugin_application_service),
@@ -31,7 +39,12 @@ class AddMarketplaceRequest(BaseModel):
 
     @field_validator("source")
     @classmethod
-    def reject_embedded_credentials(cls, value: str) -> str:
+    def sanitize_source_url(cls, value: str) -> str:
+        md_link = re.match(r"^\[.*?\]\((.+?)\)$", value)
+        if md_link:
+            value = md_link.group(1)
+        if re.match(r"^(github|gitlab|bitbucket)\.(com|org)/", value, re.IGNORECASE):
+            value = f"https://{value}"
         if re.match(r"^[a-z][a-z0-9+.-]*://[^/\s]*@", value, re.IGNORECASE):
             raise ValueError("Do not embed credentials in the market URL; use the token field")
         return value
@@ -53,7 +66,10 @@ async def add_marketplace(
     request: AddMarketplaceRequest,
     service: ServiceDep,
 ) -> ApiResponse[dict]:
-    await service.add_marketplace(request.source, request.token)
+    try:
+        await service.add_marketplace(request.source, request.token)
+    except RuntimeError as e:
+        return ApiResponse.fail(code=-1, message=_extract_cli_message(str(e)))
     return ApiResponse.success({"source": request.source})
 
 
@@ -63,13 +79,19 @@ async def refresh_marketplace(
     request: RefreshMarketplaceRequest,
     service: ServiceDep,
 ) -> ApiResponse[None]:
-    await service.update_marketplace(name, request.token)
+    try:
+        await service.update_marketplace(name, request.token)
+    except RuntimeError as e:
+        return ApiResponse.fail(code=-1, message=_extract_cli_message(str(e)))
     return ApiResponse.success(None)
 
 
 @router.delete("/marketplaces/{name}")
 async def remove_marketplace(name: str, service: ServiceDep) -> ApiResponse[None]:
-    await service.remove_marketplace(name)
+    try:
+        await service.remove_marketplace(name)
+    except RuntimeError as e:
+        return ApiResponse.fail(code=-1, message=_extract_cli_message(str(e)))
     return ApiResponse.success(None)
 
 
