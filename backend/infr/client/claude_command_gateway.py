@@ -22,12 +22,6 @@ class ClaudeCommandGateway(CommandGatewayPort):
             raise RuntimeError("Cannot find claude CLI: set CLAUDE_CLI_PATH or ensure 'claude' is in PATH")
         self._permission_mode = permission_mode or os.getenv("CLAUDE_PERMISSION_MODE", "acceptEdits")
 
-    @staticmethod
-    def _infer_type(name: str) -> str:
-        if ":" in name:
-            return "skill"
-        return "command"
-
     async def get_commands(self, cwd: str) -> list[dict[str, Any]]:
         logger.info("Fetching commands from Claude CLI for cwd=%s", cwd)
         options = ClaudeAgentOptions(
@@ -47,11 +41,10 @@ class ClaudeCommandGateway(CommandGatewayPort):
                     for cmd in raw_commands:
                         if cmd.get("isHidden"):
                             continue
-                        name = cmd.get("name", "")
                         commands.append({
-                            "name": name,
+                            "name": cmd.get("name", ""),
                             "description": cmd.get("description", ""),
-                            "type": cmd.get("type") or self._infer_type(name),
+                            "type": "skill",
                             "isUserInvocable": cmd.get("userInvocable", cmd.get("isUserInvocable", True)),
                             "argumentHint": cmd.get("argumentHint", ""),
                         })

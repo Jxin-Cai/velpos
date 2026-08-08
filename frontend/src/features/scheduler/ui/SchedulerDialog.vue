@@ -35,9 +35,8 @@ const projectDir = computed(() => {
 
 const filteredSkillCommands = computed(() => {
   const q = skillSearch.value.toLowerCase()
-  const skills = skillCommands.value.filter(command => command.type === 'skill')
-  if (!q) return skills
-  return skills.filter(
+  if (!q) return skillCommands.value
+  return skillCommands.value.filter(
     c => c.name.toLowerCase().includes(q) || (c.description || '').toLowerCase().includes(q)
   )
 })

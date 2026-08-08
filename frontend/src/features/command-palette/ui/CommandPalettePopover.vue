@@ -34,13 +34,14 @@ const activeIndex = ref(0)
 const manageMode = ref(false)
 const activeTab = ref('all')
 
-function filterByTab(items, typeField = 'type') {
+function filterByTab(items, nameField = 'name') {
   if (activeTab.value === 'all') return items
-  return items.filter(c => c[typeField] === activeTab.value)
+  if (activeTab.value === 'plugin') return items.filter(c => (c[nameField] || '').includes(':'))
+  return items
 }
 
 const filteredCommands = computed(() => {
-  let list = filterByTab(props.commands)
+  let list = filterByTab(props.commands, 'name')
   const raw = props.searchQuery.toLowerCase()
   if (!raw) return list
   const q = raw.startsWith('/') ? raw.slice(1) : raw
@@ -51,7 +52,7 @@ const filteredCommands = computed(() => {
 })
 
 const filteredPolicyRows = computed(() => {
-  let list = filterByTab(props.policyRows, 'command_type')
+  let list = filterByTab(props.policyRows, 'command_name')
   const raw = props.searchQuery.toLowerCase()
   if (!raw) return list
   const q = raw.startsWith('/') ? raw.slice(1) : raw
@@ -143,7 +144,7 @@ function onSearchInput(e) {
     <div class="cmd-toolbar">
       <div class="cmd-tabs">
         <button
-          v-for="tab in [{ key: 'all', label: 'All' }, { key: 'skill', label: 'Skills' }, { key: 'command', label: 'Commands' }]"
+          v-for="tab in [{ key: 'all', label: 'All' }, { key: 'skill', label: 'Plugin' }]"
           :key="tab.key"
           class="cmd-tab-btn"
           :class="{ active: activeTab === tab.key }"
@@ -166,8 +167,8 @@ function onSearchInput(e) {
         >
           <div class="cmd-policy-main">
             <span class="cmd-name">/{{ row.command_name }}</span>
-            <span class="cmd-tag" :class="row.command_type === 'skill' ? 'cmd-tag--prompt' : 'cmd-tag--local'">
-              {{ row.command_type === 'skill' ? 'skill' : 'built-in' }}
+            <span class="cmd-tag" :class="row.command_name?.includes(':') ? 'cmd-tag--prompt' : 'cmd-tag--local'">
+              {{ row.command_name?.includes(':') ? 'plugin' : 'skill' }}
             </span>
             <span class="cmd-desc">{{ row.description || 'Policy override' }}</span>
           </div>
@@ -201,8 +202,8 @@ function onSearchInput(e) {
           @mouseenter="activeIndex = index"
         >
           <span class="cmd-name">/{{ cmd.name }}</span>
-          <span v-if="cmd.type === 'skill'" class="cmd-tag cmd-tag--prompt">skill</span>
-          <span v-else class="cmd-tag cmd-tag--local">built-in</span>
+          <span v-if="cmd.name?.includes(':')" class="cmd-tag cmd-tag--prompt">plugin</span>
+          <span v-else class="cmd-tag cmd-tag--local">skill</span>
           <span class="cmd-desc">{{ cmd.description }}</span>
         </div>
       </template>
