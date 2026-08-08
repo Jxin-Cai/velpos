@@ -221,6 +221,11 @@ async function selectFile(path) {
   selectionAnchorLine.value = null
 }
 
+async function openFileFullscreen(path) {
+  await selectFile(path)
+  contentFullscreen.value = true
+}
+
 function setSelectedNodeKeys(keys) {
   selectedNodeKeys.value = new Set(keys)
 }
@@ -1027,6 +1032,19 @@ function nextDifference() {
             </span>
             <span class="tree-name">{{ node.name }}</span>
             <span v-if="node.git_status" class="file-status">{{ node.git_status }}</span>
+            <span
+              v-if="node.type === 'file'"
+              class="tree-fullscreen-btn"
+              role="button"
+              tabindex="-1"
+              aria-label="Open in fullscreen"
+              title="全屏打开"
+              @click.stop="openFileFullscreen(node.path)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
+              </svg>
+            </span>
           </button>
         </div>
             </aside>
@@ -2293,6 +2311,32 @@ function nextDifference() {
   background: color-mix(in srgb, var(--yellow) 9%, transparent);
   font: 600 9px/1.4 var(--font-mono);
   text-align: center;
+}
+
+.tree-fullscreen-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+
+.tree-row:hover .tree-fullscreen-btn {
+  opacity: 1;
+}
+
+.tree-fullscreen-btn:hover {
+  color: var(--accent);
+  background: var(--layer-active);
 }
 
 .viewer-icon-action {

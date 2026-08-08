@@ -457,7 +457,6 @@ async function copyJsonPreview() {
                         @click="onActivate(p.profile_id)"
                       >启用</button>
                       <button
-                        v-if="p.is_active"
                         class="btn-sync"
                         :disabled="operating === p.profile_id"
                         @click="onSync(p.profile_id)"
