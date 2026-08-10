@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
@@ -240,14 +241,9 @@ class AgentApplicationService:
                         name, agent_id, exc_info=True,
                     )
             else:
-                try:
-                    await self._plugin_manager.update_marketplace(name)
-                    logger.info("Updated marketplace %s for agent %s", name, agent_id)
-                except Exception:
-                    logger.warning(
-                        "Failed to update marketplace %s for agent %s",
-                        name, agent_id, exc_info=True,
-                    )
+                asyncio.ensure_future(
+                    self._background_update_marketplace(name, agent_id)
+                )
 
         for plugin_name in mkt_config.get("plugins", []):
             try:
@@ -263,6 +259,16 @@ class AgentApplicationService:
                     "Failed to install marketplace plugin %s for agent %s",
                     plugin_name, agent_id, exc_info=True,
                 )
+
+    async def _background_update_marketplace(self, name: str, agent_id: str) -> None:
+        try:
+            await self._plugin_manager.update_marketplace(name)
+            logger.info("Background updated marketplace %s for agent %s", name, agent_id)
+        except Exception:
+            logger.warning(
+                "Background marketplace update failed for %s (agent %s), using cached version",
+                name, agent_id, exc_info=True,
+            )
 
     async def _uninstall_agent_plugins(self, agent_id: str, project_dir: str) -> None:
         if not self._plugin_manager:

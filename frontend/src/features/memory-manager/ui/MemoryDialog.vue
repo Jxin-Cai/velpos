@@ -649,6 +649,7 @@ function nextRuleDiff() {
   font-size: 10px; text-transform: uppercase;
 }
 .state-badge.applied { color: #16a34a; }
+.state-badge.superseded { color: var(--text-muted); }
 .state-badge.approved { color: var(--accent); }
 .state-badge.proposed { color: #d97706; }
 .state-badge.rejected, .state-badge.conflicted { color: var(--danger, #ef4444); }

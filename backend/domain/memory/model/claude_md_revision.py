@@ -20,6 +20,7 @@ _ALLOWED_TRANSITIONS = {
         ClaudeMdRevisionState.REJECTED,
         ClaudeMdRevisionState.CONFLICTED,
     },
+    ClaudeMdRevisionState.APPLIED: {ClaudeMdRevisionState.SUPERSEDED},
     ClaudeMdRevisionState.CONFLICTED: {ClaudeMdRevisionState.DRAFT, ClaudeMdRevisionState.REJECTED},
 }
 
@@ -204,6 +205,9 @@ class ClaudeMdRevision:
     def apply(self) -> None:
         self._transition_to(ClaudeMdRevisionState.APPLIED)
         self._applied_time = datetime.now()
+
+    def supersede(self) -> None:
+        self._transition_to(ClaudeMdRevisionState.SUPERSEDED)
 
     def reject(self, reason: str = "") -> None:
         self._transition_to(ClaudeMdRevisionState.REJECTED)

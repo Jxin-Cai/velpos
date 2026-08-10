@@ -148,6 +148,21 @@ class ClaudeMdRevisionApplicationService:
         revision.apply()
         project.update_claude_md_revision(revision.id, applied_hash)
         await self._revision_repository.save(revision)
+
+        revisions = await self._revision_repository.find_by_project_id(project.id)
+        for existing in revisions:
+            if existing.id == revision.id or existing.state != ClaudeMdRevisionState.APPLIED:
+                continue
+            existing_before = existing.state.value
+            existing.supersede()
+            await self._revision_repository.save(existing)
+            await self._record_event(
+                existing,
+                existing_before,
+                existing.state.value,
+                {"superseded_by_revision_id": revision.id},
+            )
+
         await self._project_repository.save(project)
         await self._record_event(revision, before, revision.state.value, {"file_hash": applied_hash})
         return ClaudeMdApplyResult(revision=revision, conflict=False, current_file_hash=applied_hash)

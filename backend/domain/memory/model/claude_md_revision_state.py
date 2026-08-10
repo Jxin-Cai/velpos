@@ -8,5 +8,6 @@ class ClaudeMdRevisionState(str, Enum):
     PROPOSED = "proposed"
     APPROVED = "approved"
     APPLIED = "applied"
+    SUPERSEDED = "superseded"
     REJECTED = "rejected"
     CONFLICTED = "conflicted"
