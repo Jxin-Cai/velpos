@@ -51,7 +51,6 @@ const contentFullscreen = ref(false)
 const fullscreenReviewOpen = ref(false)
 const vbMode = ref(false)
 const fileViewMode = ref('text')
-const previewZoom = ref(1)
 const pendingSelection = ref(null)
 const reviewComment = ref('')
 const reviews = ref([])
@@ -210,7 +209,6 @@ async function selectFile(path) {
   contentOpen.value = true
   vbMode.value = false
   fileViewMode.value = 'text'
-  previewZoom.value = 1
   compareMode.value = false
   versionCursor.value = 0
   versionContents.value = {}
@@ -340,7 +338,6 @@ function resetContentState() {
   fullscreenReviewOpen.value = false
   compareMode.value = false
   fileViewMode.value = 'text'
-  previewZoom.value = 1
   versionCursor.value = 0
   versionContents.value = {}
   clearHistoryTransition()
@@ -580,18 +577,6 @@ function setFileViewMode(mode) {
   vbMode.value = mode === 'review'
   compareMode.value = false
   cancelPendingReview()
-}
-
-function zoomOut() {
-  previewZoom.value = Math.max(0.5, previewZoom.value - 0.25)
-}
-
-function zoomIn() {
-  previewZoom.value = Math.min(2, previewZoom.value + 0.25)
-}
-
-function resetZoom() {
-  previewZoom.value = 1
 }
 
 function toggleContentFullscreen() {
@@ -1134,29 +1119,36 @@ function nextDifference() {
               <span>Download</span>
             </a>
             <button class="secondary-btn" :class="{ active: compareMode }" :disabled="selectedFile.is_binary" @click="toggleCompare">History</button>
-            <PreviewControls
-              :zoom="previewZoom"
-              :fullscreen="contentFullscreen"
-              @zoom-out="zoomOut"
-              @zoom-reset="resetZoom"
-              @zoom-in="zoomIn"
-              @toggle-fullscreen="toggleContentFullscreen"
-            />
-            <button class="icon-btn" aria-label="Close file" @click="closeContent">×</button>
+            <div class="viewer-primary-actions" role="group" aria-label="File preview actions">
+              <PreviewControls
+                :fullscreen="contentFullscreen"
+                @toggle-fullscreen="toggleContentFullscreen"
+              />
+              <button
+                type="button"
+                class="icon-btn viewer-close-action"
+                aria-label="Close file preview"
+                title="Close file preview"
+                @click="closeContent"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </header>
 
         <div v-if="reading" class="workspace-empty viewer-empty">Reading file...</div>
         <template v-else-if="selectedFile.is_binary">
-          <ImagePreview v-if="binaryPreviewType === 'image'" :src="binaryPreviewUrl" :path="selectedFile.path" :zoom="previewZoom" />
-          <PdfPreview v-else-if="binaryPreviewType === 'pdf'" :src="binaryPreviewUrl" :zoom="previewZoom" />
-          <ExcelPreview v-else-if="binaryPreviewType === 'excel'" :src="binaryPreviewUrl" :zoom="previewZoom" />
+          <ImagePreview v-if="binaryPreviewType === 'image'" :src="binaryPreviewUrl" :path="selectedFile.path" />
+          <PdfPreview v-else-if="binaryPreviewType === 'pdf'" :src="binaryPreviewUrl" />
+          <ExcelPreview v-else-if="binaryPreviewType === 'excel'" :src="binaryPreviewUrl" />
           <MediaPreview
             v-else-if="binaryPreviewType === 'video' || binaryPreviewType === 'audio'"
             :src="binaryPreviewUrl"
             :path="selectedFile.path"
             :type="binaryPreviewType"
-            :zoom="previewZoom"
           />
           <div v-else class="workspace-empty viewer-empty">Binary file cannot be previewed.</div>
         </template>
@@ -1217,24 +1209,21 @@ function nextDifference() {
             <article
               v-if="renderedPreviewType === 'markdown'"
               class="markdown-file-preview markdown-body"
-              :style="{ zoom: previewZoom }"
               v-html="renderedMarkdown"
             ></article>
-            <JsonPreview v-else-if="renderedPreviewType === 'json'" :content="selectedFile.content" :zoom="previewZoom" />
+            <JsonPreview v-else-if="renderedPreviewType === 'json'" :content="selectedFile.content" />
             <HtmlPreview
               v-else-if="renderedPreviewType === 'html'"
               :content="selectedFile.content"
-              :zoom="previewZoom"
               :truncated="selectedFile.truncated"
             />
             <CsvPreview
               v-else-if="renderedPreviewType === 'csv'"
               :content="selectedFile.content"
-              :zoom="previewZoom"
               :truncated="selectedFile.truncated"
             />
           </div>
-          <div v-else class="code-view" :class="{ 'review-mode': vbMode }" :style="{ fontSize: `${12.5 * previewZoom}px` }" @mouseup="handleCodeMouseUp">
+          <div v-else class="code-view" :class="{ 'review-mode': vbMode }" @mouseup="handleCodeMouseUp">
             <div v-if="vbMode" class="review-mode-banner">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
               <span>Select lines to leave a comment</span>
@@ -1903,6 +1892,56 @@ function nextDifference() {
 .viewer-file-meta .viewer-file-warning {
   color: var(--yellow);
   background: color-mix(in srgb, var(--yellow) 10%, transparent);
+}
+
+.viewer-primary-actions {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.viewer-primary-actions :deep(.preview-controls) {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.viewer-primary-actions :deep(.preview-controls button) {
+  min-height: 44px;
+}
+
+.viewer-close-action {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.viewer-close-action:hover {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.viewer-close-action:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .viewer-actions {
@@ -3015,6 +3054,10 @@ function nextDifference() {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .viewer-close-action {
+    transition: none;
+  }
+
   .file-content-panel.fullscreen ~ .workspace-review-panel {
     transition: none;
   }

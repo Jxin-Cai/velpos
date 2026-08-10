@@ -484,7 +484,7 @@ const _wsEventHandlers = {
   error: _handleError,
   protocol_error: _handleError,
   ws_disconnected(sessionId, _data, { sess }) {
-    if (sess?.status === 'running') setStatusFor(sessionId, 'reconnecting')
+    if (sess && sess.status !== 'reconnecting') setStatusFor(sessionId, 'reconnecting')
   },
   info() {},
   message_queued(sessionId, data) {

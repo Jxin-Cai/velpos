@@ -48,6 +48,7 @@ const { currentProject, updateProjectInList, projects } = useProject()
 const wsConnection = inject('wsConnection')
 
 const isRunning = computed(() => status.value === 'running')
+const isReconnecting = computed(() => status.value === 'reconnecting')
 const cardExecutionId = computed(() => session.value?.card_execution_id || '')
 const cardProjectId = computed(() => {
   const agentProjectId = session.value?.project_id || currentProject.value?.id || ''
@@ -1160,6 +1161,10 @@ function formatMaxTokens(n) {
     <div v-if="isRunning || pendingSend" class="top-running-indicator">
       <ThinkingIndicator :visible="true" />
     </div>
+    <div v-if="isReconnecting" class="reconnecting-banner">
+      <span class="reconnecting-dot"></span>
+      Reconnecting…
+    </div>
     <div v-if="isSessionLoading" class="session-loading-state">
       <div class="session-loading-spinner"></div>
     </div>
@@ -2117,6 +2122,31 @@ function formatMaxTokens(n) {
   right: 0;
   z-index: 30;
   pointer-events: none;
+}
+
+.reconnecting-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  background: var(--bg-surface, #1a1a1a);
+  border-bottom: 1px solid var(--border-subtle, #333);
+}
+
+.reconnecting-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-warning, #f59e0b);
+  animation: reconnect-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes reconnect-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .recovery-indicator {

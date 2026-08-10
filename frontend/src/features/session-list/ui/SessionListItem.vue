@@ -73,6 +73,7 @@ const formattedTime = computed(() => {
 const statusDotClass = computed(() => {
   if (isClaudeCode.value) return 'status-claude'
   if (props.session.status === 'running') return 'status-running'
+  if (props.session.status === 'reconnecting') return 'status-reconnecting'
   if (props.session.status === 'error') return 'status-error'
   return 'status-idle'
 })
@@ -307,6 +308,11 @@ async function copySessionId() {
   background: var(--status-warning);
   box-shadow: 0 0 0 3px var(--status-warning-bg), 0 0 16px var(--status-warning-bg);
   animation: pulse 1.8s ease-in-out infinite;
+}
+
+.status-reconnecting {
+  background: var(--color-warning, #f59e0b);
+  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .status-error {

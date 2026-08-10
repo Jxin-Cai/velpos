@@ -37,7 +37,7 @@ class SessionStreamConsumer:
         self._trace_collector = trace_collector
         self._stream_msg_timeout = max(
             1.0,
-            float(os.getenv("CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS", "60")),
+            float(os.getenv("CLAUDE_STREAM_MESSAGE_TIMEOUT_SECONDS", "30")),
         )
         self._max_silent_timeouts = max(
             0,

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
-from typing import Annotated, Any, Awaitable, Callable
+from typing import Annotated, Any, AsyncContextManager, Awaitable, Callable
 
 from application.message.attachment_application_service import AttachmentApplicationService
 from application.session.command.run_query_command import RunQueryCommand
@@ -19,19 +18,20 @@ from domain.shared.business_exception import BusinessException
 from infr.client.connection_manager import ConnectionManager
 from infr.client.claude_agent_gateway import ClaudeAgentGateway as ClaudeAgentGatewayImpl
 from ohs.assembler.session_assembler import SessionAssembler
-from application.team_board.team_board_service import TeamBoardApplicationService
 from ohs.auth_dependency import authenticate_websocket_user
-from ohs.dependencies import get_session_application_service, get_connection_manager, get_claude_agent_gateway, get_attachment_application_service, get_terminal_application_service, get_create_session_service_factory, get_team_board_service
+from ohs.dependencies import (
+    get_claude_agent_gateway,
+    get_connection_manager,
+    get_create_session_service_factory,
+    get_create_session_websocket_service_context_factory,
+    get_terminal_application_service,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["WebSocket"])
 
 
-ServiceDep = Annotated[
-    SessionApplicationService,
-    Depends(get_session_application_service),
-]
 ConnectionManagerDep = Annotated[
     ConnectionManager,
     Depends(get_connection_manager),
@@ -44,17 +44,16 @@ SessionServiceFactoryDep = Annotated[
     Callable[[], Awaitable[SessionApplicationService]],
     Depends(get_create_session_service_factory),
 ]
-AttachmentServiceDep = Annotated[
-    AttachmentApplicationService,
-    Depends(get_attachment_application_service),
+SessionWebSocketServiceContextFactoryDep = Annotated[
+    Callable[
+        [],
+        AsyncContextManager[tuple[SessionApplicationService, AttachmentApplicationService]],
+    ],
+    Depends(get_create_session_websocket_service_context_factory),
 ]
 TerminalServiceDep = Annotated[
     TerminalApplicationService,
     Depends(get_terminal_application_service),
-]
-TeamServiceDep = Annotated[
-    TeamBoardApplicationService,
-    Depends(get_team_board_service),
 ]
 
 
@@ -69,7 +68,6 @@ class _WsContext:
     gateway: ClaudeAgentGatewayImpl
     session_service_factory: Callable[[], Awaitable[SessionApplicationService]]
     attachment_service: AttachmentApplicationService
-    team_service: TeamBoardApplicationService
     build_session_summary: Callable[..., Awaitable[dict]]
     submit_query_background: Callable[[RunQueryCommand], Awaitable[None]]
 
@@ -500,12 +498,10 @@ async def global_events_endpoint(
 async def websocket_endpoint(
     websocket: WebSocket,
     session_id: str,
-    service: ServiceDep,
     manager: ConnectionManagerDep,
     gateway: GatewayDep,
     session_service_factory: SessionServiceFactoryDep,
-    attachment_service: AttachmentServiceDep,
-    team_service: TeamServiceDep,
+    service_context_factory: SessionWebSocketServiceContextFactoryDep,
 ) -> None:
     if await authenticate_websocket_user(websocket) is None:
         await websocket.close(code=4001)
@@ -535,7 +531,49 @@ async def websocket_endpoint(
 
     try:
         try:
-            session = await service.get_session(session_id)
+            async with service_context_factory() as (service, _attachment_service):
+                session = await service.get_session(session_id)
+
+                # Correct stale "running" status when SDK client is not connected
+                # (e.g., after server restart)
+                if session.is_running and not service.is_agent_connected(session_id):
+                    await service.ensure_session_idle(session_id)
+                    session = await service.get_session(session_id)
+                    logger.info("corrected stale running status for session=%s", session_id)
+
+                # Note: We do NOT promote idle→running when is_connected is True.
+                # is_connected only means a persistent SDK client exists, not that
+                # a query is actively streaming. The actual running state is set by
+                # run_claude_query's start_query() call.
+
+                message_page = SessionAssembler.message_page(session.messages)
+                recent_messages = message_page["messages"]
+                result_count = sum(1 for msg in session.messages if msg.message_type.value == "result")
+                logger.info(
+                    "ws connected: session=%s, messages=%d/%d, result_messages=%d",
+                    session_id, len(recent_messages), len(session.messages), result_count,
+                )
+
+                git_branch = await service.get_current_git_branch(session.project_dir)
+                session_summary = SessionAssembler.to_summary(session, git_branch=git_branch)
+
+                # Include effective permission mode so frontend can sync
+                session_summary["permission_mode"] = gateway.get_permission_mode(session_id)
+                session_summary["waiting_for_slot"] = await service.is_waiting_for_slot(session_id)
+                session_summary["agent_state"] = service.get_agent_state(session_id)
+
+                await websocket.send_json({
+                    "event": "connected",
+                    "session": session_summary,
+                    "messages": recent_messages,
+                    "message_window": message_page["message_window"],
+                    "user_message_markers": SessionAssembler.user_message_markers(session.messages),
+                })
+
+                should_prewarm = bool(
+                    session.sdk_session_id
+                    and not service.is_agent_connected(session_id)
+                )
         except BusinessException:
             await websocket.send_json({"event": "error", "message": "Session not found"})
             await websocket.close(code=4004, reason="Session not found")
@@ -545,42 +583,6 @@ async def websocket_endpoint(
             await websocket.send_json({"event": "error", "message": "Failed to load session"})
             await websocket.close(code=4004, reason="Session load failed")
             return
-
-        # Correct stale "running" status when SDK client is not connected
-        # (e.g., after server restart)
-        if session.is_running and not service.is_agent_connected(session_id):
-            await service.ensure_session_idle(session_id)
-            session = await service.get_session(session_id)
-            logger.info("corrected stale running status for session=%s", session_id)
-
-        # Note: We do NOT promote idle→running when is_connected is True.
-        # is_connected only means a persistent SDK client exists, not that
-        # a query is actively streaming. The actual running state is set by
-        # run_claude_query's start_query() call.
-
-        message_page = SessionAssembler.message_page(session.messages)
-        recent_messages = message_page["messages"]
-        result_count = sum(1 for msg in session.messages if msg.message_type.value == "result")
-        logger.info(
-            "ws connected: session=%s, messages=%d/%d, result_messages=%d",
-            session_id, len(recent_messages), len(session.messages), result_count,
-        )
-
-        git_branch = await service.get_current_git_branch(session.project_dir)
-        session_summary = SessionAssembler.to_summary(session, git_branch=git_branch)
-
-        # Include effective permission mode so frontend can sync
-        session_summary["permission_mode"] = gateway.get_permission_mode(session_id)
-        session_summary["waiting_for_slot"] = await service.is_waiting_for_slot(session_id)
-        session_summary["agent_state"] = service.get_agent_state(session_id)
-
-        await websocket.send_json({
-            "event": "connected",
-            "session": session_summary,
-            "messages": recent_messages,
-            "message_window": message_page["message_window"],
-            "user_message_markers": SessionAssembler.user_message_markers(session.messages),
-        })
 
         async def _with_background_service(
             handler: Callable[[SessionApplicationService], Awaitable[None]],
@@ -624,7 +626,7 @@ async def websocket_endpoint(
                 })
 
         # Pre-warm SDK connection in background so first query is faster
-        if session.sdk_session_id and not service.is_agent_connected(session_id):
+        if should_prewarm:
             async def _prewarm_background() -> None:
                 bg_svc = await session_service_factory()
                 try:
@@ -641,25 +643,30 @@ async def websocket_endpoint(
             finally:
                 await bg_service.close()
 
-        ctx = _WsContext(
-            websocket=websocket,
-            session_id=session_id,
-            service=service,
-            manager=manager,
-            gateway=gateway,
-            session_service_factory=session_service_factory,
-            attachment_service=attachment_service,
-            team_service=team_service,
-            build_session_summary=_build_session_summary,
-            submit_query_background=_submit_query_background,
-        )
-
         while True:
             data = await websocket.receive_json()
             action = data.get("action")
             handler = _ACTION_HANDLERS.get(action)
             if handler:
-                await handler(ctx, data)
+                # A WebSocket may remain open for hours.  Scope every action's
+                # DB work to one transaction so idle sockets never pin pool
+                # connections between messages.
+                async with service_context_factory() as (
+                    action_service,
+                    action_attachment_service,
+                ):
+                    ctx = _WsContext(
+                        websocket=websocket,
+                        session_id=session_id,
+                        service=action_service,
+                        manager=manager,
+                        gateway=gateway,
+                        session_service_factory=session_service_factory,
+                        attachment_service=action_attachment_service,
+                        build_session_summary=_build_session_summary,
+                        submit_query_background=_submit_query_background,
+                    )
+                    await handler(ctx, data)
             else:
                 await websocket.send_json({
                     "event": "protocol_error",
@@ -680,8 +687,6 @@ async def websocket_endpoint(
         logger.exception("websocket_error", extra={"session_id": session_id})
     finally:
         await manager.disconnect(websocket, session_id)
-        with contextlib.suppress(Exception):
-            await service.rollback()
         # Schedule idle cleanup when last WS client disconnects
         if not await manager.has_connections(session_id):
             gateway.schedule_idle_disconnect(session_id)

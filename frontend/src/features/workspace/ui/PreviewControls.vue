@@ -1,50 +1,13 @@
 <script setup>
 defineProps({
-  zoom: { type: Number, required: true },
   fullscreen: { type: Boolean, default: false },
 })
 
-defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
+defineEmits(['toggle-fullscreen'])
 </script>
 
 <template>
-  <div class="preview-controls" role="group" aria-label="Preview display controls">
-    <button
-      type="button"
-      :disabled="zoom <= 0.5"
-      aria-label="Zoom out"
-      title="Zoom out"
-      @click="$emit('zoom-out')"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/>
-      </svg>
-    </button>
-    <button
-      type="button"
-      class="preview-zoom-value"
-      :disabled="zoom === 1"
-      :aria-label="`Reset zoom, currently ${Math.round(zoom * 100)}%`"
-      title="Reset to 100%"
-      @click="$emit('zoom-reset')"
-    >
-      <svg v-if="zoom !== 1" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>
-      </svg>
-      {{ Math.round(zoom * 100) }}%
-    </button>
-    <button
-      type="button"
-      :disabled="zoom >= 2"
-      aria-label="Zoom in"
-      title="Zoom in"
-      @click="$emit('zoom-in')"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/>
-      </svg>
-    </button>
-    <span class="preview-control-divider" aria-hidden="true"></span>
+  <div class="preview-controls" role="group" aria-label="Preview controls">
     <button
       type="button"
       class="preview-fullscreen-button"
@@ -66,28 +29,28 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
 <style scoped>
 .preview-controls {
   display: inline-flex;
-  min-height: 38px;
+  min-height: 44px;
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-primary);
 }
 
 .preview-controls button {
-  min-width: 38px;
-  height: 38px;
+  min-width: 44px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 0 7px;
+  padding: 0 12px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   font: 600 11px/1 var(--font-sans);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition: color 180ms ease, background 180ms ease, border-color 180ms ease;
 }
 
 .preview-controls button:hover:not(:disabled) {
@@ -102,27 +65,9 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
   outline-offset: -2px;
 }
 
-.preview-controls button:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-.preview-zoom-value {
-  min-width: 58px !important;
-  font-variant-numeric: tabular-nums;
-}
-
 .preview-fullscreen-button {
-  min-width: 132px !important;
-  color: var(--accent) !important;
   background: var(--accent-dim) !important;
-  box-shadow: inset 1px 0 0 var(--border-subtle);
-}
-
-.preview-control-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--border-subtle);
+  color: var(--accent) !important;
 }
 
 @media (max-width: 1280px) {
@@ -132,6 +77,23 @@ defineEmits(['zoom-out', 'zoom-reset', 'zoom-in', 'toggle-fullscreen'])
 
   .preview-fullscreen-button span {
     display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .preview-fullscreen-button {
+    min-width: 44px !important;
+    padding: 0;
+  }
+
+  .preview-fullscreen-button span {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-controls button {
+    transition: none;
   }
 }
 </style>

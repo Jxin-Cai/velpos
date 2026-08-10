@@ -78,10 +78,22 @@ function _createBaseConnection(path, {
     if (onError) ws.onerror = (event) => onError(event, () => eventHandler)
   }
 
+  function handleVisibilityChange() {
+    if (destroyed || document.hidden) return
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      reconnectAttempt = 0
+      connect()
+    }
+  }
+
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+
   function onEvent(handler) { eventHandler = handler }
 
   function close() {
     destroyed = true
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
     if (reconnectTimer) clearTimeout(reconnectTimer)
     if (ws) ws.close(WS_CLOSE_NORMAL)
   }
@@ -126,8 +138,15 @@ export function createWsConnection(sessionId) {
       }
       heartbeatTimer = setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) {
-          if (Date.now() - lastServerEventAt > HEARTBEAT_TIMEOUT) {
-            ws.close()
+          const elapsed = Date.now() - lastServerEventAt
+          if (elapsed > HEARTBEAT_TIMEOUT) {
+            if (elapsed > HEARTBEAT_TIMEOUT + HEARTBEAT_INTERVAL) {
+              // Two full intervals without any server event — connection is dead
+              ws.close()
+              return
+            }
+            // First timeout detection — send ping to probe before closing
+            ws.send(JSON.stringify({ action: 'ping', timestamp: Date.now() }))
             return
           }
           ws.send(JSON.stringify({ action: 'ping', timestamp: Date.now() }))

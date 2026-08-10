@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncContextManager
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -632,6 +633,50 @@ async def _create_session_service(
         execution_lock_factory=acquire_session_execution_lock,
         sync_card_execution_fn=_sync_card_execution,
     )
+
+
+@asynccontextmanager
+async def _session_websocket_service_context() -> AsyncIterator[
+    tuple[SessionApplicationService, AttachmentApplicationService]
+]:
+    """Provide short-lived DB-backed services for one WebSocket operation.
+
+    FastAPI yield dependencies stay alive until a WebSocket disconnects.  A
+    session obtained through that dependency therefore retains its first
+    checked-out connection for the entire lifetime of a long-lived socket.
+    WebSocket handlers use this context once for the initial snapshot and once
+    per action instead, so every transaction returns its connection to the
+    pool while the socket is idle.
+    """
+    from infr.config.database import async_session_factory
+
+    async with async_session_factory() as db_session:
+        service = await _create_session_service(db_session)
+        attachment_service = AttachmentApplicationService(
+            attachment_repository=AttachmentRepositoryImpl(db_session),
+            project_repository=ProjectRepositoryImpl(db_session),
+            storage_gateway=AttachmentStorageGateway(),
+        )
+        try:
+            yield service, attachment_service
+            # AttachmentApplicationService deliberately flushes attachment
+            # records; commit the operation scope so the record is durable.
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
+        finally:
+            # SessionApplicationService may replace its repository session
+            # after a transient connection failure.  Closing the service here
+            # covers both the original and any replacement AsyncSession.
+            await service.close()
+
+
+def get_create_session_websocket_service_context_factory() -> Callable[
+    [], AsyncContextManager[tuple[SessionApplicationService, AttachmentApplicationService]]
+]:
+    """Return the managed service-scope factory used by session WebSockets."""
+    return _session_websocket_service_context
 
 
 @asynccontextmanager

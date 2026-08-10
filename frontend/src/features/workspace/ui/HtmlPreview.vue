@@ -3,7 +3,6 @@ import { computed, ref } from 'vue'
 
 const props = defineProps({
   content: { type: String, default: '' },
-  zoom: { type: Number, default: 1 },
   truncated: { type: Boolean, default: false },
 })
 
@@ -71,7 +70,6 @@ function reloadPreview() {
         :srcdoc="safeDocument"
         sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock"
         referrerpolicy="no-referrer"
-        :style="{ zoom }"
       ></iframe>
     </div>
   </div>
