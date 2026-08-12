@@ -25,14 +25,6 @@ function blockText(block) {
   return ''
 }
 
-function hasFileOrLinkReference(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value || '')
-  return /https?:\/\/\S+/i.test(text)
-    || /(?:^|[\s(`[])~?\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+/m.test(text)
-    || /(?:^|[\s(`[])(?:\.\.?\/)?(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,10}/m.test(text)
-    || /[A-Za-z]:\\(?:[^\\\s]+\\)+[^\\\s]+/.test(text)
-}
-
 function readableResultContent(value) {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) {
@@ -44,7 +36,13 @@ function readableResultContent(value) {
   return blockText(value) || JSON.stringify(value, null, 2)
 }
 
-function publicFileResultMessage(message, results) {
+function isExplicitlyPublic(value) {
+  return value?.visibility === 'public'
+    || value?.is_public === true
+    || value?.public === true
+}
+
+function publicToolResultMessage(message, results) {
   const blocks = results
     .map(result => readableResultContent(result?.content))
     .filter(hasText)
@@ -56,12 +54,12 @@ function publicFileResultMessage(message, results) {
 }
 
 function visibleAssistantBlocks(blocks = []) {
-  const hasReference = blocks.some(block => (
+  const hasArtifact = blocks.some(isArtifactBlock)
+  return blocks.filter(block => (
     isArtifactBlock(block)
-    || (block?.type === 'text' && hasFileOrLinkReference(blockText(block)))
+    || isExplicitlyPublic(block)
+    || (hasArtifact && block?.type === 'text')
   ))
-  if (!hasReference) return []
-  return blocks.filter(block => block?.type === 'text' || isArtifactBlock(block))
 }
 
 /**
@@ -91,8 +89,8 @@ export function filterConversationMessages(messages = [], { debug = false } = {}
     }
 
     if (message?.type === 'tool_result') {
-      const results = (content.results || []).filter(result => hasFileOrLinkReference(result?.content))
-      const publicMessage = publicFileResultMessage(message, results)
+      const results = (content.results || []).filter(isExplicitlyPublic)
+      const publicMessage = publicToolResultMessage(message, results)
       return publicMessage ? [publicMessage] : []
     }
 

@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useSession } from '@entities/session'
 import { visibleUserText } from '../lib/userMessageText'
+import { finalAnswerIndex, groupConversationMessages } from '../lib/conversationGrouping'
 import MessageItem from './MessageItem.vue'
 
 const props = defineProps({
@@ -108,6 +109,7 @@ const markerTooltipStyle = ref({})
 let historyPagingEnabled = false
 
 const markerSourceMessages = computed(() => props.allMessages || props.messages)
+const conversationGroups = computed(() => groupConversationMessages(props.messages))
 const firstVisibleMessageIndex = computed(() => (
   Math.max(0, markerSourceMessages.value.length - props.messages.length)
 ))
@@ -472,28 +474,35 @@ onBeforeUnmount(() => {
           <div class="empty-title">Velpos</div>
           <div class="empty-desc">Send a prompt to start interacting with Claude Code</div>
         </div>
-        <div
-          v-for="(msg, index) in messages"
-          :key="msg._id ?? msg.id ?? index"
-          class="message-anchor"
-          :data-message-index="msg._index ?? firstVisibleMessageIndex + index"
+        <section
+          v-for="group in conversationGroups"
+          :key="group.key"
+          class="conversation-turn"
         >
-          <MessageItem
-            :message="msg"
-            :trace-run-id="traceRunIdFor(msg)"
-            :trace-summary="traceSummaryFor(msg)"
-            :interactive-answered="Boolean(
-              msg.content?.interaction_answered
-              || msg.content?.interaction_response
-              || msg.content?.answers
-            )"
-            :project-id="projectId"
-            :session-id="currentSessionId"
-            @open-trace="emit('open-trace', $event)"
-            @open-file="emit('open-file', $event)"
-            @interactive-answered="markInteractiveAnsweredFor(currentSessionId, msg, $event)"
-          />
-        </div>
+          <div
+            v-for="(msg, index) in group.messages"
+            :key="msg._id ?? msg.id ?? index"
+            class="message-anchor"
+            :data-message-index="msg._index ?? firstVisibleMessageIndex + messages.indexOf(msg)"
+          >
+            <MessageItem
+              :message="msg"
+              :presentation="index === finalAnswerIndex(group.messages) ? 'final' : 'standard'"
+              :trace-run-id="traceRunIdFor(msg)"
+              :trace-summary="traceSummaryFor(msg)"
+              :interactive-answered="Boolean(
+                msg.content?.interaction_answered
+                || msg.content?.interaction_response
+                || msg.content?.answers
+              )"
+              :project-id="projectId"
+              :session-id="currentSessionId"
+              @open-trace="emit('open-trace', $event)"
+              @open-file="emit('open-file', $event)"
+              @interactive-answered="markInteractiveAnsweredFor(currentSessionId, msg, $event)"
+            />
+          </div>
+        </section>
         <slot name="footer"></slot>
       </div>
     </div>
@@ -697,6 +706,16 @@ onBeforeUnmount(() => {
   scroll-margin-top: 20px;
 }
 
+.conversation-turn {
+  position: relative;
+  padding: 0 0 28px;
+}
+
+.conversation-turn + .conversation-turn {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 68%, transparent);
+}
+
 .load-more-sentinel {
   height: 1px;
   width: 100%;
@@ -749,14 +768,14 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   overflow-anchor: none;
-  padding: 24px 0 clamp(300px, 34vh, 380px);
+  padding: 24px 0 32px;
   display: flex;
   flex-direction: column;
   position: relative;
   background:
     radial-gradient(circle at 50% 0%, var(--accent-dim), transparent 26%),
     transparent;
-  scroll-padding-bottom: clamp(300px, 34vh, 380px);
+  scroll-padding-bottom: 32px;
 }
 
 .messages-content {
@@ -813,7 +832,7 @@ onBeforeUnmount(() => {
 .scroll-bottom-btn {
   position: absolute;
   left: 50%;
-  bottom: calc(clamp(300px, 34vh, 380px) - 46px);
+  bottom: 18px;
   transform: translateX(-50%);
   display: inline-flex;
   align-items: center;

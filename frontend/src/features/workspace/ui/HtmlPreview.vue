@@ -2,41 +2,14 @@
 import { computed, ref } from 'vue'
 
 const props = defineProps({
-  content: { type: String, default: '' },
+  src: { type: String, required: true },
   truncated: { type: Boolean, default: false },
 })
 
 const previewVersion = ref(0)
-
-const contentSecurityPolicy = [
-  "default-src 'none'",
-  "img-src data: blob:",
-  "script-src 'unsafe-inline' 'unsafe-eval' blob:",
-  "style-src 'unsafe-inline' blob:",
-  'font-src data:',
-  'media-src data: blob:',
-  "connect-src 'none'",
-  "frame-src 'none'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join('; ')
-
-const safeDocument = computed(() => {
-  const securityHead = [
-    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy}">`,
-    '<meta name="referrer" content="no-referrer">',
-    '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    '<style>html{color-scheme:light}body{overflow-wrap:anywhere}</style>',
-  ].join('')
-  const source = props.content || ''
-  if (/<head(?:\s[^>]*)?>/i.test(source)) {
-    return source.replace(/<head(\s[^>]*)?>/i, (head) => `${head}${securityHead}`)
-  }
-  if (/<html(?:\s[^>]*)?>/i.test(source)) {
-    return source.replace(/<html(\s[^>]*)?>/i, (html) => `${html}<head>${securityHead}</head>`)
-  }
-  return `<!doctype html><html><head>${securityHead}</head><body>${source}</body></html>`
+const frameSrc = computed(() => {
+  const separator = props.src.includes('?') ? '&' : '?'
+  return `${props.src}${separator}preview_version=${previewVersion.value}`
 })
 
 function reloadPreview() {
@@ -67,8 +40,8 @@ function reloadPreview() {
         :key="previewVersion"
         class="html-frame"
         title="HTML preview"
-        :srcdoc="safeDocument"
-        sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock"
+        :src="frameSrc"
+        sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox"
         referrerpolicy="no-referrer"
       ></iframe>
     </div>

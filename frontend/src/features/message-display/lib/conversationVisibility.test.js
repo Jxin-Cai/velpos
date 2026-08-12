@@ -45,7 +45,7 @@ test('test_keeps_artifact_context_when_assistant_contains_internal_blocks', () =
   )
 })
 
-test('test_keeps_assistant_context_when_text_contains_a_file_path', () => {
+test('test_hides_assistant_context_when_only_text_contains_a_file_path', () => {
   // Arrange
   const message = {
     type: 'assistant',
@@ -56,10 +56,10 @@ test('test_keeps_assistant_context_when_text_contains_a_file_path', () => {
   const filtered = filterConversationMessages([message])
 
   // Assert
-  assert.deepEqual(filtered, [message])
+  assert.deepEqual(filtered, [])
 })
 
-test('test_keeps_assistant_context_when_text_contains_a_web_link', () => {
+test('test_hides_assistant_context_when_only_text_contains_a_web_link', () => {
   // Arrange
   const message = {
     type: 'assistant',
@@ -70,10 +70,10 @@ test('test_keeps_assistant_context_when_text_contains_a_web_link', () => {
   const filtered = filterConversationMessages([message])
 
   // Assert
-  assert.deepEqual(filtered, [message])
+  assert.deepEqual(filtered, [])
 })
 
-test('test_replaces_file_tool_result_container_with_public_text_when_debug_is_disabled', () => {
+test('test_hides_file_tool_result_without_public_visibility_when_debug_is_disabled', () => {
   // Arrange
   const message = {
     type: 'tool_result',
@@ -84,21 +84,22 @@ test('test_replaces_file_tool_result_container_with_public_text_when_debug_is_di
   const filtered = filterConversationMessages([message])
 
   // Assert
-  assert.deepEqual(filtered, [{
-    type: 'assistant',
-    content: { blocks: [{ type: 'text', text: 'Saved to /tmp/output/report.pdf' }] },
-  }])
+  assert.deepEqual(filtered, [])
 })
 
-test('test_removes_unrelated_results_from_file_tool_output_when_debug_is_disabled', () => {
+test('test_keeps_only_explicitly_public_tool_output_when_debug_is_disabled', () => {
   // Arrange
-  const fileResult = { content: 'Saved to /tmp/output/report.pdf', is_error: false }
+  const publicResult = {
+    content: 'Saved to /tmp/output/report.pdf',
+    is_error: false,
+    visibility: 'public',
+  }
   const message = {
     type: 'tool_result',
     content: {
       results: [
         { content: 'Read 42 records', is_error: false },
-        fileResult,
+        publicResult,
       ],
     },
   }
@@ -109,8 +110,27 @@ test('test_removes_unrelated_results_from_file_tool_output_when_debug_is_disable
   // Assert
   assert.deepEqual(filtered.content.blocks, [{
     type: 'text',
-    text: fileResult.content,
+    text: publicResult.content,
   }])
+})
+
+test('test_hides_internal_agent_metadata_with_temporary_output_path', () => {
+  // Arrange
+  const message = {
+    type: 'tool_result',
+    content: {
+      results: [{
+        content: 'Async agent launched successfully. internal metadata agentId: secret output_file: /private/tmp/tasks/secret.output',
+        is_error: false,
+      }],
+    },
+  }
+
+  // Act
+  const filtered = filterConversationMessages([message])
+
+  // Assert
+  assert.deepEqual(filtered, [])
 })
 
 test('test_shows_tool_calls_when_debug_is_enabled', () => {

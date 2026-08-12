@@ -26,6 +26,7 @@ const props = defineProps({
   interactiveAnswered: { type: Boolean, default: false },
   projectId: { type: String, default: '' },
   sessionId: { type: String, default: '' },
+  presentation: { type: String, default: 'standard' },
 })
 
 const emit = defineEmits(['open-trace', 'open-file', 'interactive-answered'])
@@ -224,7 +225,17 @@ function handleDelegatedClick(e) {
 </script>
 
 <template>
-  <div class="message-item" :class="`type-${message.type}`" @click="handleDelegatedClick">
+  <div
+    class="message-item"
+    :class="[`type-${message.type}`, `presentation-${presentation}`]"
+    @click="handleDelegatedClick"
+  >
+    <div v-if="presentation === 'final'" class="final-answer-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" aria-hidden="true">
+        <path d="m5 12 4 4L19 6" />
+      </svg>
+      <span>Final answer</span>
+    </div>
     <template v-for="(block, i) in renderedBlocks" :key="i">
       <!-- User message -->
       <div v-if="block.type === 'user'" class="msg-user" :class="{ 'msg-user--selected': isUserMsgSelected }">
@@ -350,6 +361,31 @@ function handleDelegatedClick(e) {
 
 .message-item.type-tool_result {
   margin-top: 0;
+}
+
+.message-item.presentation-final {
+  margin-top: 14px;
+  padding: 18px clamp(16px, 2vw, 24px);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-subtle));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, var(--accent-dim));
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.08);
+}
+
+.final-answer-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.final-answer-label svg {
+  flex: 0 0 auto;
 }
 
 .msg-user {

@@ -27,3 +27,13 @@ export function getFilePreviewType(path) {
 export function getFileRawUrl(projectId, filePath) {
   return `/api/projects/${projectId}/workspace/file-raw?path=${encodeURIComponent(filePath)}`
 }
+
+export function getHtmlPreviewUrl(projectId, filePath) {
+  const encodedProjectId = encodeURIComponent(projectId)
+  const encodedPath = String(filePath || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/')
+  return `/api/projects/${encodedProjectId}/workspace/file-preview/${encodedPath}`
+}

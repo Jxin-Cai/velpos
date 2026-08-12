@@ -105,6 +105,7 @@ const recoveryHintText = computed(() => {
 })
 const debugMode = ref(localStorage.getItem('pf_debug_mode') === 'true')
 const runtimePanelVisible = ref(localStorage.getItem('pf_runtime_panel') === 'true')
+const composerToolsExpanded = ref(false)
 
 const tracePanelVisible = ref(false)
 const selectedTraceRunId = ref(null)
@@ -1345,8 +1346,33 @@ function formatMaxTokens(n) {
           </svg>
         </button>
         </div>
+        <button
+          type="button"
+          class="toolbar-more-btn"
+          :class="{ 'toolbar-more-btn--active': composerToolsExpanded }"
+          :aria-expanded="composerToolsExpanded"
+          aria-controls="composer-configuration-tools composer-action-tools"
+          @click="composerToolsExpanded = !composerToolsExpanded"
+        >
+          <span>{{ composerToolsExpanded ? 'Less' : 'Tools' }}</span>
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
         <!-- Group 2: Configuration -->
-        <div class="toolbar-group">
+        <div
+          v-show="composerToolsExpanded"
+          id="composer-configuration-tools"
+          class="toolbar-group toolbar-group--secondary"
+        >
         <button
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': currentAgentInfo }"
@@ -1408,7 +1434,11 @@ function formatMaxTokens(n) {
         </button>
         </div>
         <!-- Group 3: Actions -->
-        <div class="toolbar-group">
+        <div
+          v-show="composerToolsExpanded"
+          id="composer-action-tools"
+          class="toolbar-group toolbar-group--secondary"
+        >
         <div class="dropdown-wrapper" @click.stop>
           <button
             ref="mediaBtnRef"
@@ -2241,6 +2271,44 @@ function formatMaxTokens(n) {
   row-gap: 6px;
 }
 
+.toolbar-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.toolbar-more-btn:hover,
+.toolbar-more-btn:focus-visible,
+.toolbar-more-btn--active {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+}
+
+.toolbar-more-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.toolbar-more-btn svg {
+  transition: transform var(--transition-fast);
+}
+
+.toolbar-more-btn--active svg {
+  transform: rotate(180deg);
+}
+
 .runtime-panel {
   padding: 6px clamp(18px, 2.4vw, 32px);
 }
@@ -3028,18 +3096,13 @@ function formatMaxTokens(n) {
 }
 
 .input-section {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
+  flex: 0 0 auto;
   z-index: 20;
-  padding-top: 72px;
-  background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--layer-base) 72%, transparent) 42%, var(--layer-base) 100%);
-  pointer-events: none;
-}
-
-.input-section > * {
-  pointer-events: auto;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+  background: color-mix(in srgb, var(--layer-base) 96%, transparent);
+  box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.06);
 }
 
 .input-row {

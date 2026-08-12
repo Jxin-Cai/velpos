@@ -1,6 +1,11 @@
 import { computed, ref } from 'vue'
 import { useSession } from '@entities/session'
 import { fetchTraceRuns, fetchTraceTree } from '../api/traceApi'
+import {
+  flattenTraceTree,
+  mergeTraceSpans,
+  resolveSelectedRunId,
+} from '../lib/traceHistory'
 
 export function useTraceTree() {
   const { currentSessionId, getTraceSpansFor, setTraceSpansFor } = useSession()
@@ -79,7 +84,7 @@ export function useTraceTree() {
         .filter(span => span.run_id !== runId)
       setTraceSpansFor(currentSessionId.value, [
         ...otherRuns,
-        ...flattenTree(result?.tree || []),
+        ...flattenTraceTree(result?.tree || []),
       ])
       selectedRunId.value = runId
     } catch (err) {
@@ -99,13 +104,21 @@ export function useTraceTree() {
       if (currentSessionId.value !== sessionId) return
       const persisted = result?.spans || []
       const current = getTraceSpansFor(sessionId)
-      const merged = mergeTraceSpans(persisted, current)
-      setTraceSpansFor(sessionId, merged)
-      const mergedRunIds = [...new Set(merged.map(span => span.run_id).filter(Boolean))]
-      const selectedStillExists = mergedRunIds.includes(selectedRunId.value)
-      if (!selectedStillExists) {
-        selectedRunId.value = mergedRunIds.length ? mergedRunIds[mergedRunIds.length - 1] : null
+      let merged = mergeTraceSpans(persisted, current)
+      const targetRunId = resolveSelectedRunId(selectedRunId.value, merged)
+
+      // The session history endpoint is intentionally capped. In a long
+      // conversation its newest page can omit an older run entirely or retain
+      // only the tail of a large run. Keep the explicit selection and hydrate
+      // that run from its unpaginated endpoint instead of silently switching
+      // messages or showing an incomplete execution chain.
+      if (targetRunId) {
+        const selected = await fetchTraceTree(sessionId, targetRunId)
+        if (currentSessionId.value !== sessionId) return
+        merged = mergeTraceSpans(merged, flattenTraceTree(selected?.tree || []))
       }
+      setTraceSpansFor(sessionId, merged)
+      if (!selectedRunId.value) selectedRunId.value = targetRunId
     } catch (err) {
       error.value = err?.message || 'Trace 加载失败'
     } finally {
@@ -130,29 +143,6 @@ export function useTraceTree() {
     loadTraceHistory,
     selectRun,
   }
-}
-
-function flattenTree(nodes) {
-  const result = []
-  for (const node of nodes) {
-    const { children = [], ...span } = node
-    result.push(span, ...flattenTree(children))
-  }
-  return result
-}
-
-function mergeTraceSpans(persisted, current) {
-  const byId = new Map(persisted.map(span => [span.id, span]))
-  for (const span of current) {
-    const saved = byId.get(span.id)
-    // Keep terminal live updates when the periodic DB flush is slightly behind.
-    if (!saved || (saved.status === 'running' && span.status !== 'running')) {
-      byId.set(span.id, span)
-    }
-  }
-  return [...byId.values()].sort((a, b) => (
-    (a.started_time || '').localeCompare(b.started_time || '')
-  ))
 }
 
 function buildTree(spans) {

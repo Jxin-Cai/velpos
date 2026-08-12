@@ -7,7 +7,7 @@ import { useTimeout } from '@shared/lib/useTimeout'
 import { escapeHtml } from '@shared/lib/escapeHtml'
 import { cachedParse } from '@features/message-display'
 import { useWorkspace } from '../model/useWorkspace'
-import { getFilePreviewType, getFileRawUrl } from '../lib/fileTypes'
+import { getFilePreviewType, getFileRawUrl, getHtmlPreviewUrl } from '../lib/fileTypes'
 import ImagePreview from './ImagePreview.vue'
 import PdfPreview from './PdfPreview.vue'
 import ExcelPreview from './ExcelPreview.vue'
@@ -85,6 +85,10 @@ const binaryPreviewType = computed(() => selectedFile.value ? getFilePreviewType
 const binaryPreviewUrl = computed(() => {
   if (!selectedFile.value || !projectId.value) return ''
   return getFileRawUrl(projectId.value, selectedFile.value.path)
+})
+const htmlPreviewUrl = computed(() => {
+  if (!selectedFile.value || !projectId.value) return ''
+  return getHtmlPreviewUrl(projectId.value, selectedFile.value.path)
 })
 const currentFileDownloadUrl = computed(() => binaryPreviewUrl.value)
 const isMarkdownFile = computed(() => {
@@ -1224,7 +1228,7 @@ function nextDifference() {
             <JsonPreview v-else-if="renderedPreviewType === 'json'" :content="selectedFile.content" />
             <HtmlPreview
               v-else-if="renderedPreviewType === 'html'"
-              :content="selectedFile.content"
+              :src="htmlPreviewUrl"
               :truncated="selectedFile.truncated"
             />
             <CsvPreview

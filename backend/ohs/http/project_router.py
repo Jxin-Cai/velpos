@@ -299,6 +299,35 @@ async def read_workspace_file_raw(
     )
 
 
+@router.get(
+    "/{project_id}/workspace/file-preview/{path:path}",
+    summary="Preview a workspace file with relative paths preserved",
+)
+async def preview_workspace_file(
+    project_id: str,
+    path: str,
+    service: WorkspaceDep,
+) -> FileResponse:
+    file_path = await service.read_workspace_file_raw(project_id, path)
+    media_type, _ = mimetypes.guess_type(str(file_path))
+    resolved_media_type = media_type or "application/octet-stream"
+    headers = {
+        "Cache-Control": "no-cache",
+        "Content-Disposition": "inline",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if resolved_media_type in {"text/html", "application/xhtml+xml"}:
+        headers["Content-Security-Policy"] = (
+            "sandbox allow-scripts allow-forms allow-modals allow-pointer-lock "
+            "allow-popups allow-popups-to-escape-sandbox; object-src 'none'"
+        )
+    return FileResponse(
+        path=file_path,
+        media_type=resolved_media_type,
+        headers=headers,
+    )
+
+
 @router.get("/{project_id}/workspace/diff", summary="Get project workspace file diff")
 async def get_workspace_diff(
     project_id: str,
