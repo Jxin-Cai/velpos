@@ -1,6 +1,7 @@
 <script setup>
 import { ref, shallowRef, watch, onMounted, nextTick, inject } from 'vue'
 import { cachedParse } from '../lib/markdownConfig'
+import { buildSystemMessageBlock } from '../lib/systemMessageBlock'
 import { visibleUserText } from '../lib/userMessageText'
 import AssistantBlock from './AssistantBlock.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
@@ -36,7 +37,7 @@ const interactiveError = ref('')
 function handleInteractiveResponse(data) {
   if (props.interactiveAnswered) return
   if (wsConnection?.value && wsConnection.value.send({ action: 'user_response', data })) {
-    emit('interactive-answered')
+    emit('interactive-answered', data)
     interactiveError.value = ''
     return
   }
@@ -163,23 +164,22 @@ watch(
         }]
         return
       }
-      const subtype = content.subtype || ''
-      let text = subtype
-      if (subtype === 'auto_continue') {
-        text = `Auto-continuing (${content.attempt}/${content.max})`
-      } else {
-        if (content.description) text += `: ${content.description}`
-        if (content.status) text += ` [${content.status}]`
-        if (content.summary) text += ` - ${content.summary}`
-        if (content.last_tool_name) text += ` (${content.last_tool_name})`
-      }
-      renderedBlocks.value = [{ type: 'system', text: text || JSON.stringify(content) }]
+      const block = buildSystemMessageBlock(content)
+      renderedBlocks.value = [{
+        ...block,
+        html: block.markdown ? cachedParse(block.markdown) : '',
+      }]
       return
     }
 
     if (msg.type === 'interactive') {
       if (content.interaction_type === 'user_choice') {
-        renderedBlocks.value = [{ type: 'user_choice', input: { questions: content.questions }, tool_name: content.tool_name }]
+        renderedBlocks.value = [{
+          type: 'user_choice',
+          input: { questions: content.questions },
+          tool_name: content.tool_name,
+          answers: content.interaction_response?.answers || content.answers || {},
+        }]
         return
       }
       if (content.interaction_type === 'permission') {
@@ -307,6 +307,7 @@ function handleDelegatedClick(e) {
       <SystemBlock
         v-else-if="block.type === 'system'"
         :content="block.text"
+        :html="block.html"
       />
       <UserChoiceBlock
         v-else-if="block.type === 'user_choice'"

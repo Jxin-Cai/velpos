@@ -120,6 +120,8 @@ build/dev/start.sh logs      # Tail backend logs
 
 Prod mode runs everything in Docker: MySQL + backend + frontend (nginx). Claude Code CLI is installed inside the backend container.
 
+The backend and MySQL containers inherit `/etc/localtime` from the deployment host. Scheduled tasks therefore use the host's configured local timezone; configure the host timezone before deploying if it is not already correct.
+
 ### Step 1: Environment
 
 The deploy script creates `build/prod/.env` interactively on its first run. To prepare it manually instead:
@@ -188,6 +190,10 @@ docker compose -f build/prod/docker-compose.yml ps
 # Backend health (from inside Docker network)
 docker compose -f build/prod/docker-compose.yml exec backend curl -sf http://localhost:8083/api/health
 
+# The backend timezone should match the deployment host
+date
+docker compose -f build/prod/docker-compose.yml exec backend date
+
 # Frontend (from host)
 curl -sf http://localhost:80 > /dev/null && echo "App OK" || echo "App FAILED"
 ```
@@ -248,5 +254,6 @@ After services are running, configure the web UI:
 | Frontend blank page (prod) | nginx not proxying correctly | Check `docker compose -f build/prod/docker-compose.yml logs frontend` |
 | `ANTHROPIC_API_KEY` error (prod) | Placeholder not replaced | Edit `build/prod/.env`, set real API key |
 | MySQL connection refused | Container still starting | Wait 10-20s, check: `docker compose -f build/dev/docker-compose.yml ps` |
+| Scheduled tasks run at the wrong hour (prod) | Deployment host timezone is incorrect, or containers were not recreated after it changed | Check `date` on the host and in the backend container, then run `./build/prod/deploy.sh` |
 | `uv: command not found` | uv not installed | `curl -LsSf https://astral.sh/uv/install.sh \| sh` then restart shell |
 | PROJECTS_HOST_DIR with `~` (prod) | Docker doesn't expand tilde | Use absolute path in `build/prod/.env` |

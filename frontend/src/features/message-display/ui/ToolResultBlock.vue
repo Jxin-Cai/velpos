@@ -8,8 +8,6 @@ const props = defineProps({
   },
 })
 
-const expanded = ref(false)
-
 const displayContent = computed(() => {
   const content = props.result.content
   if (content == null || content === '') return ''
@@ -20,6 +18,10 @@ const displayContent = computed(() => {
     return String(content)
   }
 })
+
+const expanded = ref(
+  /https?:\/\/\S+|(?:^|\s)~?\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+/m.test(displayContent.value),
+)
 </script>
 
 <template>

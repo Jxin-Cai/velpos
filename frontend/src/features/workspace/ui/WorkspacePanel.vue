@@ -47,6 +47,7 @@ const changedOnly = ref(false)
 const keyword = ref('')
 const expandedDirs = ref(new Set())
 const contentOpen = ref(false)
+const treeListEl = ref(null)
 const contentFullscreen = ref(false)
 const fullscreenReviewOpen = ref(false)
 const vbMode = ref(false)
@@ -202,10 +203,18 @@ async function openRequestedPath(path) {
   }
   expandedDirs.value = nextExpanded
   await selectFile(relativePath)
+  await nextTick()
+  const selectedRow = [...(treeListEl.value?.querySelectorAll('.tree-row') || [])]
+    .find((row) => row.dataset.treePath === relativePath)
+  selectedRow?.scrollIntoView({ block: 'nearest' })
 }
 
 async function selectFile(path) {
   await openFile(projectId.value, path)
+  if (selectedFile.value?.path === path) {
+    setSelectedNodeKeys([path])
+    lastSelectedRowIndex.value = treeRows.value.findIndex((node) => node.path === path)
+  }
   contentOpen.value = true
   vbMode.value = false
   fileViewMode.value = 'text'
@@ -981,7 +990,7 @@ function nextDifference() {
         <div v-if="loading" class="workspace-empty">Loading files...</div>
         <div v-else-if="error" class="workspace-error">{{ error }}</div>
         <div v-else-if="!treeRows.length" class="workspace-empty">No files</div>
-        <div v-else class="tree-list" title="Use Cmd/Ctrl-click or Shift-click to select multiple items">
+        <div v-else ref="treeListEl" class="tree-list" title="Use Cmd/Ctrl-click or Shift-click to select multiple items">
           <button
             v-for="(node, index) in treeRows"
             :key="node.key"
@@ -990,6 +999,7 @@ function nextDifference() {
             :style="{ '--tree-depth': node.depth, paddingLeft: `${10 + node.depth * 16}px` }"
             :aria-expanded="node.type === 'dir' ? expandedDirs.has(node.key) : undefined"
             :aria-current="selectedFile?.path === node.path ? 'true' : undefined"
+            :data-tree-path="node.path"
             @click="handleTreeRowClick(node, index, $event)"
           >
             <span v-if="node.type === 'dir'" class="tree-caret" aria-hidden="true">
@@ -1471,6 +1481,8 @@ function nextDifference() {
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .file-content-panel:not(.fullscreen) {
@@ -2576,6 +2588,14 @@ function nextDifference() {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+}
+
+.rendered-preview-shell,
+.compare-view,
+.diff-box,
+.viewer-file-identity {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .code-line pre::selection,

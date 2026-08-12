@@ -1,11 +1,20 @@
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { escapeHtml } from '@shared/lib/escapeHtml'
+import { extractWorkspaceFilePath } from './workspaceFileLink'
 
 const renderer = new marked.Renderer()
 const originalLinkRenderer = renderer.link.bind(renderer)
 renderer.link = function (token) {
   const html = originalLinkRenderer(token)
+  const filePath = extractWorkspaceFilePath(token.href)
+  if (filePath) {
+    const escapedPath = escapeHtml(filePath)
+    return html.replace(
+      /^<a [^>]*>/,
+      `<a class="file-path-link" data-file-path="${escapedPath}" href="#" title="Open in project files">`,
+    )
+  }
   // Ensure all links open in new tab with security attributes
   return html.replace(/^<a /, '<a target="_blank" rel="noopener noreferrer" ')
 }
@@ -71,6 +80,10 @@ const urlExtension = {
   },
   renderer(token) {
     const escaped = escapeHtml(token.url)
+    const filePath = extractWorkspaceFilePath(token.url)
+    if (filePath) {
+      return `<a class="file-path-link" data-file-path="${escapeHtml(filePath)}" href="#" title="Open in project files">${escaped}</a>`
+    }
     return `<a href="${escaped}" target="_blank" rel="noopener noreferrer" class="auto-link">${escaped}</a>`
   },
 }
@@ -98,6 +111,11 @@ DOMPurify.addHook('uponSanitizeAttribute', function (node, data) {
 // Ensure all links have target="_blank" and rel="noopener noreferrer" after sanitization
 DOMPurify.addHook('afterSanitizeAttributes', function (node) {
   if (node.tagName === 'A') {
+    if (node.classList.contains('file-path-link')) {
+      node.removeAttribute('target')
+      node.removeAttribute('rel')
+      return
+    }
     // Set target="_blank" if not present
     if (!node.getAttribute('target')) {
       node.setAttribute('target', '_blank')

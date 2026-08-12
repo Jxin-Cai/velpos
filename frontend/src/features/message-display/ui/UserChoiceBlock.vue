@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, useId } from 'vue'
+import { ref, computed, nextTick, useId, watch } from 'vue'
 
 const props = defineProps({
   block: { type: Object, required: true },
@@ -18,6 +18,48 @@ const OTHER_LABEL = '__other__'
 
 const questions = computed(() => props.block.input?.questions || [])
 const activeQuestion = computed(() => questions.value[activeQuestionIndex.value])
+
+function restoreSelections(answers) {
+  const restoredSelections = {}
+  const restoredOtherTexts = {}
+
+  questions.value.forEach((question, index) => {
+    const key = `q${index}`
+    const answer = String(answers?.[question.question] || '').trim()
+    if (!answer) return
+
+    const optionLabels = (question.options || [])
+      .filter(option => !isOtherOpt(option))
+      .map(option => String(option.label))
+
+    if (question.multiSelect) {
+      const values = answer.split(', ').filter(Boolean)
+      const knownValues = values.filter(value => optionLabels.includes(value))
+      const customValues = values.filter(value => !optionLabels.includes(value))
+      restoredSelections[key] = customValues.length
+        ? [...knownValues, OTHER_LABEL]
+        : knownValues
+      if (customValues.length) restoredOtherTexts[key] = customValues.join(', ')
+      return
+    }
+
+    if (optionLabels.includes(answer)) {
+      restoredSelections[key] = answer
+    } else {
+      restoredSelections[key] = OTHER_LABEL
+      restoredOtherTexts[key] = answer
+    }
+  })
+
+  selections.value = restoredSelections
+  otherTexts.value = restoredOtherTexts
+}
+
+watch(
+  () => props.block.answers,
+  answers => restoreSelections(answers),
+  { immediate: true, deep: true },
+)
 
 function hasBuiltinOther(q) {
   return (q.options || []).some(opt => String(opt.label || '').toLowerCase() === 'other')

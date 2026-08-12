@@ -2,6 +2,7 @@ import { ref, computed, reactive } from 'vue'
 import {
   markInteractiveMessageAnswered,
   preserveInteractiveAnswerState,
+  restoreInteractiveAnswerState,
 } from './interactiveMessageState'
 
 // ── Per-session state map ──
@@ -137,10 +138,11 @@ function updateSessionFor(sessionId, data) {
 function addMessageTo(sessionId, msg) {
   const state = _ensureState(sessionId)
   if (!state) return
-  if (!msg.timestamp) msg.timestamp = Date.now()
   if (!Number.isInteger(msg._index)) {
     msg._index = state.messageWindow.end_index
   }
+  msg = restoreInteractiveAnswerState(sessionId, msg)
+  if (!msg.timestamp) msg.timestamp = Date.now()
   _assignIdFor(state, msg)
   state.messages.push(msg)
   state.messageWindow.end_index = Math.max(state.messageWindow.end_index, msg._index + 1)
@@ -197,7 +199,8 @@ function setMessagesFor(sessionId, msgs, sessionData) {
       return
     }
   }
-  const mergedMessages = preserveInteractiveAnswerState(state.messages, msgs)
+  const restoredMessages = msgs.map(message => restoreInteractiveAnswerState(sessionId, message))
+  const mergedMessages = preserveInteractiveAnswerState(state.messages, restoredMessages)
   const windowData = sessionData?.message_window || {}
   const inferredStart = Number.isInteger(mergedMessages[0]?._index) ? mergedMessages[0]._index : 0
   const inferredEnd = inferredStart + mergedMessages.length
@@ -257,10 +260,10 @@ function setMessagesFor(sessionId, msgs, sessionData) {
   )
 }
 
-function markInteractiveAnsweredFor(sessionId, message) {
+function markInteractiveAnsweredFor(sessionId, message, response = {}) {
   const state = _stateMap.get(sessionId)
   if (!state) return false
-  return markInteractiveMessageAnswered(state.messages, message)
+  return markInteractiveMessageAnswered(state.messages, message, response, sessionId)
 }
 
 function prependMessagesFor(sessionId, msgs, messageWindowData, markers = []) {

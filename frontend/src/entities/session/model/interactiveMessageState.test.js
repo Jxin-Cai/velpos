@@ -4,7 +4,16 @@ import test from 'node:test'
 import {
   markInteractiveMessageAnswered,
   preserveInteractiveAnswerState,
+  restoreInteractiveAnswerState,
 } from './interactiveMessageState.js'
+
+function memoryStorage() {
+  const values = new Map()
+  return {
+    getItem: key => values.get(key) || null,
+    setItem: (key, value) => values.set(key, value),
+  }
+}
 
 function choiceMessage(index = 3) {
   return {
@@ -24,11 +33,42 @@ test('test_marks_matching_interaction_answered_when_response_is_sent', () => {
   const messages = [message]
 
   // Act
-  const marked = markInteractiveMessageAnswered(messages, message)
+  const marked = markInteractiveMessageAnswered(messages, message, { answers: { Choose: 'A' } })
 
   // Assert
   assert.equal(marked, true)
   assert.equal(messages[0].content.interaction_answered, true)
+})
+
+test('test_records_selected_answers_when_response_is_sent', () => {
+  // Arrange
+  const message = choiceMessage()
+  const messages = [message]
+
+  // Act
+  markInteractiveMessageAnswered(messages, message, { answers: { Choose: 'A' } })
+
+  // Assert
+  assert.deepEqual(messages[0].content.interaction_response, { answers: { Choose: 'A' } })
+})
+
+test('test_restores_selected_answers_after_page_refresh', () => {
+  // Arrange
+  const storage = memoryStorage()
+  const message = choiceMessage()
+  markInteractiveMessageAnswered(
+    [message],
+    message,
+    { answers: { Choose: 'A' } },
+    'session-1',
+    storage,
+  )
+
+  // Act
+  const restored = restoreInteractiveAnswerState('session-1', choiceMessage(), storage)
+
+  // Assert
+  assert.deepEqual(restored.content.interaction_response, { answers: { Choose: 'A' } })
 })
 
 test('test_preserves_answered_state_when_message_snapshot_is_replaced', () => {
@@ -42,6 +82,19 @@ test('test_preserves_answered_state_when_message_snapshot_is_replaced', () => {
 
   // Assert
   assert.equal(merged[0].content.interaction_answered, true)
+})
+
+test('test_preserves_selected_answers_when_message_snapshot_is_replaced', () => {
+  // Arrange
+  const current = choiceMessage()
+  current.content.interaction_answered = true
+  current.content.interaction_response = { answers: { Choose: 'A' } }
+
+  // Act
+  const [merged] = preserveInteractiveAnswerState([current], [choiceMessage()])
+
+  // Assert
+  assert.deepEqual(merged.content.interaction_response, { answers: { Choose: 'A' } })
 })
 
 test('test_does_not_mark_different_interaction_when_index_is_reused', () => {

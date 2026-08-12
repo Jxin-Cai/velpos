@@ -13,6 +13,8 @@ services:
       MYSQL_COLLATION: utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql
+      # Keep database timestamps and diagnostics aligned with the deployment host.
+      - /etc/localtime:/etc/localtime:ro
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -39,6 +41,8 @@ services:
     volumes:
       - ${PROJECTS_HOST_DIR:-${HOME}/velpos}:/home/appuser/velpos
       - claude_config:/home/appuser/.claude
+      # Cron expressions are evaluated in the backend process's local timezone.
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       mysql:
         condition: service_healthy

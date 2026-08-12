@@ -482,12 +482,16 @@ onBeforeUnmount(() => {
             :message="msg"
             :trace-run-id="traceRunIdFor(msg)"
             :trace-summary="traceSummaryFor(msg)"
-            :interactive-answered="Boolean(msg.content?.interaction_answered)"
+            :interactive-answered="Boolean(
+              msg.content?.interaction_answered
+              || msg.content?.interaction_response
+              || msg.content?.answers
+            )"
             :project-id="projectId"
             :session-id="currentSessionId"
             @open-trace="emit('open-trace', $event)"
             @open-file="emit('open-file', $event)"
-            @interactive-answered="markInteractiveAnsweredFor(currentSessionId, msg)"
+            @interactive-answered="markInteractiveAnsweredFor(currentSessionId, msg, $event)"
           />
         </div>
         <slot name="footer"></slot>

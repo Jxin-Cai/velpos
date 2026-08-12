@@ -273,6 +273,8 @@ build/dev/start.sh logs      # Tail backend logs
 
 > Everything runs in Docker (MySQL + backend + frontend/nginx). The backend manages files inside the **container**. A host directory is bind-mounted for project data persistence.
 
+Production containers inherit the deployment host's local timezone. Scheduled tasks run in that timezone; correct the host timezone before deploying if necessary.
+
 **1. Configure**
 
 The deploy script creates the configuration and prompts for the required passwords on its first run. To configure it in advance, copy the template manually:

@@ -1303,16 +1303,16 @@ function formatMaxTokens(n) {
       </Transition>
       <!-- Toolbar above input -->
       <div class="input-toolbar">
-        <!-- Group 1: Debug -->
+        <!-- Group 1: Debug and runtime -->
         <div class="toolbar-group">
         <button
           class="toolbar-btn"
           :class="{ 'toolbar-btn--active': debugMode, 'debug-toggle--active': debugMode }"
           :aria-pressed="debugMode"
-          aria-label="Toggle debug messages"
+          aria-label="Toggle debug mode"
           @click="toggleDebug"
           data-tooltip="Debug"
-          :title="debugMode ? 'Debug is on — tool calls and system messages are visible' : 'Debug is off — only user-facing messages are visible'"
+          :title="debugMode ? 'Debug is on — complete execution messages are visible' : 'Debug is off — only user-facing and file-related messages are visible'"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M8 2l1.88 1.88"/>

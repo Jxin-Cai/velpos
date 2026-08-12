@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import { extractWorkspaceFilePath } from '../lib/workspaceFileLink'
 
 const props = defineProps({
   block: {
@@ -31,10 +32,13 @@ const artifactExtension = computed(() => {
   return extension ? extension.slice(0, 8).toUpperCase() : 'FILE'
 })
 
-const isWebUrl = computed(() => /^https?:\/\//i.test(artifactPath.value))
+const workspacePath = computed(() => extractWorkspaceFilePath(artifactPath.value) || artifactPath.value)
+const isWebUrl = computed(() => (
+  /^https?:\/\//i.test(artifactPath.value) && workspacePath.value === artifactPath.value
+))
 function openArtifact() {
   if (!artifactPath.value || isWebUrl.value) return
-  emit('open-file', artifactPath.value)
+  emit('open-file', workspacePath.value)
 }
 </script>
 
