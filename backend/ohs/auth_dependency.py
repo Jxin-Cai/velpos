@@ -33,6 +33,8 @@ def _is_public_path(path: str) -> bool:
         return True
     if path.startswith("/ws/"):
         return True
+    if path.startswith("/api/otel/"):
+        return True
     if path.startswith("/docs") or path.startswith("/openapi"):
         return True
     return False

@@ -14,7 +14,7 @@ import { SessionSidebar, useSessionList } from '@features/session-list'
 import { NOTIFICATION_TYPE, NotificationBell, useNotifications } from '@features/notification-center'
 import { WorkingSessionsButton, useWorkingSessions } from '@features/working-sessions'
 import { fetchSessionRunSteps } from '@features/task-progress'
-import { fetchTraceRuns } from '@features/trace-viewer'
+import { fetchExecutionEvents, fetchTraceRuns } from '@features/trace-viewer'
 import { TerminalButton, TerminalDrawer } from '@features/terminal'
 import { WorkspaceButton, WorkspacePanel } from '@features/workspace'
 import { SchedulerDialog } from '@features/scheduler'
@@ -43,6 +43,9 @@ const {
   upsertTimelineEventFor,
   upsertTraceSpanFor,
   mergeTraceSpansFor,
+  recordTraceEventSequenceFor,
+  bumpTelemetryVersionFor,
+  getTraceEventSequencesFor,
   linkUserMessageToRunFor,
   setStatusFor,
   setQueuedFor,
@@ -290,12 +293,34 @@ async function loadTimelineEvents(sessionId) {
 }
 
 async function loadTraceSpans(sessionId) {
+  const replayCursors = getTraceEventSequencesFor(sessionId)
   try {
     const data = await fetchTraceRuns(sessionId)
     mergeTraceSpansFor(sessionId, data?.spans || [])
+    await replayMissingTraceEvents(sessionId, replayCursors)
   } catch (e) {
     console.debug('[VP] load trace spans failed:', e?.message || e)
   }
+}
+
+async function replayMissingTraceEvents(sessionId, cursors) {
+  await Promise.all(Object.entries(cursors).map(async ([runId, initialSequence]) => {
+    let sequence = initialSequence
+    let hasMore = true
+    while (hasMore) {
+      const page = await fetchExecutionEvents(sessionId, runId, sequence)
+      for (const event of page?.events || []) {
+        const span = event.payload?.span
+        if (span?.id) {
+          upsertTraceSpanFor(sessionId, { ...span, _event_sequence: event.sequence })
+        }
+      }
+      const nextSequence = Number(page?.next_sequence) || sequence
+      recordTraceEventSequenceFor(sessionId, runId, nextSequence)
+      hasMore = Boolean(page?.has_more) && nextSequence > sequence
+      sequence = nextSequence
+    }
+  }))
 }
 
 function _handleConnected(sessionId, data, { sess, proj }) {
@@ -546,7 +571,15 @@ const _wsEventHandlers = {
   run_step_completed(sessionId, data) { upsertRunStepFor(sessionId, data.step) },
   run_step_failed(sessionId, data) { upsertRunStepFor(sessionId, data.step) },
   timeline_event(sessionId, data) { upsertTimelineEventFor(sessionId, data.timeline_event) },
-  trace_span(sessionId, data) { upsertTraceSpanFor(sessionId, data.span) },
+  trace_span(sessionId, data) {
+    const runId = data.span?.run_id
+    upsertTraceSpanFor(sessionId, {
+      ...data.span,
+      _event_sequence: data.event_sequence,
+    })
+    recordTraceEventSequenceFor(sessionId, runId, data.event_sequence)
+  },
+  telemetry_event(sessionId) { bumpTelemetryVersionFor(sessionId) },
   trace_run_started(sessionId, data) { linkUserMessageToRunFor(sessionId, data.message_id, data.run_id) },
   user_choice_request: _handleInteractiveRequest,
   permission_request: _handleInteractiveRequest,

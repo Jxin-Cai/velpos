@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 
 _TREE_CACHE_TTL_S = 30.0
 _TREE_CACHE_MAX_ENTRIES = 64
-_tree_cache: dict[str, tuple[float, ExecutionAgent]] = {}
+_tree_cache: dict[str, tuple[float, int, ExecutionAgent]] = {}
 
 
 def _prune_expired_cache() -> None:
     """Remove expired entries to prevent unbounded growth."""
     now = time.monotonic()
     expired = [
-        key for key, (ts, _) in _tree_cache.items()
+        key for key, (ts, _, _) in _tree_cache.items()
         if now - ts > _TREE_CACHE_TTL_S
     ]
     for key in expired:
@@ -463,6 +463,15 @@ class ExecutionTraceQueryService:
     @staticmethod
     def _resolve_subagent_span(span: Any, spans: list[Any]) -> Any | None:
         """Resolve a legacy tool-call ID to the subagent span it invoked."""
+        if (
+            span.span_type == span.SPAN_TYPE_TOOL_CALL
+            and span.metadata.get("telemetry.source") == "claude_code_otel"
+            and (
+                span.metadata.get("subagent_type")
+                or str(span.name).lower() in {"agent", "task"}
+            )
+        ):
+            return span
         direct_child = next((
             candidate for candidate in spans
             if candidate.span_type == candidate.SPAN_TYPE_SUBAGENT
@@ -487,14 +496,15 @@ class ExecutionTraceQueryService:
         """Return cached execution tree or build and cache a fresh one."""
         cache_key = f"{session_id}:{run_id}:{agent_span_id or 'main'}"
         now = time.monotonic()
+        run_version = await self._trace_span_repository.find_run_version(session_id, run_id)
         cached = _tree_cache.get(cache_key)
         if cached is not None:
-            ts, agent = cached
-            if now - ts <= _TREE_CACHE_TTL_S:
+            ts, cached_version, agent = cached
+            if cached_version == run_version and now - ts <= _TREE_CACHE_TTL_S:
                 return agent
         _prune_expired_cache()
         agent = await self.get_execution_tree(session_id, run_id, agent_span_id)
-        _tree_cache[cache_key] = (now, agent)
+        _tree_cache[cache_key] = (now, run_version, agent)
         return agent
 
     async def get_loop_detail(
@@ -540,6 +550,25 @@ class ExecutionTraceQueryService:
     def _spans_owned_by_agent(agent_span: Any | None, spans: list[Any]) -> list[Any]:
         """Return direct work of one agent while preserving nested agent nodes."""
         by_id = {span.id: span for span in spans}
+        if (
+            agent_span is not None
+            and agent_span.span_type == agent_span.SPAN_TYPE_TOOL_CALL
+            and agent_span.metadata.get("telemetry.source") == "claude_code_otel"
+        ):
+            descendants = [agent_span]
+            for candidate in spans:
+                if candidate.id == agent_span.id:
+                    continue
+                parent_id = candidate.parent_span_id
+                visited: set[str] = set()
+                while parent_id and parent_id not in visited:
+                    if parent_id == agent_span.id:
+                        descendants.append(candidate)
+                        break
+                    visited.add(parent_id)
+                    parent = by_id.get(parent_id)
+                    parent_id = parent.parent_span_id if parent is not None else None
+            return descendants
         owned: list[Any] = [agent_span] if agent_span is not None else []
         owner_id = (
             agent_span.id

@@ -35,6 +35,8 @@ function _ensureState(sessionId) {
       runSteps: [],
       timelineEvents: [],
       traceSpans: [],
+      traceEventSequences: {},
+      telemetryVersion: 0,
       queued: false,
       steeringQueued: false,
       canceling: false,
@@ -125,6 +127,11 @@ const waitingForSlot = computed(() => {
 const recovery = computed(() => {
   const state = _stateMap.get(currentSessionId.value)
   return state?.session?.recovery || null
+})
+
+const telemetryVersion = computed(() => {
+  const state = _stateMap.get(currentSessionId.value)
+  return state?.telemetryVersion || 0
 })
 
 // ── Targeted APIs (write to specific session by ID) ──
@@ -353,11 +360,41 @@ function upsertTraceSpanFor(sessionId, span) {
   if (!state || !span?.id) return
   const index = state.traceSpans.findIndex(s => s.id === span.id)
   if (index >= 0) {
+    const current = state.traceSpans[index]
+    const currentEventSequence = Number(current._event_sequence) || 0
+    const incomingEventSequence = Number(span._event_sequence) || 0
+    const currentRevision = Number(current.revision) || 0
+    const incomingRevision = Number(span.revision) || 0
+    if (
+      (currentEventSequence && incomingEventSequence < currentEventSequence)
+      || (!incomingEventSequence && incomingRevision < currentRevision)
+    ) return
     state.traceSpans[index] = { ...state.traceSpans[index], ...span }
   } else {
     state.traceSpans.push(span)
   }
   _linkTraceRunsToUserMessages(state)
+}
+
+function recordTraceEventSequenceFor(sessionId, runId, sequence) {
+  const state = _ensureState(sessionId)
+  const normalized = Number(sequence) || 0
+  if (!state || !runId || normalized <= 0) return
+  state.traceEventSequences[runId] = Math.max(
+    Number(state.traceEventSequences[runId]) || 0,
+    normalized,
+  )
+}
+
+function bumpTelemetryVersionFor(sessionId) {
+  const state = _ensureState(sessionId)
+  if (!state) return
+  state.telemetryVersion += 1
+}
+
+function getTraceEventSequencesFor(sessionId) {
+  const state = _stateMap.get(sessionId)
+  return state ? { ...state.traceEventSequences } : {}
 }
 
 function _linkTraceRunsToUserMessages(state) {
@@ -579,6 +616,7 @@ export function useSession() {
     cancelledHint,
     waitingForSlot,
     recovery,
+    telemetryVersion,
     queryHistory,
     restoredPrompt,
     // Global state
@@ -614,6 +652,9 @@ export function useSession() {
     upsertTimelineEventFor,
     setTraceSpansFor,
     upsertTraceSpanFor,
+    recordTraceEventSequenceFor,
+    bumpTelemetryVersionFor,
+    getTraceEventSequencesFor,
     mergeTraceSpansFor,
     getTraceSpansFor,
     linkUserMessageToRunFor,

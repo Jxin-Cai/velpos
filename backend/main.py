@@ -35,6 +35,7 @@ from ohs.http.scheduler_router import router as scheduler_router
 from ohs.http.session_router import router as session_router
 from ohs.http.session_timeline_router import router as session_timeline_router
 from ohs.http.trace_router import router as trace_router
+from ohs.http.otel_router import router as otel_router
 from ohs.http.settings_router import router as settings_router
 from ohs.http.terminal_router import router as terminal_router
 from ohs.http.usage_router import router as usage_router
@@ -125,6 +126,7 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.project_memory_entry_model  # noqa: F401
     import infr.repository.claude_md_revision_model  # noqa: F401
     import infr.repository.trace_span_model  # noqa: F401
+    import infr.repository.execution_ledger_event_model  # noqa: F401
     import infr.repository.im_delivery_model  # noqa: F401
     import infr.repository.user_model  # noqa: F401
     import infr.repository.agent_template_model  # noqa: F401
@@ -482,6 +484,7 @@ app.include_router(evolution_router)
 app.include_router(scheduler_router)
 app.include_router(session_timeline_router)
 app.include_router(trace_router)
+app.include_router(otel_router)
 app.include_router(agent_router)
 app.include_router(plugin_router)
 app.include_router(command_router)

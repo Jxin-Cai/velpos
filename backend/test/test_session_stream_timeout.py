@@ -21,7 +21,6 @@ async def test_releases_stalled_stream_when_silence_limit_is_reached(monkeypatch
         fail_run_step=AsyncMock(),
     )
     gateway = SimpleNamespace(
-        update_trace_run_id=Mock(),
         is_process_alive=Mock(return_value=True),
         is_waiting_for_user_input=Mock(return_value=False),
         is_waiting_for_background_tasks=Mock(return_value=False),
@@ -78,7 +77,6 @@ async def test_cancels_and_awaits_next_msg_task_when_process_exits(monkeypatch):
         fail_run_step=AsyncMock(),
     )
     gateway = SimpleNamespace(
-        update_trace_run_id=Mock(),
         is_process_alive=Mock(return_value=False),
         is_waiting_for_user_input=Mock(return_value=False),
         is_waiting_for_background_tasks=Mock(return_value=False),
@@ -121,7 +119,6 @@ async def test_keeps_stream_open_when_waiting_for_background_tasks(monkeypatch):
         fail_run_step=AsyncMock(),
     )
     gateway = SimpleNamespace(
-        update_trace_run_id=Mock(),
         is_process_alive=Mock(return_value=True),
         is_waiting_for_user_input=Mock(return_value=False),
         is_waiting_for_background_tasks=Mock(return_value=True),
@@ -165,7 +162,6 @@ async def test_awaits_cancelled_stream_task_when_process_dies_during_timeout(mon
         fail_run_step=AsyncMock(),
     )
     gateway = SimpleNamespace(
-        update_trace_run_id=Mock(),
         is_process_alive=Mock(return_value=False),
     )
     consumer = SessionStreamConsumer(

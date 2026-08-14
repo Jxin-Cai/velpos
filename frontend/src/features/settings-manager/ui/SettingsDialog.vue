@@ -40,6 +40,17 @@ const MODEL_ROLES = [
 ]
 const FALLBACK_MODEL_KEY = 'ANTHROPIC_MODEL'
 
+const AUDIT_ENV_OPTIONS = [
+  { key: 'CLAUDE_CODE_ENABLE_TELEMETRY', label: 'OpenTelemetry', desc: '启用 Claude Code 指标、事件与遥测采集' },
+  { key: 'CLAUDE_CODE_ENHANCED_TELEMETRY_BETA', label: '完整 Trace', desc: '采集 interaction、LLM、工具、权限等待与执行 span' },
+  { key: 'ENABLE_BETA_TRACING_DETAILED', label: '详细 Hook Trace', desc: '采集 Hook 定义、输入输出、阻断结果与耗时' },
+  { key: 'OTEL_LOG_USER_PROMPTS', label: '用户 Prompt', desc: '记录每次用户输入的完整内容' },
+  { key: 'OTEL_LOG_ASSISTANT_RESPONSES', label: '模型响应', desc: '记录 assistant response 事件的完整文本' },
+  { key: 'OTEL_LOG_TOOL_DETAILS', label: '工具详情', desc: '记录命令、文件路径、MCP、Skill 与工具参数' },
+  { key: 'OTEL_LOG_TOOL_CONTENT', label: '工具输入输出', desc: '在 span event 中记录完整工具输入和结果' },
+  { key: 'OTEL_LOG_RAW_API_BODIES', label: '原始 API Body', desc: '记录完整 Messages API 请求与响应 JSON' },
+]
+
 function onModelIdChange(form, role, newValue) {
   if (!role.nameKey) return
   const currentName = form.model_config[role.nameKey] || ''
@@ -617,6 +628,29 @@ async function copyJsonPreview() {
                   <span class="toggle-track"><span class="toggle-thumb"></span></span>
                 </label>
               </div>
+              <div class="audit-heading">
+                <div>
+                  <span class="audit-heading__title">OpenTelemetry 精细审计</span>
+                  <span class="audit-heading__desc">默认全量开启，单条内容上限 256 KiB。可能包含代码、Prompt 和工具输出。</span>
+                </div>
+                <span class="audit-heading__badge">FULL AUDIT</span>
+              </div>
+              <div v-for="item in AUDIT_ENV_OPTIONS" :key="item.key" class="field-row field-row--audit">
+                <div class="field-info">
+                  <label class="field-label">{{ item.label }}</label>
+                  <span class="field-desc">{{ item.desc }}</span>
+                  <code class="env-key">{{ item.key }}</code>
+                </div>
+                <label class="toggle-label">
+                  <input
+                    type="checkbox"
+                    class="toggle-checkbox"
+                    :checked="getEnvVar(item.key) === '1'"
+                    @change="setEnvVar(item.key, $event.target.checked ? '1' : '0')"
+                  />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
               <div class="field-row">
                 <div class="field-info">
                   <label class="field-label">推理强度</label>
@@ -637,10 +671,10 @@ async function copyJsonPreview() {
               <div class="field-row">
                 <div class="field-info">
                   <label class="field-label">禁用非必要网络流量</label>
-                  <span class="field-desc">关闭更新、反馈、错误上报和遥测</span>
+                  <span class="field-desc">关闭更新、反馈和错误上报；开启 OpenTelemetry 审计时不可用</span>
                 </div>
                 <label class="toggle-label">
-                  <input type="checkbox" class="toggle-checkbox" :checked="getEnvVar('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') === '1'" @change="setEnvVar('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', $event.target.checked ? '1' : '')" />
+                  <input type="checkbox" class="toggle-checkbox" :disabled="getEnvVar('CLAUDE_CODE_ENABLE_TELEMETRY') === '1'" :checked="getEnvVar('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') === '1'" @change="setEnvVar('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', $event.target.checked ? '1' : '0')" />
                   <span class="toggle-track"><span class="toggle-thumb"></span></span>
                 </label>
               </div>
@@ -852,6 +886,58 @@ async function copyJsonPreview() {
 
 .section-header .section-title {
   margin: 0;
+}
+
+.audit-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.audit-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.audit-heading__title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.audit-heading__desc {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.audit-heading__badge {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.field-row--audit {
+  min-height: 66px;
+}
+
+.env-key {
+  width: fit-content;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 9px;
+  word-break: break-all;
 }
 
 .btn-preview {
@@ -1506,6 +1592,7 @@ async function copyJsonPreview() {
   .settings-card .field-row { align-items: stretch; flex-direction: column; }
   .form-input, .form-select { font-size: 16px; }
   .dialog-footer { position: sticky; bottom: 0; margin: 20px -16px -16px !important; padding: 12px 16px !important; background: var(--layer-base); z-index: 2; }
+  .embedded-surface .dialog-footer { position: static; }
   .json-copy-btn { opacity: 1; }
 }
 

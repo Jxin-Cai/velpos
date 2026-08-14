@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from domain.channel_profile.acl.settings_file_gateway import SettingsFileGateway
+from infr.client.claude_settings_env import with_claude_code_general_env_defaults
 
 
 class SettingsApplicationService:
@@ -15,7 +16,9 @@ class SettingsApplicationService:
 
     async def get_settings(self) -> dict[str, Any]:
         """Read the complete settings.json content."""
-        return await self._settings_file_gateway.read_settings()
+        settings = await self._settings_file_gateway.read_settings()
+        settings["env"] = with_claude_code_general_env_defaults(settings.get("env"))
+        return settings
 
     async def update_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         """Write data to settings.json and return the written content.

@@ -8,7 +8,10 @@ import infr.client.claude_agent_gateway as claude_agent_gateway_module
 import infr.client.claude_command_gateway as claude_command_gateway_module
 from infr.client.claude_agent_gateway import ClaudeAgentGateway
 from infr.client.claude_command_gateway import ClaudeCommandGateway
-from infr.client.claude_settings_env import load_claude_settings_env
+from infr.client.claude_settings_env import (
+    CLAUDE_CODE_GENERAL_ENV_DEFAULTS,
+    load_claude_settings_env,
+)
 
 
 def test_loads_env_when_user_settings_define_environment_variables(tmp_path) -> None:
@@ -20,18 +23,18 @@ def test_loads_env_when_user_settings_define_environment_variables(tmp_path) -> 
     env = load_claude_settings_env(tmp_path)
 
     # Assert
-    assert env == settings["env"]
+    assert env == {**CLAUDE_CODE_GENERAL_ENV_DEFAULTS, **settings["env"]}
 
 
-def test_returns_empty_env_when_user_settings_do_not_exist(tmp_path) -> None:
+def test_returns_audit_defaults_when_user_settings_do_not_exist(tmp_path) -> None:
     # Arrange / Act
     env = load_claude_settings_env(tmp_path)
 
     # Assert
-    assert env == {}
+    assert env == CLAUDE_CODE_GENERAL_ENV_DEFAULTS
 
 
-def test_returns_empty_env_when_user_settings_contain_invalid_json(tmp_path) -> None:
+def test_returns_audit_defaults_when_user_settings_contain_invalid_json(tmp_path) -> None:
     # Arrange
     (tmp_path / "settings.json").write_text("{invalid", encoding="utf-8")
 
@@ -39,7 +42,7 @@ def test_returns_empty_env_when_user_settings_contain_invalid_json(tmp_path) -> 
     env = load_claude_settings_env(tmp_path)
 
     # Assert
-    assert env == {}
+    assert env == CLAUDE_CODE_GENERAL_ENV_DEFAULTS
 
 
 def test_ignores_non_string_entries_when_settings_env_contains_invalid_values(tmp_path) -> None:
@@ -51,7 +54,10 @@ def test_ignores_non_string_entries_when_settings_env_contains_invalid_values(tm
     env = load_claude_settings_env(tmp_path)
 
     # Assert
-    assert env == {"ANTHROPIC_API_KEY": "secret"}
+    assert env == {
+        **CLAUDE_CODE_GENERAL_ENV_DEFAULTS,
+        "ANTHROPIC_API_KEY": "secret",
+    }
 
 
 def test_uses_claude_config_dir_when_environment_overrides_default_path(
@@ -67,7 +73,7 @@ def test_uses_claude_config_dir_when_environment_overrides_default_path(
     env = load_claude_settings_env()
 
     # Assert
-    assert env == settings["env"]
+    assert env == {**CLAUDE_CODE_GENERAL_ENV_DEFAULTS, **settings["env"]}
 
 
 @pytest.mark.asyncio
@@ -75,6 +81,7 @@ async def test_injects_settings_env_when_agent_gateway_starts_sdk_client(
     monkeypatch,
 ) -> None:
     # Arrange
+    monkeypatch.setenv("VELPOS_NATIVE_OTEL_ENABLED", "false")
     expected_env = {"ANTHROPIC_AUTH_TOKEN": "token"}
     captured_options: dict = {}
 

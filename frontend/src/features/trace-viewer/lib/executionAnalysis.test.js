@@ -1,0 +1,79 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  ExecutionPresentation,
+  buildExecutionTaskRows,
+  executionMetricPercent,
+  executionStepTokens,
+  rankExecutionTasks,
+} from './executionAnalysis.js'
+
+function task(id, loops) {
+  return { id, subject: id, loops }
+}
+
+function loop(id, durationMs, inputTokens, outputTokens, sequence) {
+  return {
+    id,
+    sequence,
+    duration_ms: durationMs,
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+  }
+}
+
+test('test_aggregates_task_duration_and_tokens_when_task_has_multiple_steps', () => {
+  const [row] = buildExecutionTaskRows([
+    task('task-1', [loop('one', 1200, 100, 20, 1), loop('two', 800, 50, 10, 2)]),
+  ])
+
+  assert.deepEqual(
+    { duration: row.activeDurationMs, tokens: row.tokens },
+    { duration: 2000, tokens: 180 },
+  )
+})
+
+test('test_ranks_tasks_and_steps_by_duration_when_duration_mode_selected', () => {
+  const rows = buildExecutionTaskRows([
+    task('short', [loop('short-step', 100, 10, 0, 1)]),
+    task('long', [loop('second', 200, 10, 0, 2), loop('first', 900, 10, 0, 1)]),
+  ])
+
+  const ranked = rankExecutionTasks(rows, ExecutionPresentation.DURATION)
+
+  assert.deepEqual(
+    [ranked[0].task.id, ranked[0].steps[0].loop.id],
+    ['long', 'first'],
+  )
+})
+
+test('test_ranks_tasks_and_steps_by_tokens_when_token_mode_selected', () => {
+  const rows = buildExecutionTaskRows([
+    task('low', [loop('low-step', 900, 10, 10, 1)]),
+    task('high', [loop('less', 900, 50, 25, 1), loop('more', 100, 200, 50, 2)]),
+  ])
+
+  const ranked = rankExecutionTasks(rows, ExecutionPresentation.TOKENS)
+
+  assert.deepEqual(
+    [ranked[0].task.id, ranked[0].steps[0].loop.id],
+    ['high', 'more'],
+  )
+})
+
+test('test_sums_input_and_output_tokens_when_step_usage_exists', () => {
+  assert.equal(executionStepTokens(loop('step', 10, 120, 30, 1)), 150)
+})
+
+test('test_uses_one_global_scale_when_step_durations_differ_across_tasks', () => {
+  // Arrange
+  const shortDuration = 21_000
+  const longestDuration = 16 * 60_000
+
+  // Act
+  const shortPercent = executionMetricPercent(shortDuration, longestDuration)
+  const longestPercent = executionMetricPercent(longestDuration, longestDuration)
+
+  // Assert
+  assert.equal(Math.round(shortPercent * 10) / 10, 2.2)
+  assert.equal(longestPercent, 100)
+})

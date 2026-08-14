@@ -99,6 +99,8 @@ class ExecutionTraceAssembler:
             agent_id=sub.agent_id,
             transcript_path=sub.transcript_path,
             span_id=sub.span_id,
+            status=sub.status,
+            duration_ms=sub.duration_ms,
             is_expandable=sub.is_expandable,
         )
 

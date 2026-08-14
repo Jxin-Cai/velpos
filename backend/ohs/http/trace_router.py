@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 
 from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from domain.session.repository.execution_ledger_event_repository import ExecutionLedgerEventRepository
 from domain.session.repository.trace_span_repository import TraceSpanRepository
-from ohs.dependencies import get_execution_trace_query_service, get_trace_span_repository
+from ohs.dependencies import (
+    get_execution_ledger_event_repository,
+    get_execution_trace_query_service,
+    get_trace_span_repository,
+)
 from ohs.http.api_response import ApiResponse
 from ohs.http.assembler.execution_trace_assembler import ExecutionTraceAssembler
 from ohs.http.dto.execution_trace_dto import ExecutionTreeResponse, LoopDetailPageResponse
@@ -14,6 +20,10 @@ from ohs.http.dto.execution_trace_dto import ExecutionTreeResponse, LoopDetailPa
 router = APIRouter(prefix="/api/sessions", tags=["Trace"])
 
 TraceRepoDep = Annotated[TraceSpanRepository, Depends(get_trace_span_repository)]
+ExecutionEventRepoDep = Annotated[
+    ExecutionLedgerEventRepository,
+    Depends(get_execution_ledger_event_repository),
+]
 ExecutionTraceQueryDep = Annotated[ExecutionTraceQueryService, Depends(get_execution_trace_query_service)]
 
 
@@ -79,6 +89,171 @@ async def get_trace_tree(
         "run_id": run_id,
         "tree": tree,
         "span_count": len(span_dicts),
+    })
+
+
+@router.get(
+    "/{session_id}/runs/{run_id}/execution-events",
+    summary="Replay structured execution events for a run",
+)
+async def list_execution_events(
+    session_id: str,
+    run_id: str,
+    repo: ExecutionEventRepoDep,
+    after_sequence: int = Query(default=0, ge=0, description="Return events after this cursor"),
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> ApiResponse[dict]:
+    events = await repo.find_by_run_after(
+        session_id,
+        run_id,
+        after_position=after_sequence,
+        limit=limit + 1,
+    )
+    has_more = len(events) > limit
+    page = events[:limit]
+    next_sequence = page[-1].position if page else after_sequence
+    return ApiResponse.success({
+        "session_id": session_id,
+        "run_id": run_id,
+        "events": [event.to_dict() for event in page],
+        "next_sequence": next_sequence,
+        "has_more": has_more,
+    })
+
+
+def _percentile(values: list[int], percentile: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = min(round((len(ordered) - 1) * percentile), len(ordered) - 1)
+    return ordered[index]
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@router.get(
+    "/{session_id}/runs/{run_id}/telemetry-summary",
+    summary="Summarize native Claude Code OpenTelemetry signals",
+)
+async def get_telemetry_summary(
+    session_id: str,
+    run_id: str,
+    span_repo: TraceRepoDep,
+    event_repo: ExecutionEventRepoDep,
+) -> ApiResponse[dict]:
+    spans = await span_repo.find_by_run(session_id, run_id)
+    events = await event_repo.find_by_run_after(
+        session_id,
+        run_id,
+        after_position=0,
+        limit=5001,
+    )
+    native_spans = [
+        span
+        for span in spans
+        if span.metadata.get("telemetry.source") == "claude_code_otel"
+    ]
+    llm_spans = [
+        span
+        for span in native_spans
+        if span.metadata.get("otel.span_name") == "claude_code.llm_request"
+    ]
+    tool_spans = [
+        span
+        for span in native_spans
+        if span.metadata.get("otel.span_name") == "claude_code.tool"
+    ]
+    interaction_spans = [
+        span
+        for span in native_spans
+        if span.metadata.get("otel.span_name") == "claude_code.interaction"
+    ]
+    log_events = [event for event in events if event.payload.get("signal") == "log"]
+    metric_events = [event for event in events if event.payload.get("signal") == "metric"]
+    event_counts = Counter(
+        str(event.payload.get("event_name") or "log") for event in log_events
+    )
+    api_requests = [
+        event
+        for event in log_events
+        if event.payload.get("event_name") == "api_request"
+    ]
+    api_errors = [
+        event
+        for event in log_events
+        if event.payload.get("event_name")
+        in {"api_error", "api_refusal", "api_retries_exhausted", "internal_error"}
+    ]
+    cost_usd = sum(
+        _number(event.payload.get("attributes", {}).get("cost_usd"))
+        for event in api_requests
+    )
+    if not cost_usd:
+        cost_usd = sum(
+            _number(event.payload.get("value"))
+            for event in metric_events
+            if event.payload.get("metric_name") == "claude_code.cost.usage"
+        )
+    latencies = [span.duration_ms for span in llm_spans if span.duration_ms > 0]
+    ttft_values = [
+        int(_number(span.metadata.get("ttft_ms")))
+        for span in llm_spans
+        if _number(span.metadata.get("ttft_ms")) > 0
+    ]
+    retry_count = sum(
+        max(int(_number(span.metadata.get("attempt")) or 1) - 1, 0)
+        for span in llm_spans
+    )
+    permission_wait_spans = [
+        span
+        for span in native_spans
+        if span.metadata.get("otel.span_name") == "claude_code.tool.blocked_on_user"
+    ]
+    hook_spans = [
+        span
+        for span in native_spans
+        if span.metadata.get("otel.span_name") == "claude_code.hook"
+    ]
+    trace_ids = {
+        str(span.metadata.get("otel.trace_id"))
+        for span in native_spans
+        if span.metadata.get("otel.trace_id")
+    }
+    recent_events = [event.to_dict() for event in log_events[-100:]]
+
+    return ApiResponse.success({
+        "source": "claude_code_otel" if native_spans else "legacy_trace",
+        "trace_count": len(trace_ids),
+        "interaction_count": len(interaction_spans),
+        "llm_request_count": len(llm_spans),
+        "tool_count": len(tool_spans),
+        "log_event_count": len(log_events),
+        "metric_sample_count": len(metric_events),
+        "api_error_count": len(api_errors),
+        "api_refusal_count": event_counts["api_refusal"],
+        "retry_count": retry_count,
+        "permission_wait_count": len(permission_wait_spans),
+        "permission_wait_ms": sum(span.duration_ms for span in permission_wait_spans),
+        "hook_count": len(hook_spans),
+        "raw_api_body_count": (
+            event_counts["api_request_body"] + event_counts["api_response_body"]
+        ),
+        "event_counts": dict(event_counts),
+        "cost_usd": round(cost_usd, 6),
+        "input_tokens": sum(int(span.metadata.get("input_tokens") or 0) for span in llm_spans),
+        "output_tokens": sum(int(span.metadata.get("output_tokens") or 0) for span in llm_spans),
+        "cache_read_tokens": sum(int(span.metadata.get("cache_read_tokens") or 0) for span in llm_spans),
+        "cache_creation_tokens": sum(int(span.metadata.get("cache_creation_tokens") or 0) for span in llm_spans),
+        "llm_latency_p50_ms": _percentile(latencies, 0.50),
+        "llm_latency_p95_ms": _percentile(latencies, 0.95),
+        "ttft_p50_ms": _percentile(ttft_values, 0.50),
+        "ttft_p95_ms": _percentile(ttft_values, 0.95),
+        "recent_events": recent_events,
     })
 
 

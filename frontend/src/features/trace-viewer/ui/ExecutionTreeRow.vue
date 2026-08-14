@@ -12,7 +12,7 @@ const props = defineProps({
   loadState: { type: String, default: 'idle' },
 })
 
-const emit = defineEmits(['toggle', 'select-loop'])
+const emit = defineEmits(['toggle', 'select-loop', 'open-subagent'])
 
 const canExpand = computed(() => {
   if (props.nodeType === 'task') return Boolean(props.node.loops?.length)
@@ -62,6 +62,7 @@ const displayName = computed(() => {
 const statusLabel = computed(() => {
   if (props.nodeType === 'task') return (props.node.status || '').replaceAll('_', ' ')
   if (props.nodeType === 'loop') return props.node.stop_reason || ''
+  if (props.nodeType === 'subagent') return (props.node.status || '').replaceAll('_', ' ')
   return ''
 })
 
@@ -96,6 +97,13 @@ const meta = computed(() => {
   if (props.nodeType === 'task') {
     const loopCount = props.node.loops?.length || 0
     if (loopCount > 0) parts.push(`${loopCount} step${loopCount > 1 ? 's' : ''}`)
+    const durationMs = (props.node.loops || []).reduce((total, loop) => total + (Number(loop.duration_ms) || 0), 0)
+    const tokens = (props.node.loops || []).reduce((total, loop) => {
+      const usage = loop.usage || {}
+      return total + (Number(usage.input_tokens) || 0) + (Number(usage.output_tokens) || 0)
+    }, 0)
+    if (durationMs > 0) parts.push(formatDuration(durationMs))
+    if (tokens > 0) parts.push(`${formatTokens(tokens)} tok`)
     const subagentCount = (props.node.loops || []).reduce((count, loop) => count + (loop.subagent_count || 0), 0)
     if (subagentCount > 0) parts.push(`${subagentCount} subagent${subagentCount > 1 ? 's' : ''}`)
   }
@@ -119,6 +127,10 @@ const meta = computed(() => {
     }
     const subagentCount = props.node.subagent_count || 0
     if (subagentCount > 0) parts.push(`${subagentCount} subagent${subagentCount > 1 ? 's' : ''}`)
+  }
+  if (props.nodeType === 'subagent') {
+    if (props.node.duration_ms > 0) parts.push(formatDuration(props.node.duration_ms))
+    if (props.node.agent_id) parts.push(props.node.agent_id)
   }
   return parts.join(' · ')
 })
@@ -158,6 +170,10 @@ function formatClockTime(value) {
 }
 
 function handleClick() {
+  if (props.nodeType === 'subagent') {
+    if (canExpand.value) emit('open-subagent', props.node)
+    return
+  }
   if (props.nodeType === 'loop') {
     emit('select-loop', props.node.id)
   }
@@ -233,16 +249,13 @@ function viewEvents() {
         class="exec-inspect-btn"
         :disabled="!canExpand || loadState === 'loading'"
         :title="!canExpand ? 'Internal trace is not available for this run' : ''"
-        :aria-label="expanded ? 'Hide internal process' : 'View internal process'"
+        aria-label="Open subagent execution trace"
         @click.stop="handleClick"
       >
-        <svg v-if="!expanded" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <path d="M2.5 8s2-3.25 5.5-3.25S13.5 8 13.5 8s-2 3.25-5.5 3.25S2.5 8 2.5 8Z"/><circle cx="8" cy="8" r="1.5"/>
         </svg>
-        <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-          <path d="m4 4 8 8M12 4l-8 8"/>
-        </svg>
-        <span>{{ expanded ? 'Hide process' : 'View process' }}</span>
+        <span>Open trace</span>
       </button>
     </div>
 

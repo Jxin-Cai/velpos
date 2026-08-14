@@ -32,6 +32,12 @@ class TraceSpan:
     SPAN_TYPE_AGENT = "agent"
     SPAN_TYPE_SUBAGENT = "subagent"
     SPAN_TYPE_RUN = "run"
+    SPAN_TYPE_INTERACTION = "interaction"
+    SPAN_TYPE_LLM_REQUEST = "llm_request"
+    SPAN_TYPE_TOOL = "tool"
+    SPAN_TYPE_TOOL_EXECUTION = "tool_execution"
+    SPAN_TYPE_PERMISSION_WAIT = "permission_wait"
+    SPAN_TYPE_HOOK = "hook"
 
     STATUS_RUNNING = "running"
     STATUS_COMPLETED = "completed"
@@ -39,6 +45,10 @@ class TraceSpan:
     STATUS_DENIED = "denied"
     STATUS_CANCELLED = "cancelled"
     STATUS_ABANDONED = "abandoned"
+
+    @property
+    def is_native_otel(self) -> bool:
+        return self.metadata.get("telemetry.source") == "claude_code_otel"
 
     @classmethod
     def create(

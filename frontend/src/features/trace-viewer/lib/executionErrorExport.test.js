@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildExecutionErrorReport } from './executionErrorExport.js'
+import { buildExecutionErrorReport, countExecutionErrors } from './executionErrorExport.js'
 
 test('test_download_report_contains_full_paginated_error_context_when_step_failed', async () => {
   // Arrange
@@ -46,12 +46,13 @@ test('test_download_report_contains_full_paginated_error_context_when_step_faile
 
   // Assert
   assert.deepEqual(report, {
-    format: 'velpos.execution-errors.v1',
+    format: 'velpos.execution-errors.v2',
     session_id: 'session-1',
     run_id: 'run-1',
     exported_at: '2026-08-07T00:00:00.000Z',
     summary: { error_count: 2, error_step_count: 1, scanned_agent_count: 1 },
     run_error: 'Plugin execution failed',
+    agent_errors: [{ agent_id: 'main', agent_span_id: null, error_message: 'Plugin execution failed' }],
     provenance: { completeness: 'complete' },
     errors: [{
       agent_id: 'main',
@@ -73,6 +74,32 @@ test('test_download_report_contains_full_paginated_error_context_when_step_faile
     }],
   })
   assert.deepEqual(requestedCursors, [{ cursor: 0, limit: 500 }, { cursor: 1, limit: 500 }])
+})
+
+test('test_exception_count_includes_run_and_nested_agent_errors_when_subagent_failed', async () => {
+  // Arrange
+  const rootTree = {
+    agent_id: 'main',
+    error_message: 'Root failed',
+    tasks: [{ loops: [{ id: 'root-loop', error_count: 2 }] }],
+    subagents: [{ span_id: 'agent-span-1' }],
+  }
+  const childTree = {
+    agent_id: 'researcher',
+    error_message: 'Child failed',
+    tasks: [{ loops: [{ id: 'child-loop', error_message: 'Tool failed', error_count: 0 }] }],
+  }
+
+  // Act
+  const count = await countExecutionErrors({
+    sessionId: 'session-1',
+    runId: 'run-1',
+    rootTree,
+    fetchTree: async (_sessionId, _runId, spanId) => spanId === 'agent-span-1' ? childTree : null,
+  })
+
+  // Assert
+  assert.equal(count, 5)
 })
 
 test('test_download_report_includes_subagent_errors_when_nested_agent_failed', async () => {
@@ -107,4 +134,48 @@ test('test_download_report_includes_subagent_errors_when_nested_agent_failed', a
   // Assert
   assert.equal(report.errors[0].agent_span_id, 'agent-span-1')
   assert.equal(report.errors[0].error_events[0].error_message, 'Child failure')
+})
+
+test('test_displayed_exception_count_matches_download_summary_when_nested_agents_failed', async () => {
+  // Arrange
+  const rootTree = {
+    agent_id: 'main',
+    error_message: 'Root failed',
+    tasks: [{
+      id: 'root-task',
+      loops: [{ id: 'root-loop', error_count: 2 }],
+    }],
+    subagents: [{ span_id: 'agent-span-1' }],
+  }
+  const childTree = {
+    agent_id: 'reviewer',
+    error_message: 'Child failed',
+    tasks: [{
+      id: 'child-task',
+      loops: [{ id: 'child-loop', error_count: 3 }],
+    }],
+  }
+  const fetchTree = async (_sessionId, _runId, spanId) => (
+    spanId === 'agent-span-1' ? childTree : null
+  )
+
+  // Act
+  const [displayedCount, report] = await Promise.all([
+    countExecutionErrors({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      rootTree,
+      fetchTree,
+    }),
+    buildExecutionErrorReport({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      rootTree,
+      fetchTree,
+      fetchDetail: async () => ({ items: [], next_cursor: null }),
+    }),
+  ])
+
+  // Assert
+  assert.equal(displayedCount, report.summary.error_count)
 })

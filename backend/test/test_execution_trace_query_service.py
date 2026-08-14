@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from application.session.execution_trace_query_service import ExecutionTraceQueryService, _tree_cache
 from domain.session.acl.transcript_reader import TranscriptNotFoundError
 from domain.session.model.trace_span import TraceSpan
 from domain.session.service.execution_trace_projector import ExecutionTraceProjector
@@ -36,6 +36,54 @@ async def test_returns_execution_tree_when_repositories_are_async() -> None:
     assert result.id == "main"
     session_repository.find_by_id.assert_awaited_once_with("session-1")
     project_repository.find_by_id.assert_awaited_once_with("project-1")
+
+
+@pytest.mark.asyncio
+async def test_rebuilds_cached_tree_when_run_version_changes() -> None:
+    # Arrange
+    _tree_cache.clear()
+    trace_repository = Mock()
+    trace_repository.find_run_version = AsyncMock(side_effect=[1, 2])
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(),
+        project_repository=Mock(),
+        trace_span_repository=trace_repository,
+        transcript_reader=Mock(),
+    )
+    first_tree = SimpleNamespace(id="first")
+    updated_tree = SimpleNamespace(id="updated")
+    service.get_execution_tree = AsyncMock(side_effect=[first_tree, updated_tree])
+
+    # Act
+    await service._get_cached_tree("session-1", "run-1")
+    result = await service._get_cached_tree("session-1", "run-1")
+
+    # Assert
+    assert result is updated_tree
+
+
+@pytest.mark.asyncio
+async def test_reuses_cached_tree_when_run_version_is_unchanged() -> None:
+    # Arrange
+    _tree_cache.clear()
+    trace_repository = Mock()
+    trace_repository.find_run_version = AsyncMock(side_effect=[3, 3])
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(),
+        project_repository=Mock(),
+        trace_span_repository=trace_repository,
+        transcript_reader=Mock(),
+    )
+    tree = SimpleNamespace(id="stable")
+    service.get_execution_tree = AsyncMock(return_value=tree)
+
+    # Act
+    await service._get_cached_tree("session-1", "run-1")
+    result = await service._get_cached_tree("session-1", "run-1")
+
+    # Assert
+    assert result is tree
+    service.get_execution_tree.assert_awaited_once()
 
 
 @pytest.mark.asyncio

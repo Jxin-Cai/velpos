@@ -59,6 +59,8 @@ class SubagentPlaceholder:
     agent_id: str | None
     transcript_path: str | None
     span_id: str | None
+    status: str = "unknown"
+    duration_ms: int = 0
 
     @property
     def is_expandable(self) -> bool:
@@ -105,6 +107,8 @@ class AgentLoop:
                 "span_id": event.metadata.get("span_id"),
                 "agent_id": event.metadata.get("agent_id"),
                 "transcript_path": event.metadata.get("transcript_path"),
+                "status": event.metadata.get("status") or "unknown",
+                "duration_ms": max(int(event.metadata.get("duration_ms") or 0), 0),
                 "is_expandable": bool(event.metadata.get("span_id")),
             }
             for event in self.events

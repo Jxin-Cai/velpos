@@ -27,6 +27,8 @@ class SubagentPlaceholderDto(BaseModel):
     agent_id: str | None = None
     transcript_path: str | None = None
     span_id: str | None = None
+    status: str = "unknown"
+    duration_ms: int = 0
     is_expandable: bool = False
 
 

@@ -30,6 +30,7 @@ from infr.client.claude_event_pump import (
     TurnPhase,
 )
 from infr.client.claude_settings_env import load_claude_settings_env
+from application.session.native_otel_config import build_native_otel_env
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +114,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._lock = asyncio.Lock()
         # Lock for protecting client lifecycle (connect/disconnect)
         self._client_lock = asyncio.Lock()
-        # Trace collector for observability hooks (set externally)
-        self._trace_collector: Any | None = None
-        self._hooks_merge_fn: Callable | None = None
-        # session_id -> run_id ref (mutable list for hook closures to track current run)
-        self._trace_run_id_refs: dict[str, list[str]] = {}
 
     def _set_state(self, session_id: str, state: str) -> None:
         self._session_states[session_id] = state
@@ -146,39 +142,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     def set_persist_pending_request_context_fn(self, fn: Callable[[str, dict[str, Any] | None], Any]) -> None:
         """Set the callback for persisting pending request context."""
         self._persist_pending_request_context_fn = fn
-
-    def set_trace_collector(self, collector: Any) -> None:
-        """Set the TraceCollector for observability hooks injection."""
-        self._trace_collector = collector
-
-    def set_hooks_merge_fn(
-        self, fn: Callable[[str, list[str], Any, dict | None], dict | None]
-    ) -> None:
-        """Inject the observability hooks merge strategy from application layer."""
-        self._hooks_merge_fn = fn
-
-    def update_trace_run_id(self, session_id: str, run_id: str) -> None:
-        """Update the current run_id for a session's trace hooks."""
-        ref = self._trace_run_id_refs.get(session_id)
-        if ref:
-            ref[0] = run_id
-
-    def _merge_with_observability_hooks(
-        self,
-        session_id: str,
-        hooks: dict | None,
-    ) -> dict | None:
-        if not self._trace_collector or not self._trace_collector.enabled:
-            return hooks
-        if self._hooks_merge_fn is None:
-            return hooks
-
-        run_id_ref = self._trace_run_id_refs.get(session_id)
-        if run_id_ref is None:
-            run_id_ref = [""]
-            self._trace_run_id_refs[session_id] = run_id_ref
-
-        return self._hooks_merge_fn(session_id, run_id_ref, self._trace_collector, hooks)
 
     async def _persist_pending_request_context(
         self,
@@ -267,7 +230,10 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             hooks=hooks,
             enable_file_checkpointing=enable_file_checkpointing,
             extra_args=extra_args,
-            env=load_claude_settings_env(),
+            env=build_native_otel_env(
+                session_id,
+                inherited=load_claude_settings_env(),
+            ),
         )
         options = ClaudeAgentOptions(
             **common_kwargs,
@@ -559,8 +525,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     ) -> tuple[ClaudeSDKClient, bool]:
         perm_mode = self._session_permission_modes.get(session_id, self._permission_mode)
 
-        merged_hooks = self._merge_with_observability_hooks(session_id, hooks)
-
         async with self._client_lock:
             await self._disconnect_unlocked(session_id)
 
@@ -576,7 +540,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 max_turns=max_turns,
                 max_budget_usd=max_budget_usd,
                 output_format=output_format,
-                hooks=merged_hooks,
+                hooks=hooks,
                 enable_file_checkpointing=enable_file_checkpointing,
             )
             self._clients[session_id] = client
@@ -667,7 +631,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         pending_permission = self._pending_permission_tasks.pop(session_id, None)
         if pending_permission is not None and not pending_permission.done():
             pending_permission.cancel()
-        self._trace_run_id_refs.pop(session_id, None)
         self._sdk_session_ids.pop(session_id, None)
         self._session_cwds.pop(session_id, None)
         self._session_permission_modes.pop(session_id, None)

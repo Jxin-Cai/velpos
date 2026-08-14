@@ -4,4 +4,12 @@ export { default as TraceSpanRow } from './ui/TraceSpanRow.vue'
 export { default as ExecutionTreePanel } from './ui/ExecutionTreePanel.vue'
 export { useTraceTree } from './model/useTraceTree'
 export { useExecutionTree } from './model/useExecutionTree'
-export { fetchTraceTree, fetchTraceRuns, fetchSpanDetail, fetchExecutionTree, fetchLoopDetail } from './api/traceApi'
+export {
+  fetchTraceTree,
+  fetchTraceRuns,
+  fetchExecutionEvents,
+  fetchTelemetrySummary,
+  fetchSpanDetail,
+  fetchExecutionTree,
+  fetchLoopDetail,
+} from './api/traceApi'

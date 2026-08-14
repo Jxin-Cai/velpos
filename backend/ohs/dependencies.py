@@ -337,40 +337,28 @@ async def _fail_execution_on_dispatch_error(
 
 # ── Trace Collector (observability spans) ──
 from application.session.trace_collector import TraceCollector
+from infr.repository.execution_ledger_event_repository_impl import ExecutionLedgerEventRepositoryImpl
 from infr.repository.trace_span_repository_impl import TraceSpanRepositoryImpl
 
 
 @asynccontextmanager
-async def _trace_repository_scope():
+async def _trace_persistence_scope():
     from infr.config.database import async_session_factory
     async with async_session_factory() as db_session:
-        yield TraceSpanRepositoryImpl(db_session)
+        yield (
+            TraceSpanRepositoryImpl(db_session),
+            ExecutionLedgerEventRepositoryImpl(db_session),
+        )
 
 
 def _create_trace_collector() -> TraceCollector:
     return TraceCollector(
-        repository_factory=_trace_repository_scope,
+        persistence_factory=_trace_persistence_scope,
         broadcast_fn=_connection_manager.broadcast,
     )
 
 
 _trace_collector = _create_trace_collector()
-_claude_agent_gateway.set_trace_collector(_trace_collector)
-
-
-def _merge_observability_hooks(
-    session_id: str,
-    run_id_ref: list[str],
-    trace_collector,
-    hooks: dict | None,
-) -> dict | None:
-    from application.session.trace_hooks import create_observability_hooks, merge_hooks
-
-    obs_hooks = create_observability_hooks(session_id, run_id_ref, trace_collector)
-    return merge_hooks(hooks, obs_hooks)
-
-
-_claude_agent_gateway.set_hooks_merge_fn(_merge_observability_hooks)
 
 
 async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
@@ -850,6 +838,12 @@ async def get_trace_span_repository(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> TraceSpanRepositoryImpl:
     return TraceSpanRepositoryImpl(db_session)
+
+
+async def get_execution_ledger_event_repository(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> ExecutionLedgerEventRepositoryImpl:
+    return ExecutionLedgerEventRepositoryImpl(db_session)
 
 
 async def get_execution_trace_query_service(

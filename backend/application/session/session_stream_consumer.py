@@ -44,98 +44,6 @@ class SessionStreamConsumer:
             int(os.getenv("CLAUDE_STREAM_MAX_SILENT_TIMEOUTS", "0")),
         )
 
-    @staticmethod
-    def _tool_uses_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
-        if not isinstance(content, dict):
-            return []
-        return [
-            block for block in content.get("blocks", [])
-            if isinstance(block, dict) and block.get("type") == "tool_use"
-        ]
-
-    def _create_llm_turn_span(
-        self,
-        session_id: str,
-        run_id: str,
-        content: dict[str, Any],
-        tool_uses: list[dict[str, Any]],
-        parent_tool_use_id: str | None = None,
-    ) -> None:
-        from application.session.trace_redaction import sanitize_and_truncate
-
-        text_parts: list[str] = []
-        thinking_parts: list[str] = []
-        if isinstance(content, dict):
-            for block in content.get("blocks", []):
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(str(block.get("text", "")))
-                elif isinstance(block, dict) and block.get("type") == "thinking":
-                    thinking_parts.append(str(block.get("thinking", "")))
-        preview = "\n".join(text_parts) if text_parts else None
-        thinking_preview = "\n".join(thinking_parts) if thinking_parts else None
-
-        metadata = {}
-        if tool_uses:
-            metadata["tool_names"] = [str(item.get("name") or "unknown") for item in tool_uses]
-            metadata["tool_use_ids"] = [str(item.get("id") or "") for item in tool_uses]
-        if parent_tool_use_id:
-            metadata["parent_tool_use_id"] = parent_tool_use_id
-        if thinking_preview:
-            metadata["thinking_preview"] = sanitize_and_truncate(thinking_preview, max_chars=4000)
-
-        previous = self._trace_collector.find_latest_running_llm_turn(session_id, run_id)
-        if previous:
-            self._trace_collector.complete_span(previous.id)
-        main_agent_span = self._trace_collector.find_main_agent_span(session_id, run_id)
-        subagent_span = self._trace_collector.find_subagent_by_tool_use_id(
-            session_id,
-            parent_tool_use_id,
-            run_id=run_id,
-        )
-
-        turn_span_id = self._trace_collector.create_span(
-            session_id=session_id,
-            run_id=run_id,
-            span_type="llm_turn",
-            name="subagent assistant" if subagent_span else "assistant",
-            parent_span_id=(
-                subagent_span.id
-                if subagent_span
-                else (main_agent_span.id if main_agent_span else None)
-            ),
-            agent_id=subagent_span.agent_id if subagent_span else "main",
-            output_preview=sanitize_and_truncate(preview, max_chars=4000),
-            metadata=metadata,
-        )
-        if turn_span_id and tool_uses:
-            self._trace_collector.reconcile_turn_tools(
-                session_id,
-                run_id,
-                turn_span_id,
-                tool_uses,
-            )
-
-    def _record_tool_results(
-        self,
-        session_id: str,
-        run_id: str,
-        content: dict[str, Any],
-    ) -> None:
-        from application.session.trace_redaction import sanitize_and_truncate
-
-        if not isinstance(content, dict):
-            return
-        for result in content.get("results", []):
-            if not isinstance(result, dict):
-                continue
-            self._trace_collector.record_tool_result(
-                session_id=session_id,
-                run_id=run_id,
-                tool_use_id=str(result.get("tool_use_id") or "") or None,
-                output_preview=sanitize_and_truncate(result.get("content")),
-                is_error=bool(result.get("is_error", False)),
-            )
-
     def finish_trace_run(
         self,
         session_id: str,
@@ -174,9 +82,6 @@ class SessionStreamConsumer:
         last_save_time = loop.time()
         save_interval = 2.0
 
-        update_trace_run_id = getattr(self._claude_agent_gateway, "update_trace_run_id", None)
-        if callable(update_trace_run_id):
-            update_trace_run_id(session.session_id, run_id)
         self.start_trace_run(session.session_id, run_id)
 
         saw_context_input_usage = False
@@ -284,20 +189,14 @@ class SessionStreamConsumer:
                 if sdk_uuid:
                     session.set_sdk_uuid_for_last_user_message(sdk_uuid)
 
-                tool_uses = self._tool_uses_from_content(message.content)
-                tool_names = [str(item.get("name") or "") for item in tool_uses if item.get("name")]
+                tool_names = [
+                    str(block.get("name"))
+                    for block in message.content.get("blocks", [])
+                    if isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and block.get("name")
+                ] if isinstance(message.content, dict) else []
                 tool_count += len(tool_names)
-
-                if msg_type_str == "assistant" and self._trace_collector and self._trace_collector.enabled:
-                    self._create_llm_turn_span(
-                        session.session_id,
-                        run_id,
-                        message.content,
-                        tool_uses,
-                        parent_tool_use_id=msg_dict.get("parent_tool_use_id"),
-                    )
-                elif msg_type_str == "tool_result" and self._trace_collector and self._trace_collector.enabled:
-                    self._record_tool_results(session.session_id, run_id, message.content)
 
                 if msg_type_str != "system":
                     logger.info(
@@ -373,23 +272,6 @@ class SessionStreamConsumer:
                             input_tokens=msg_dict["input_tokens"],
                             output_tokens=msg_dict["output_tokens"],
                         )
-
-                    if self._trace_collector and self._trace_collector.enabled:
-                        turn = self._trace_collector.find_latest_llm_turn(
-                            session.session_id, run_id
-                        )
-                        if turn:
-                            usage_meta = {
-                                "input_tokens": msg_dict["input_tokens"],
-                                "output_tokens": msg_dict["output_tokens"],
-                            }
-                            if msg_dict.get("model"):
-                                usage_meta["model"] = msg_dict["model"]
-                            if msg_dict.get("stop_reason"):
-                                usage_meta["stop_reason"] = msg_dict["stop_reason"]
-                            self._trace_collector.update_span_details(
-                                turn.id, metadata=usage_meta
-                            )
 
                 if "sdk_session_id" in msg_dict:
                     new_sid = msg_dict["sdk_session_id"]

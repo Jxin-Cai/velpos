@@ -1,6 +1,7 @@
 import { ref, reactive, computed, onScopeDispose, watch } from 'vue'
 import { useSession } from '@entities/session'
 import { fetchExecutionTree, fetchLoopDetail } from '../api/traceApi'
+import { traceRunVersion } from '../lib/traceHistory'
 
 const NodeStatus = Object.freeze({
   IDLE: 'idle',
@@ -18,6 +19,7 @@ export function useExecutionTree() {
   const loading = ref(false)
   const error = ref('')
   let refreshTimer = null
+  let refreshPending = false
   let loadRequestId = 0
   let loadedContextKey = null
 
@@ -46,7 +48,7 @@ export function useExecutionTree() {
     return `${sessionId}:${runId}:${agentSpanId || 'main'}`
   }
 
-  function resetViewerState(result) {
+  function resetViewerState() {
     selectedLoopId.value = null
     loopDetails.clear()
     loopLoadState.clear()
@@ -54,9 +56,6 @@ export function useExecutionTree() {
     inlineSubagents.clear()
     expandedTasks.clear()
     expandedLoops.clear()
-    for (const task of result?.tasks || []) {
-      expandedTasks.add(task.id)
-    }
   }
 
   function reconcileViewerState(result) {
@@ -69,13 +68,6 @@ export function useExecutionTree() {
     }
     for (const loopId of expandedLoops) {
       if (!loopIds.has(loopId)) expandedLoops.delete(loopId)
-    }
-
-    // Newly announced tasks default to expanded without reopening tasks that
-    // the user explicitly collapsed before the live refresh.
-    const previousTaskIds = new Set((tree.value?.tasks || []).map(task => task.id))
-    for (const task of tasks) {
-      if (!previousTaskIds.has(task.id)) expandedTasks.add(task.id)
     }
 
     if (selectedLoopId.value && !loopIds.has(selectedLoopId.value)) {
@@ -97,7 +89,7 @@ export function useExecutionTree() {
       if (isSameContext) {
         reconcileViewerState(result)
       } else {
-        resetViewerState(result)
+        resetViewerState()
       }
       tree.value = result
       loadedContextKey = nextContextKey
@@ -124,8 +116,21 @@ export function useExecutionTree() {
 
     loopLoadState.set(key, NodeStatus.LOADING)
     try {
-      const result = await fetchLoopDetail(sessionId, runId, loopId, agentSpanId)
-      loopDetails.set(key, result)
+      const items = []
+      const visitedCursors = new Set()
+      let cursor = 0
+      let total = 0
+      do {
+        if (visitedCursors.has(cursor)) {
+          throw new Error('Loop detail pagination returned a repeated cursor')
+        }
+        visitedCursors.add(cursor)
+        const page = await fetchLoopDetail(sessionId, runId, loopId, agentSpanId, cursor, 500)
+        items.push(...(page.items || []))
+        total = Math.max(Number(page.total) || 0, items.length)
+        cursor = page.next_cursor
+      } while (cursor != null)
+      loopDetails.set(key, { items, next_cursor: null, total })
       loopLoadState.set(key, NodeStatus.LOADED)
     } catch (err) {
       loopLoadState.set(key, NodeStatus.ERROR)
@@ -261,15 +266,21 @@ export function useExecutionTree() {
     loadTree(sessionId, runId)
   }
 
+  function runPendingRefresh() {
+    if (!refreshPending) return
+    if (loading.value) {
+      refreshTimer = setTimeout(runPendingRefresh, 250)
+      return
+    }
+    refreshPending = false
+    refreshSummary()
+  }
+
   function debouncedRefresh() {
-    if (loading.value) return
     if (!selectedRunId.value || !currentSessionId.value) return
+    refreshPending = true
     clearTimeout(refreshTimer)
-    refreshTimer = setTimeout(() => {
-      if (!loading.value && selectedRunId.value && currentSessionId.value) {
-        refreshSummary()
-      }
-    }, REFRESH_DEBOUNCE_MS)
+    refreshTimer = setTimeout(runPendingRefresh, REFRESH_DEBOUNCE_MS)
   }
 
   const traceSpans = computed(() => {
@@ -278,9 +289,9 @@ export function useExecutionTree() {
   })
 
   watch(
-    () => traceSpans.value.length,
-    (newLen, oldLen) => {
-      if (oldLen != null && newLen !== oldLen && tree.value) {
+    () => traceRunVersion(traceSpans.value, selectedRunId.value),
+    (version, previousVersion) => {
+      if (previousVersion != null && version !== previousVersion && tree.value) {
         debouncedRefresh()
       }
     },
@@ -288,6 +299,7 @@ export function useExecutionTree() {
 
   onScopeDispose(() => {
     clearTimeout(refreshTimer)
+    refreshPending = false
     loadRequestId += 1
   })
 

@@ -93,7 +93,7 @@ const retrySequence = computed(() => {
 
 const THINKING_KEYWORDS = ['retry', 'error', 'fallback', 'failed', 'alternative', 'workaround']
 
-const timelineItems = computed(() => events.value.flatMap((event, sourceIndex) => {
+const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
   if (event.type === 'tool_result' && pairedResultIds.value.has(event.tool_use_id)) return []
   if (event.type === 'tool_use' && subagentToolIds.value.has(event.tool_use_id)) return []
 
@@ -319,17 +319,16 @@ function itemDuration(item) {
         </span>
       </div>
 
-      <div class="timeline-heading">
+      <div class="event-list-heading">
         <div>
-          <h4>Event timeline</h4>
-          <p>Each model turn is paired with its direct input; tool results are paired by call ID.</p>
+          <h4>Recorded events</h4>
+          <p>Model turns and tool calls are paired with their captured input and result payloads.</p>
         </div>
         <span v-if="hasMore" class="more-badge">More available</span>
       </div>
 
-      <ol v-if="timelineItems.length" class="event-timeline">
-        <li v-for="(item, index) in timelineItems" :key="item.id" class="timeline-item" :class="[`timeline-item--${item.kind}`, { 'has-keywords': item.thinkingKeywords?.length }]">
-          <span class="timeline-marker" aria-hidden="true">{{ index + 1 }}</span>
+      <ol v-if="eventItems.length" class="recorded-event-list">
+        <li v-for="item in eventItems" :key="item.id" class="recorded-event-item" :class="[`recorded-event-item--${item.kind}`, { 'has-keywords': item.thinkingKeywords?.length }]">
           <details class="event-card" :open="item.kind !== 'thinking'">
             <summary class="event-summary">
               <span class="event-icon" aria-hidden="true">
@@ -368,8 +367,8 @@ function itemDuration(item) {
             </div>
 
             <div class="event-body" :class="{ 'event-body--split': item.input != null && item.output != null }">
-              <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Input" />
-              <SpanPayloadViewer v-if="item.output != null" :payload="item.output" label="Output" />
+              <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Complete input" start-expanded />
+              <SpanPayloadViewer v-if="item.output != null" :payload="item.output" label="Complete output" start-expanded />
               <div v-if="item.input == null && item.output == null" class="event-no-content">No payload was recorded for this event.</div>
             </div>
 
@@ -431,14 +430,11 @@ function itemDuration(item) {
 .detail-provenance { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 35%, var(--border-subtle)); border-radius: 8px; background: color-mix(in srgb, var(--color-warning, #f59e0b) 6%, var(--bg-secondary)); color: var(--text-secondary); font-size: 11px; }
 .execution-error { padding: 9px 12px; border-left: 2px solid var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error, #ef4444) 8%, var(--bg-secondary)); color: var(--color-error, #ef4444); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .provenance-tag, .more-badge { padding: 2px 6px; border-radius: 4px; background: var(--bg-tertiary); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
-.timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2px; }
-.timeline-heading h4 { margin: 0; color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.timeline-heading p { margin: 3px 0 0; color: var(--text-tertiary); font-size: 11px; }
-.event-timeline { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.timeline-item { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; }
-.timeline-item:not(:last-child)::before { content: ''; position: absolute; top: 30px; bottom: -14px; left: 14px; width: 1px; background: var(--border-subtle); }
-.timeline-marker { position: relative; z-index: 1; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border-subtle); border-radius: 50%; background: var(--dialog-surface); color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; font-weight: 600; }
-.timeline-item--tool .timeline-marker { border-color: color-mix(in srgb, var(--text-accent) 40%, var(--border-subtle)); color: var(--text-accent); }
+.event-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2px; }
+.event-list-heading h4 { margin: 0; color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.event-list-heading p { margin: 3px 0 0; color: var(--text-tertiary); font-size: 11px; }
+.recorded-event-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.recorded-event-item { min-width: 0; }
 .event-card { min-width: 0; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-primary); transition: border-color 160ms ease, box-shadow 160ms ease; }
 .event-card[open] { border-color: color-mix(in srgb, var(--text-secondary) 25%, var(--border-subtle)); box-shadow: 0 2px 8px rgba(0, 0, 0, .04); }
 .event-summary { min-height: 52px; display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; list-style: none; }
@@ -466,8 +462,8 @@ function itemDuration(item) {
 .thinking-preview { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: 10px; font-weight: 400; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
 .thinking-keywords { display: inline-flex; gap: 3px; margin-left: 4px; }
 .keyword-tag { padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-warning, #f59e0b) 15%, transparent); color: var(--color-warning, #d97706); font-size: 8px; font-weight: 600; text-transform: uppercase; }
-.timeline-item--thinking .event-card { border-left: 2px dashed var(--color-warning, #f59e0b); background: color-mix(in srgb, var(--color-warning, #f59e0b) 3%, var(--bg-primary)); }
-.timeline-item--thinking .event-icon { color: var(--color-warning, #d97706); border-color: color-mix(in srgb, var(--color-warning) 35%, var(--border-subtle)); }
+.recorded-event-item--thinking .event-card { border-left: 2px dashed var(--color-warning, #f59e0b); background: color-mix(in srgb, var(--color-warning, #f59e0b) 3%, var(--bg-primary)); }
+.recorded-event-item--thinking .event-icon { color: var(--color-warning, #d97706); border-color: color-mix(in srgb, var(--color-warning) 35%, var(--border-subtle)); }
 .summary-chevron { flex: 0 0 auto; color: var(--text-tertiary); transition: transform 160ms ease; }
 .event-card[open] .summary-chevron { transform: rotate(180deg); }
 .event-body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--bg-secondary) 45%, var(--bg-primary)); }

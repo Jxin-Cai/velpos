@@ -10,10 +10,9 @@ const props = defineProps({
   getLoopLoadState: { type: Function, required: true },
   loadLoopDetail: { type: Function, required: true },
 })
+const emit = defineEmits(['open-subagent'])
 
-const expandedTasks = reactive(new Set(
-  (props.tree?.tasks || []).map(task => task.id),
-))
+const expandedTasks = reactive(new Set())
 const expandedLoops = reactive(new Set())
 
 function toggleTask(taskId) {
@@ -39,6 +38,12 @@ function loopDetail(loopId) {
 
 function loopState(loopId) {
   return props.getLoopLoadState(loopId, props.agentSpanId)
+}
+
+function subagentsForLoop(loop) {
+  if (loop?.subagents?.length) return loop.subagents
+  const ids = new Set(loop?.subagent_tool_use_ids || [])
+  return (props.tree?.subagents || []).filter(subagent => ids.has(subagent.tool_use_id))
 }
 
 function pairedEvents(items = []) {
@@ -101,6 +106,14 @@ function pairedEvents(items = []) {
           @select-loop="toggleLoop"
           @toggle="toggleLoop(loop.id)"
         >
+          <ExecutionTreeRow
+            v-for="subagent in subagentsForLoop(loop)"
+            :key="subagent.tool_use_id"
+            :node="subagent"
+            node-type="subagent"
+            :depth="2"
+            @open-subagent="emit('open-subagent', $event)"
+          />
           <div class="inline-step-detail">
             <div v-if="loopState(loop.id) === 'loading'" class="inline-state">Loading step...</div>
             <div v-else-if="loopState(loop.id) === 'error'" class="inline-state inline-state--error">

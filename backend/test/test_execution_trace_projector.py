@@ -544,6 +544,8 @@ def test_returns_lazy_subagent_placeholder_when_agent_tool_has_trace_metadata() 
         tool_use_id="agent-tool",
         metadata={"subagent": "researcher", "transcript_path": "/tmp/agent.jsonl"},
     )
+    span.status = TraceSpan.STATUS_COMPLETED
+    span.duration_ms = 21_000
     records = [
         {
             "type": "assistant",
@@ -571,6 +573,8 @@ def test_returns_lazy_subagent_placeholder_when_agent_tool_has_trace_metadata() 
     assert placeholder.agent_id == "agent-1"
     assert placeholder.transcript_path == "/tmp/agent.jsonl"
     assert placeholder.span_id == span.id
+    assert placeholder.status == "completed"
+    assert placeholder.duration_ms == 21_000
     assert placeholder.is_expandable is True
 
 

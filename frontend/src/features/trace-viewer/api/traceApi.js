@@ -14,6 +14,24 @@ export async function fetchTraceRuns(sessionId) {
   return get(`/sessions/${sessionId}/traces`, TRACE_REQUEST_OPTIONS)
 }
 
+export async function fetchExecutionEvents(sessionId, runId, afterSequence = 0, limit = 500) {
+  const params = new URLSearchParams({
+    after_sequence: String(Math.max(afterSequence, 0)),
+    limit: String(limit),
+  })
+  return get(
+    `/sessions/${sessionId}/runs/${runId}/execution-events?${params.toString()}`,
+    TRACE_REQUEST_OPTIONS,
+  )
+}
+
+export async function fetchTelemetrySummary(sessionId, runId) {
+  return get(
+    `/sessions/${sessionId}/runs/${runId}/telemetry-summary`,
+    TRACE_REQUEST_OPTIONS,
+  )
+}
+
 export async function fetchSpanDetail(sessionId, spanId) {
   return get(`/sessions/${sessionId}/traces/${spanId}`, TRACE_REQUEST_OPTIONS)
 }

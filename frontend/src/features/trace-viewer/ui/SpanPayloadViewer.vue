@@ -5,9 +5,10 @@ import hljs from 'highlight.js/lib/common'
 const props = defineProps({
   payload: { type: [String, Number, Boolean, Array, Object], default: null },
   label: { type: String, default: '' },
+  startExpanded: { type: Boolean, default: false },
 })
 
-const expanded = ref(false)
+const expanded = ref(props.startExpanded)
 const enlarged = ref(false)
 const copied = ref(false)
 const wrapLines = ref(true)
