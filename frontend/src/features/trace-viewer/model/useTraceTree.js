@@ -6,6 +6,7 @@ import {
   mergeTraceSpans,
   resolveSelectedRunId,
 } from '../lib/traceHistory'
+import { countSubagentInvocations, subagentInvocationKey } from '../lib/traceAnalysis'
 
 export function useTraceTree() {
   const { currentSessionId, getTraceSpansFor, setTraceSpansFor } = useSession()
@@ -55,7 +56,13 @@ export function useTraceTree() {
     const cancelledCount = spans.filter(s => s.status === 'cancelled').length
     const runningCount = spans.filter(s => s.status === 'running').length
     const abandonedCount = spans.filter(s => s.status === 'abandoned').length
-    const subagentCount = spans.filter(s => s.span_type === 'subagent').length
+    const subagentCount = countSubagentInvocations(spans)
+    const runningSubagentCount = new Set(
+      spans
+        .filter(span => span.status === 'running')
+        .map(subagentInvocationKey)
+        .filter(Boolean),
+    ).size
     const turnCount = spans.filter(s => (
       s.span_type === 'llm_turn'
       && Boolean(s.input_preview || s.output_preview || s.metadata?.thinking_preview || s.metadata?.tool_names?.length)
@@ -70,6 +77,7 @@ export function useTraceTree() {
       runningCount,
       abandonedCount,
       subagentCount,
+      runningSubagentCount,
       turnCount,
     }
   })

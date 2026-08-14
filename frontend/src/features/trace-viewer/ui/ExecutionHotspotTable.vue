@@ -89,6 +89,13 @@ function subagentName(subagent) {
             <small>{{ row.steps.length }} steps</small>
             <small v-if="row.wallDurationMs !== row.activeDurationMs">{{ formatDuration(row.wallDurationMs) }} wall</small>
           </span>
+          <span v-if="row.subagents.length" class="task-agent-summary" :aria-label="`${row.subagents.length} subagents used by this task`">
+            <span v-for="subagent in row.subagents.slice(0, 2)" :key="subagent.tool_use_id || subagent.span_id">
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="4" width="10" height="8" rx="2"/><path d="M8 2v2M6 8h.01M10 8h.01"/></svg>
+              {{ subagentName(subagent) }}
+            </span>
+            <span v-if="row.subagents.length > 2">+{{ row.subagents.length - 2 }}</span>
+          </span>
           <svg class="task-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
         </summary>
 
@@ -133,7 +140,7 @@ function subagentName(subagent) {
 .metric-scale span:first-child { color: var(--text-secondary); }
 .task-hotspot-card { border-bottom: 1px solid var(--border-subtle); }
 .task-hotspot-card:last-child { border-bottom: 0; }
-.task-hotspot-summary { min-height: 62px; display: grid; grid-template-columns: 28px minmax(180px, 1fr) 104px minmax(90px, .55fr) 84px 14px; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; list-style: none; }
+.task-hotspot-summary { min-height: 62px; display: grid; grid-template-columns: 28px minmax(180px, 1fr) 104px minmax(90px, .55fr) 84px minmax(110px, auto) 14px; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; list-style: none; }
 .task-hotspot-summary::-webkit-details-marker { display: none; }
 .task-hotspot-summary:hover { background: var(--bg-hover); }
 .task-hotspot-summary:focus-visible, .step-open:focus-visible, .step-chevron:focus-visible, .step-agent-links button:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
@@ -141,6 +148,9 @@ function subagentName(subagent) {
 .task-name, .task-metric, .task-secondary, .step-name, .step-duration, .step-tokens { min-width: 0; display: grid; gap: 2px; }
 .task-name small, .task-metric small, .task-secondary small, .step-name small, .step-duration small, .step-tokens small { color: var(--text-tertiary); font-size: 9px; }
 .task-name strong { overflow: hidden; color: var(--text-primary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-agent-summary { min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; }
+.task-agent-summary > span { max-width: 150px; display: inline-flex; align-items: center; gap: 3px; overflow: hidden; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--text-accent) 25%, var(--border-subtle)); border-radius: 4px; background: color-mix(in srgb, var(--text-accent) 6%, var(--bg-primary)); color: var(--text-accent); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.task-agent-summary svg { flex: 0 0 auto; }
 .task-metric b, .step-duration b, .step-tokens b { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
 .task-bar, .step-bar { height: 7px; overflow: hidden; border-radius: 999px; background: var(--bg-tertiary); }
 .task-bar i, .step-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #38bdf8, #f59e0b 72%, #ef4444); }
@@ -166,14 +176,14 @@ function subagentName(subagent) {
 .task-hotspot-empty { padding: 34px 16px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
 @media (max-width: 760px) {
   .task-hotspot-summary { grid-template-columns: 24px minmax(130px, 1fr) 90px 14px; }
-  .task-bar, .task-secondary { display: none; }
+  .task-bar, .task-secondary, .task-agent-summary { display: none; }
   .task-step-list { padding-left: 14px; }
   .task-step-row { grid-template-columns: 22px minmax(120px, 1fr) 60px minmax(70px, auto) 30px; }
   .step-bar, .step-tokens, .step-status { display: none; }
 }
 @container (max-width: 650px) {
   .task-hotspot-summary { grid-template-columns: 24px minmax(130px, 1fr) 90px 14px; }
-  .task-bar, .task-secondary { display: none; }
+  .task-bar, .task-secondary, .task-agent-summary { display: none; }
   .task-step-list { padding-left: 14px; }
   .task-step-row { grid-template-columns: 22px minmax(120px, 1fr) 60px minmax(70px, auto) 30px; }
   .step-bar, .step-tokens, .step-status { display: none; }

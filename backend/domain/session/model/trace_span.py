@@ -1,9 +1,30 @@
 from __future__ import annotations
 
+import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+
+
+_SAFE_TRANSCRIPT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def parse_claude_agent_result(value: Any) -> dict[str, Any]:
+    """Decode the structured result embedded in Claude's Agent OTel span."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    payload = value.strip()
+    if payload.startswith("[TOOL RESULT: Agent]"):
+        payload = payload.removeprefix("[TOOL RESULT: Agent]").lstrip()
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 @dataclass
@@ -49,6 +70,54 @@ class TraceSpan:
     @property
     def is_native_otel(self) -> bool:
         return self.metadata.get("telemetry.source") == "claude_code_otel"
+
+    @property
+    def is_subagent_invocation(self) -> bool:
+        if self.span_type == self.SPAN_TYPE_SUBAGENT:
+            return True
+        if self.span_type != self.SPAN_TYPE_TOOL_CALL:
+            return False
+        return (
+            self.name.casefold() == "agent"
+            or bool(self.metadata.get("subagent_type"))
+            or bool(self.metadata.get("agent_type"))
+        )
+
+    @property
+    def subagent_invocation_key(self) -> str | None:
+        if not self.is_subagent_invocation:
+            return None
+        return (
+            self.tool_use_id
+            or self.metadata.get("tool_use_id")
+            or self.metadata.get("parent_tool_use_id")
+            or self.id
+        )
+
+    @property
+    def resolved_subagent_agent_id(self) -> str | None:
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        result = parse_claude_agent_result(metadata.get("new_context") or self.output_preview)
+        value = self.agent_id or metadata.get("agent_id") or result.get("agentId") or result.get("agent_id")
+        if not isinstance(value, str) or not _SAFE_TRANSCRIPT_ID.fullmatch(value):
+            return None
+        return value
+
+    @property
+    def resolved_subagent_transcript_path(self) -> str | None:
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        explicit = metadata.get("transcript_path") or metadata.get("agent_transcript_path")
+        if isinstance(explicit, str) and explicit:
+            return explicit
+        agent_id = self.resolved_subagent_agent_id
+        claude_session_id = metadata.get("session.id")
+        if (
+            not agent_id
+            or not isinstance(claude_session_id, str)
+            or not _SAFE_TRANSCRIPT_ID.fullmatch(claude_session_id)
+        ):
+            return None
+        return f"{claude_session_id}/subagents/agent-{agent_id}.jsonl"
 
     @classmethod
     def create(

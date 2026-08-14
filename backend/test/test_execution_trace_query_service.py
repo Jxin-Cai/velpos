@@ -210,6 +210,66 @@ async def test_reconstructs_subagent_from_owned_spans_when_transcript_path_is_mi
 
 
 @pytest.mark.asyncio
+async def test_reads_complete_subagent_transcript_when_official_result_contains_agent_id() -> None:
+    # Arrange
+    session = SimpleNamespace(project_id="project-1")
+    project = SimpleNamespace(dir_path="/workspace")
+    subagent = TraceSpan.create(
+        session_id="session-1",
+        run_id="run-1",
+        span_type=TraceSpan.SPAN_TYPE_TOOL_CALL,
+        name="Agent",
+        tool_use_id="agent-tool",
+        metadata={
+            "telemetry.source": "claude_code_otel",
+            "session.id": "claude-session-1",
+            "new_context": '[TOOL RESULT: Agent]\n{"agentId":"child-1"}',
+        },
+    )
+    transcript_reader = Mock()
+    transcript_reader.read.return_value = SimpleNamespace(
+        records=(
+            {
+                "type": "assistant",
+                "uuid": "assistant-1",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use",
+                    "id": "read-1",
+                    "name": "Read",
+                    "input": {"file_path": "app.py"},
+                }]},
+            },
+            {
+                "type": "user",
+                "uuid": "result-1",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "read-1",
+                    "content": "file contents",
+                }]},
+            },
+        ),
+        has_more=False,
+        next_cursor=0,
+    )
+    service = ExecutionTraceQueryService(
+        session_repository=Mock(find_by_id=AsyncMock(return_value=session)),
+        project_repository=Mock(find_by_id=AsyncMock(return_value=project)),
+        trace_span_repository=Mock(
+            find_by_id=AsyncMock(return_value=subagent),
+            find_by_run=AsyncMock(return_value=[subagent]),
+        ),
+        transcript_reader=transcript_reader,
+    )
+
+    # Act
+    result = await service.get_execution_tree("session-1", "run-1", subagent.id)
+
+    # Assert
+    assert result.tasks[0].loops[0].tool_names == ("Read",)
+
+
+@pytest.mark.asyncio
 async def test_reconstructs_main_execution_tree_when_transcript_file_is_missing() -> None:
     # Arrange
     session = SimpleNamespace(project_id="project-1", messages=[])

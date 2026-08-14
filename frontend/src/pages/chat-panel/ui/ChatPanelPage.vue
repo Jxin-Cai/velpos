@@ -108,10 +108,13 @@ const runtimePanelVisible = ref(localStorage.getItem('pf_runtime_panel') === 'tr
 
 const tracePanelVisible = ref(false)
 const selectedTraceRunId = ref(null)
+const selectedTraceSubagentSpanId = ref(null)
 
-function openMessageTrace(runId) {
+function openMessageTrace(target) {
+  const runId = typeof target === 'string' ? target : target?.runId
   if (!runId) return
   selectedTraceRunId.value = runId
+  selectedTraceSubagentSpanId.value = typeof target === 'string' ? null : (target?.subagentSpanId || null)
   tracePanelVisible.value = true
 }
 
@@ -2072,6 +2075,7 @@ function formatMaxTokens(n) {
   <TracePanel
     :visible="tracePanelVisible"
     :initial-run-id="selectedTraceRunId"
+    :initial-subagent-span-id="selectedTraceSubagentSpanId"
     @close="tracePanelVisible = false"
   />
   </div>

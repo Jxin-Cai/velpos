@@ -5,6 +5,13 @@ export { default as ExecutionTreePanel } from './ui/ExecutionTreePanel.vue'
 export { useTraceTree } from './model/useTraceTree'
 export { useExecutionTree } from './model/useExecutionTree'
 export {
+  countSubagentInvocations,
+  buildSubagentRoster,
+  isSubagentTraceSpan,
+  subagentDisplayName,
+  subagentInvocationKey,
+} from './lib/traceAnalysis'
+export {
   fetchTraceTree,
   fetchTraceRuns,
   fetchExecutionEvents,

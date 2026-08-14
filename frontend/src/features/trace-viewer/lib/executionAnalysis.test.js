@@ -6,6 +6,7 @@ import {
   executionMetricPercent,
   executionStepTokens,
   rankExecutionTasks,
+  taskSubagents,
 } from './executionAnalysis.js'
 
 function task(id, loops) {
@@ -76,4 +77,19 @@ test('test_uses_one_global_scale_when_step_durations_differ_across_tasks', () =>
   // Assert
   assert.equal(Math.round(shortPercent * 10) / 10, 2.2)
   assert.equal(longestPercent, 100)
+})
+
+test('test_lists_unique_subagents_when_task_calls_agents_across_steps', () => {
+  // Arrange
+  const agent = { tool_use_id: 'agent-1', span_id: 'span-1', subagent: 'Explore' }
+  const source = task('task-with-agent', [
+    { ...loop('one', 100, 0, 0, 1), subagents: [agent] },
+    { ...loop('two', 100, 0, 0, 2), subagents: [agent] },
+  ])
+
+  // Act
+  const result = taskSubagents(source)
+
+  // Assert
+  assert.deepEqual(result, [agent])
 })

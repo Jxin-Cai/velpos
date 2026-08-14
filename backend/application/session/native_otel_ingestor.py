@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from domain.session.model.execution_ledger_event import ExecutionLedgerEvent
-from domain.session.model.trace_span import TraceSpan
+from domain.session.model.trace_span import TraceSpan, parse_claude_agent_result
 from domain.session.repository.execution_ledger_event_repository import (
     ExecutionLedgerEventRepository,
 )
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _SPAN_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{16}$")
 _TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+_SAFE_AGENT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _SPAN_TYPE_BY_NAME = {
     # Preserve the established projection vocabulary while retaining the
@@ -202,6 +203,17 @@ def _span_from_payload(
         error = attributes.get("error") or (raw_span.get("status") or {}).get("message")
         if error:
             metadata["error"] = error
+
+    if name == "claude_code.tool" and str(attributes.get("tool_name") or "").casefold() == "agent":
+        result = parse_claude_agent_result(attributes.get("new_context"))
+        result_agent_id = result.get("agentId") or result.get("agent_id")
+        claude_session_id = attributes.get("session.id") or resource_attrs.get("session.id")
+        if isinstance(result_agent_id, str) and _SAFE_AGENT_ID.fullmatch(result_agent_id):
+            metadata["agent_id"] = result_agent_id
+            if isinstance(claude_session_id, str) and _SAFE_AGENT_ID.fullmatch(claude_session_id):
+                metadata["agent_transcript_path"] = (
+                    f"{claude_session_id}/subagents/agent-{result_agent_id}.jsonl"
+                )
 
     input_payload = _payload_from_attributes(
         attributes,

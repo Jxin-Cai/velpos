@@ -25,6 +25,7 @@ import {
 import {
   TracePresentation,
   annotateTraceConcurrency,
+  buildSubagentRoster,
   buildTraceAnalysis,
   filterTraceRows,
   filterTraceTree,
@@ -37,6 +38,7 @@ const ViewMode = Object.freeze({ EXECUTION: 'execution', RAW_SPAN: 'raw_span', E
 const props = defineProps({
   visible: { type: Boolean, default: false },
   initialRunId: { type: String, default: null },
+  initialSubagentSpanId: { type: String, default: null },
 })
 
 const emit = defineEmits(['close'])
@@ -57,6 +59,7 @@ const exporting = ref('')
 const exportError = ref('')
 let telemetryRequestId = 0
 let exceptionRequestId = 0
+let handledInitialSubagentFocus = ''
 
 const {
   session: activeSession,
@@ -78,6 +81,7 @@ const {
   loading,
   error,
   selectRun,
+  loadTraceForRun,
   loadTraceHistory,
 } = useTraceTree()
 
@@ -90,6 +94,27 @@ watch(selectedRunId, () => {
   focusSubagentRequest.value = null
   exceptionCount.value = 0
   exportError.value = ''
+})
+
+watch([
+  () => props.visible,
+  () => props.initialSubagentSpanId,
+  selectedRunId,
+], ([visible, spanId, runId]) => {
+  if (!visible || !spanId || !runId) return
+  const requestKey = `${runId}:${spanId}`
+  if (handledInitialSubagentFocus === requestKey) return
+  handledInitialSubagentFocus = requestKey
+  viewMode.value = ViewMode.EXECUTION
+  focusSubagentRequest.value = {
+    spanId,
+    name: 'Subagent',
+    nonce: (focusSubagentRequest.value?.nonce || 0) + 1,
+  }
+}, { immediate: true, flush: 'post' })
+
+watch(() => props.visible, (visible) => {
+  if (!visible) handledInitialSubagentFocus = ''
 })
 
 watch(viewMode, () => {
@@ -238,13 +263,10 @@ const sessionState = computed(() => {
 
 const traceAnalysis = computed(() => buildTraceAnalysis(traceTree.value || []))
 const sessionSubagents = computed(() => {
-  const seen = new Set()
-  return (executionTree.value?.subagents || []).filter((subagent) => {
-    const key = subagent.span_id || subagent.tool_use_id
-    if (!key || seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return buildSubagentRoster(
+    flattenTraceNodes(traceTree.value || []),
+    executionTree.value?.subagents || [],
+  )
 })
 const highLatencyThreshold = computed(() => traceAnalysis.value.thresholds.p90)
 
@@ -295,6 +317,7 @@ function openSubagentTrace(subagent) {
   viewMode.value = ViewMode.EXECUTION
   focusSubagentRequest.value = {
     spanId: subagent.span_id,
+    name: subagent.subagent || subagent.agent_id || 'Subagent',
     nonce: (focusSubagentRequest.value?.nonce || 0) + 1,
   }
 }
@@ -468,7 +491,7 @@ async function exportFullTrace() {
                 class="run-selector"
                 :value="selectedRunId"
                 aria-label="选择 Trace 运行记录"
-                @change="selectRun($event.target.value)"
+                @change="loadTraceForRun($event.target.value)"
               >
                 <option v-for="rid in runIds" :key="rid" :value="rid">{{ rid }}</option>
               </select>
@@ -519,9 +542,9 @@ async function exportFullTrace() {
               <div v-if="sessionSubagents.length" class="session-agent-rail">
                 <span class="agent-rail-label"><small>Subagents</small><strong>{{ sessionSubagents.length }} used</strong></span>
                 <div class="agent-rail-list">
-                  <button v-for="subagent in sessionSubagents" :key="subagent.span_id || subagent.tool_use_id" type="button" :disabled="!subagent.span_id" @click="openSubagentTrace(subagent)">
+                  <button v-for="(subagent, index) in sessionSubagents" :key="subagent.key || subagent.span_id || subagent.tool_use_id" type="button" :disabled="!subagent.span_id" :aria-label="`Open ${subagent.subagent} execution steps`" @click="openSubagentTrace(subagent)">
                     <span class="agent-rail-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3" y="4" width="10" height="8" rx="2"/><path d="M8 2v2M6 8h.01M10 8h.01"/></svg></span>
-                    <span><strong>{{ subagent.subagent || subagent.agent_id || 'Subagent' }}</strong><small>{{ subagent.status || 'recorded' }}<template v-if="subagent.duration_ms"> · {{ formatDuration(subagent.duration_ms) }}</template></small></span>
+                    <span><small>Agent {{ index + 1 }} · {{ subagent.status || 'recorded' }}</small><strong>{{ subagent.subagent || subagent.agent_id || 'Subagent' }}</strong><small v-if="subagent.duration_ms">{{ formatDuration(subagent.duration_ms) }} · open execution steps</small><small v-else>Open execution steps</small></span>
                     <svg class="agent-rail-open" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
                   </button>
                 </div>
@@ -947,14 +970,14 @@ async function exportFullTrace() {
 .agent-rail-label small { color: var(--text-tertiary); font-size: 8px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
 .agent-rail-label strong { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
 .agent-rail-list { min-width: 0; display: flex; gap: 6px; overflow-x: auto; padding: 1px 1px 3px; scrollbar-width: thin; }
-.agent-rail-list button { min-width: 150px; max-width: 230px; min-height: 40px; display: grid; grid-template-columns: 26px minmax(0, 1fr) 12px; align-items: center; gap: 7px; padding: 5px 7px; border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle)); border-radius: 7px; background: var(--bg-primary); color: inherit; cursor: pointer; text-align: left; }
+.agent-rail-list button { min-width: 210px; max-width: 290px; min-height: 52px; display: grid; grid-template-columns: 28px minmax(0, 1fr) 12px; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle)); border-radius: 7px; background: var(--bg-primary); color: inherit; cursor: pointer; text-align: left; }
 .agent-rail-list button:hover { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 6%, var(--bg-primary)); }
 .agent-rail-list button:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
 .agent-rail-list button:disabled { opacity: .55; cursor: not-allowed; }
 .agent-rail-icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; background: color-mix(in srgb, var(--text-accent) 11%, var(--bg-secondary)); color: var(--text-accent); }
 .agent-rail-icon svg { width: 13px; fill: none; stroke: currentColor; stroke-width: 1.35; }
-.agent-rail-list button > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
-.agent-rail-list button strong { overflow: hidden; color: var(--text-primary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-rail-list button > span:nth-child(2) { min-width: 0; display: grid; gap: 1px; }
+.agent-rail-list button strong { overflow: hidden; color: var(--text-primary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-rail-list button small { overflow: hidden; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
 .agent-rail-open { color: var(--text-tertiary); }
 .telemetry-strip {

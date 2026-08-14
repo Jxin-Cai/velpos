@@ -209,6 +209,72 @@ async def test_preserves_full_tool_content_from_official_span_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_classifies_official_agent_tool_span_as_subagent_invocation() -> None:
+    # Arrange
+    repository = _SpanRepositoryStub()
+    payload = {
+        "resourceSpans": [{
+            "resource": _resource(),
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": "e" * 32,
+                    "spanId": "6" * 16,
+                    "name": "claude_code.tool",
+                    "startTimeUnixNano": "1786586401000000000",
+                    "endTimeUnixNano": "1786586402000000000",
+                    "attributes": [
+                        {"key": "tool_name", "value": {"stringValue": "Agent"}},
+                        {"key": "tool_use_id", "value": {"stringValue": "call-agent-1"}},
+                        {"key": "subagent_type", "value": {"stringValue": "Explore"}},
+                    ],
+                }],
+            }],
+        }],
+    }
+
+    # Act
+    spans = await ingest_traces(payload, repository)  # type: ignore[arg-type]
+
+    # Assert
+    assert spans[0].is_subagent_invocation is True
+    assert spans[0].subagent_invocation_key == "call-agent-1"
+
+
+@pytest.mark.asyncio
+async def test_derives_subagent_transcript_when_official_agent_result_contains_agent_id() -> None:
+    # Arrange
+    repository = _SpanRepositoryStub()
+    result = '[TOOL RESULT: Agent]\n{"status":"completed","agentId":"child-1"}'
+    payload = {
+        "resourceSpans": [{
+            "resource": _resource(),
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": "f" * 32,
+                    "spanId": "7" * 16,
+                    "name": "claude_code.tool",
+                    "startTimeUnixNano": "1786586401000000000",
+                    "endTimeUnixNano": "1786586402000000000",
+                    "attributes": [
+                        {"key": "tool_name", "value": {"stringValue": "Agent"}},
+                        {"key": "session.id", "value": {"stringValue": "claude-session-1"}},
+                        {"key": "new_context", "value": {"stringValue": result}},
+                    ],
+                }],
+            }],
+        }],
+    }
+
+    # Act
+    spans = await ingest_traces(payload, repository)  # type: ignore[arg-type]
+
+    # Assert
+    assert spans[0].resolved_subagent_transcript_path == (
+        "claude-session-1/subagents/agent-child-1.jsonl"
+    )
+
+
+@pytest.mark.asyncio
 async def test_preserves_complete_payload_when_official_span_exceeds_legacy_preview_limit() -> None:
     # Arrange
     repository = _SpanRepositoryStub()

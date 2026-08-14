@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 
 from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from domain.session.model.trace_span import TraceSpan
 from domain.session.repository.execution_ledger_event_repository import ExecutionLedgerEventRepository
 from domain.session.repository.trace_span_repository import TraceSpanRepository
 from ohs.dependencies import (
@@ -52,18 +53,27 @@ async def list_traces(
 ) -> ApiResponse[dict]:
     spans = await repo.find_by_session(session_id, limit=limit)
     runs: dict[str, list[dict[str, Any]]] = {}
+    run_spans_by_id: dict[str, list[TraceSpan]] = {}
     for span in spans:
         d = span.to_dict()
         runs.setdefault(span.run_id, []).append(d)
+        run_spans_by_id.setdefault(span.run_id, []).append(span)
 
     run_summaries = []
     for run_id, span_dicts in runs.items():
+        run_spans = run_spans_by_id[run_id]
         total_duration = max((s.get("duration_ms", 0) for s in span_dicts), default=0)
         tool_count = sum(1 for s in span_dicts if s.get("span_type") == "tool_call")
+        subagent_count = len({
+            span.subagent_invocation_key
+            for span in run_spans
+            if span.subagent_invocation_key
+        })
         run_summaries.append({
             "run_id": run_id,
             "span_count": len(span_dicts),
             "tool_count": tool_count,
+            "subagent_count": subagent_count,
             "total_duration_ms": total_duration,
             "started_time": span_dicts[0].get("started_time") if span_dicts else None,
         })

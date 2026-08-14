@@ -92,6 +92,14 @@ const errorTooltip = computed(() => {
   return parts.join(' · ')
 })
 
+const taskSubagentList = computed(() => (
+  props.nodeType === 'task' ? (props.node.subagents || []) : []
+))
+
+function subagentName(subagent) {
+  return subagent?.subagent || subagent?.agent_id || 'Subagent'
+}
+
 const meta = computed(() => {
   const parts = []
   if (props.nodeType === 'task') {
@@ -223,6 +231,20 @@ function viewEvents() {
           <span v-if="meta" class="exec-meta">{{ meta }}</span>
         </span>
       </span>
+      <span v-if="taskSubagentList.length" class="exec-task-agents" :aria-label="`${taskSubagentList.length} subagents used by this task`">
+        <button
+          v-for="subagent in taskSubagentList.slice(0, 3)"
+          :key="subagent.tool_use_id || subagent.span_id"
+          type="button"
+          :disabled="!subagent.span_id"
+          :aria-label="`Open ${subagentName(subagent)} execution steps`"
+          @click.stop="emit('open-subagent', subagent)"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="4" width="10" height="8" rx="2"/><path d="M8 2v2M6 8h.01M10 8h.01"/></svg>
+          <span>{{ subagentName(subagent) }}</span>
+        </button>
+        <span v-if="taskSubagentList.length > 3" class="exec-task-agent-more">+{{ taskSubagentList.length - 3 }}</span>
+      </span>
       <span v-if="errorCount > 0" class="exec-error-badge" :title="errorTooltip || `${errorCount} error${errorCount > 1 ? 's' : ''}`">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <circle cx="8" cy="8" r="6.25"/><path d="M8 5v3.5M8 11h.01"/>
@@ -336,6 +358,14 @@ function viewEvents() {
 .exec-name { flex: 1; min-width: 0; overflow: hidden; color: var(--text-primary); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .exec-support { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .exec-meta { margin-left: auto; flex-shrink: 0; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
+.exec-task-agents { max-width: min(42%, 460px); display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px; }
+.exec-task-agents button, .exec-task-agent-more { min-width: 0; max-width: 170px; min-height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--text-accent) 28%, var(--border-subtle)); border-radius: 6px; background: color-mix(in srgb, var(--text-accent) 6%, var(--bg-primary)); color: var(--text-accent); font-size: 9px; }
+.exec-task-agents button { cursor: pointer; }
+.exec-task-agents button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exec-task-agents button:hover { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 12%, var(--bg-primary)); }
+.exec-task-agents button:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
+.exec-task-agents button:disabled { opacity: .55; cursor: not-allowed; }
+.exec-task-agent-more { justify-content: center; color: var(--text-secondary); font-family: var(--font-mono); }
 .exec-error-badge { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 2px 6px; border-radius: 5px; background: color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent); color: var(--color-error, #ef4444); font-family: var(--font-mono); font-size: 10px; font-weight: 600; }
 .exec-error-badge svg { flex-shrink: 0; }
 .exec-spinner { width: 12px; height: 12px; flex-shrink: 0; border: 1.5px solid var(--border); border-top-color: var(--text-secondary); border-radius: 50%; animation: exec-spin 700ms linear infinite; }
@@ -389,6 +419,8 @@ function viewEvents() {
   .exec-header { gap: 5px; padding-right: 6px; }
   .exec-support { display: none; }
   .exec-meta { margin-left: 0; }
+  .exec-task-agents { max-width: 42%; }
+  .exec-task-agents button:nth-child(n+2), .exec-task-agent-more { display: none; }
   .exec-inspect-btn span { display: none; }
   .exec-inspect-btn { padding: 6px; }
   .exec-events-btn span { display: none; }

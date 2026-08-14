@@ -4,7 +4,10 @@ import {
   TracePresentation,
   annotateTraceConcurrency,
   buildTraceAnalysis,
+  buildSubagentRoster,
+  countSubagentInvocations,
   filterTraceTree,
+  isSubagentTraceSpan,
   rankTraceRows,
   spanSelfDuration,
   spanTokenCount,
@@ -91,4 +94,70 @@ test('test_marks_overlapping_sibling_spans_as_parallel_when_intervals_overlap', 
     [result.groupCount, result.maxConcurrency, result.tree[0].children[0].parallelGroup.peak],
     [1, 2, 2],
   )
+})
+
+test('test_recognizes_official_agent_tool_span_when_subagent_type_is_not_emitted', () => {
+  // Arrange
+  const span = {
+    id: 'agent-tool-span',
+    span_type: 'tool_call',
+    name: 'Agent',
+    tool_use_id: 'call-agent-1',
+    metadata: { 'telemetry.source': 'claude_code_otel' },
+  }
+
+  // Act / Assert
+  assert.equal(isSubagentTraceSpan(span), true)
+})
+
+test('test_deduplicates_tool_and_dedicated_span_when_both_describe_same_subagent', () => {
+  // Arrange
+  const spans = [
+    { id: 'tool', span_type: 'tool_call', name: 'Agent', tool_use_id: 'call-agent-1', metadata: {} },
+    { id: 'agent', span_type: 'subagent', name: 'Explore', tool_use_id: 'call-agent-1', metadata: {} },
+  ]
+
+  // Act / Assert
+  assert.equal(countSubagentInvocations(spans), 1)
+})
+
+test('test_builds_clickable_subagent_roster_from_official_agent_tool_spans', () => {
+  // Arrange
+  const spans = [{
+    id: 'agent-span-1',
+    span_type: 'tool_call',
+    name: 'Agent',
+    tool_use_id: 'call-agent-1',
+    status: 'completed',
+    duration_ms: 4200,
+    metadata: { subagent_type: 'Explore' },
+  }]
+
+  // Act
+  const roster = buildSubagentRoster(spans)
+
+  // Assert
+  assert.deepEqual(roster, [{
+    key: 'call-agent-1',
+    tool_use_id: 'call-agent-1',
+    span_id: 'agent-span-1',
+    subagent: 'Explore',
+    status: 'completed',
+    duration_ms: 4200,
+    is_expandable: true,
+  }])
+})
+
+test('test_keeps_official_agent_tool_when_subagent_filter_selected', () => {
+  // Arrange
+  const source = [{ id: 'run', span_type: 'run', children: [
+    { id: 'agent-tool', span_type: 'tool_call', name: 'Agent', metadata: { subagent_type: 'Explore' }, children: [] },
+    { id: 'bash-tool', span_type: 'tool_call', name: 'Bash', metadata: {}, children: [] },
+  ] }]
+
+  // Act
+  const filtered = filterTraceTree(source, 'subagents', 0)
+
+  // Assert
+  assert.deepEqual(filtered[0].children.map(child => child.id), ['agent-tool'])
 })

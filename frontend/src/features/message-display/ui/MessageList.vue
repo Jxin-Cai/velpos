@@ -4,6 +4,7 @@ import { useSession } from '@entities/session'
 import { visibleUserText } from '../lib/userMessageText'
 import { finalAnswerIndex, groupConversationMessages } from '../lib/conversationGrouping'
 import MessageItem from './MessageItem.vue'
+import { subagentDisplayName, subagentInvocationKey } from '@features/trace-viewer'
 
 const props = defineProps({
   messages: {
@@ -59,24 +60,41 @@ const traceSummaryByRun = computed(() => {
         toolCallCount: 0,
         subagentCount: 0,
         runningSubagentCount: 0,
+        subagentKeys: new Set(),
+        runningSubagentKeys: new Set(),
+        subagentsByKey: new Map(),
       })
     }
     const summary = summaries.get(span.run_id)
     summary.statuses.add(span.status)
     summary.spanCount += 1
     if (span.span_type === 'tool_call') summary.toolCallCount += 1
-    if (span.span_type === 'subagent') {
-      summary.subagentCount += 1
-      if (span.status === 'running') summary.runningSubagentCount += 1
+    const subagentKey = subagentInvocationKey(span)
+    if (subagentKey) {
+      summary.subagentKeys.add(subagentKey)
+      if (span.status === 'running') summary.runningSubagentKeys.add(subagentKey)
+      const existing = summary.subagentsByKey.get(subagentKey)
+      summary.subagentsByKey.set(subagentKey, {
+        key: subagentKey,
+        name: subagentDisplayName(span) === 'Subagent' ? (existing?.name || 'Subagent') : subagentDisplayName(span),
+        spanId: span.id || existing?.spanId || null,
+        status: span.status || existing?.status || 'recorded',
+      })
     }
   }
   for (const summary of summaries.values()) {
+    summary.subagentCount = summary.subagentKeys.size
+    summary.runningSubagentCount = summary.runningSubagentKeys.size
+    summary.subagents = [...summary.subagentsByKey.values()]
     if (summary.statuses.has('running')) summary.status = 'running'
     else if (summary.statuses.has('failed')) summary.status = 'failed'
     else if (summary.statuses.has('cancelled')) summary.status = 'cancelled'
     else if (summary.statuses.has('denied')) summary.status = 'denied'
     else summary.status = 'completed'
     delete summary.statuses
+    delete summary.subagentKeys
+    delete summary.runningSubagentKeys
+    delete summary.subagentsByKey
   }
   return summaries
 })

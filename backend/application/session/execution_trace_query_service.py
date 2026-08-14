@@ -101,8 +101,8 @@ class ExecutionTraceQueryService:
                 if span is None:
                     raise BusinessException("agent span is not a subagent")
             agent_span = span
-            transcript_path = span.metadata.get("transcript_path") or span.metadata.get("agent_transcript_path")
-            agent_id = span.agent_id or agent_span_id
+            transcript_path = span.resolved_subagent_transcript_path
+            agent_id = span.resolved_subagent_agent_id or agent_span_id
 
         projection_spans = spans
         if agent_span is not None:

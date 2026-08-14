@@ -10,6 +10,7 @@ import {
   ExecutionPresentation,
   buildExecutionTaskRows,
   rankExecutionTasks,
+  taskSubagents,
 } from '../lib/executionAnalysis'
 
 const props = defineProps({
@@ -90,8 +91,12 @@ const filteredTasks = computed(() => {
       loops: (task.loops || []).filter(loop => (loop.error_count || 0) > 0),
     }))
 })
-const displayTasks = computed(() => filteredTasks.value.map((task, index) => ({ ...task, sequence: index + 1 })))
-const taskAnalysis = computed(() => buildExecutionTaskRows(displayTasks.value))
+const displayTasks = computed(() => filteredTasks.value.map((task, index) => ({
+  ...task,
+  sequence: index + 1,
+  subagents: taskSubagents(task, tree.value?.subagents || []),
+})))
+const taskAnalysis = computed(() => buildExecutionTaskRows(displayTasks.value, tree.value?.subagents || []))
 const rankedTasks = computed(() => rankExecutionTasks(taskAnalysis.value, execPresentation.value))
 const plannedTaskCount = computed(() => tasks.value.filter(task => task.explicit).length)
 const totalSteps = computed(() => tasks.value.reduce((count, task) => count + (task.loops?.length || 0), 0))
@@ -180,11 +185,13 @@ watch([() => props.focusSubagent, tree], ([request]) => {
   if (!request?.spanId || !tree.value) return
   const requestKey = `${request.spanId}:${request.nonce || ''}`
   if (handledFocusRequest === requestKey) return
-  const subagent = (tree.value.subagents || []).find(item => item.span_id === request.spanId)
-  if (subagent) {
-    handledFocusRequest = requestKey
-    openSubagent(subagent, true)
+  const subagent = (tree.value.subagents || []).find(item => item.span_id === request.spanId) || {
+    span_id: request.spanId,
+    subagent: request.name || 'Subagent',
+    is_expandable: true,
   }
+  handledFocusRequest = requestKey
+  openSubagent(subagent, true)
 }, { immediate: true })
 
 watch(tree, (value) => {
@@ -358,6 +365,7 @@ watch(selectedLoopId, async (loopId) => {
               :depth="0"
               :expanded="expandedTasks.has(task.id)"
               @toggle="toggleTask(task.id)"
+              @open-subagent="openSubagent"
             >
               <template v-for="(loop, loopIndex) in task.loops" :key="loop.id">
               <!-- Causality label between loops -->

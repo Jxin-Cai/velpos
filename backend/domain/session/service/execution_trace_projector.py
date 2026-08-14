@@ -299,15 +299,7 @@ class ExecutionTraceProjector:
         by_id = {span.id: span for span in spans}
         result: dict[str, TraceSpan] = {}
         for span in spans:
-            if (
-                span.span_type == TraceSpan.SPAN_TYPE_TOOL_CALL
-                and span.tool_use_id
-                and span.metadata.get("telemetry.source") == "claude_code_otel"
-                and (
-                    span.metadata.get("subagent_type")
-                    or span.name in {"Agent", "Task", "agent", "task"}
-                )
-            ):
+            if span.is_subagent_invocation and span.tool_use_id:
                 result[span.tool_use_id] = span
             if span.span_type != TraceSpan.SPAN_TYPE_SUBAGENT:
                 continue
@@ -545,8 +537,8 @@ class ExecutionTraceProjector:
         return SubagentPlaceholder(
             tool_use_id=tool_id,
             subagent=self._text(metadata.get("subagent") or metadata.get("subagent_type") or data.get("subagent_type")),
-            agent_id=(span.agent_id if span else None) or self._text(metadata.get("agent_id")),
-            transcript_path=self._text(metadata.get("transcript_path") or metadata.get("agent_transcript_path")),
+            agent_id=(span.resolved_subagent_agent_id if span else None),
+            transcript_path=(span.resolved_subagent_transcript_path if span else None),
             span_id=span.id if span else None,
             status=span.status if span else "unknown",
             duration_ms=max(int(span.duration_ms or 0), 0) if span else 0,

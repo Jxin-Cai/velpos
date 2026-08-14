@@ -17,12 +17,29 @@ export function executionMetricPercent(value, maximum) {
   return Math.min(metric / scale * 100, 100)
 }
 
+export function taskSubagents(task, executionSubagents = []) {
+  const byToolUseId = new Map((executionSubagents || [])
+    .filter(subagent => subagent?.tool_use_id)
+    .map(subagent => [subagent.tool_use_id, subagent]))
+  const result = new Map()
+  for (const loop of task?.loops || []) {
+    const candidates = loop.subagents?.length
+      ? loop.subagents
+      : (loop.subagent_tool_use_ids || []).map(toolUseId => byToolUseId.get(toolUseId)).filter(Boolean)
+    for (const subagent of candidates) {
+      const key = subagent?.tool_use_id || subagent?.span_id
+      if (key && !result.has(key)) result.set(key, subagent)
+    }
+  }
+  return [...result.values()]
+}
+
 function timestamp(value) {
   const parsed = Date.parse(value || '')
   return Number.isFinite(parsed) ? parsed : null
 }
 
-export function buildExecutionTaskRows(tasks) {
+export function buildExecutionTaskRows(tasks, executionSubagents = []) {
   const rows = (tasks || []).map((task, taskIndex) => {
     const steps = (task.loops || []).map((loop, stepIndex) => ({
       loop,
@@ -40,6 +57,7 @@ export function buildExecutionTaskRows(tasks) {
       task,
       sequence: task.sequence || taskIndex + 1,
       steps,
+      subagents: taskSubagents(task, executionSubagents),
       activeDurationMs,
       wallDurationMs,
       tokens: steps.reduce((total, step) => total + step.tokens, 0),

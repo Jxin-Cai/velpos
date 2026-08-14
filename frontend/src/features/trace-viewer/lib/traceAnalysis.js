@@ -32,6 +32,75 @@ export function spanTokenCount(span) {
     + Math.max(Number(metadata.output_tokens) || 0, 0)
 }
 
+export function subagentInvocationKey(span) {
+  if (!span) return null
+  const metadata = span.metadata || {}
+  const isDedicatedSpan = span.span_type === 'subagent'
+  const isAgentTool = span.span_type === 'tool_call' && (
+    String(span.name || '').toLowerCase() === 'agent'
+    || Boolean(metadata.subagent_type || metadata.agent_type)
+  )
+  if (!isDedicatedSpan && !isAgentTool) return null
+  return span.tool_use_id
+    || metadata.tool_use_id
+    || metadata.parent_tool_use_id
+    || span.id
+}
+
+export function isSubagentTraceSpan(span) {
+  return subagentInvocationKey(span) != null
+}
+
+export function countSubagentInvocations(spans = []) {
+  return new Set(spans.map(subagentInvocationKey).filter(Boolean)).size
+}
+
+export function subagentDisplayName(value) {
+  const metadata = value?.metadata || {}
+  const explicitName = value?.subagent
+    || metadata.subagent_type
+    || metadata.agent_type
+    || value?.agent_id
+  if (explicitName) return explicitName
+  const spanName = String(value?.name || '').trim()
+  return spanName && spanName.toLowerCase() !== 'agent' ? spanName : 'Subagent'
+}
+
+export function buildSubagentRoster(spans = [], executionSubagents = []) {
+  const roster = new Map()
+  for (const span of spans) {
+    const key = subagentInvocationKey(span)
+    if (!key) continue
+    roster.set(key, {
+      key,
+      tool_use_id: span.tool_use_id || span.metadata?.tool_use_id || key,
+      span_id: span.id || null,
+      subagent: subagentDisplayName(span),
+      status: span.status || 'recorded',
+      duration_ms: Math.max(Number(span.duration_ms) || 0, 0),
+      is_expandable: Boolean(span.id),
+    })
+  }
+  for (const subagent of executionSubagents || []) {
+    const key = subagent.tool_use_id || subagent.span_id
+    if (!key) continue
+    const existing = roster.get(key) || {}
+    roster.set(key, {
+      ...existing,
+      ...subagent,
+      key,
+      subagent: subagentDisplayName(subagent) === 'Subagent'
+        ? (existing.subagent || 'Subagent')
+        : subagentDisplayName(subagent),
+      span_id: subagent.span_id || existing.span_id || null,
+      status: subagent.status || existing.status || 'recorded',
+      duration_ms: Math.max(Number(subagent.duration_ms ?? existing.duration_ms) || 0, 0),
+      is_expandable: subagent.is_expandable !== false && Boolean(subagent.span_id || existing.span_id),
+    })
+  }
+  return [...roster.values()]
+}
+
 export function buildTraceAnalysis(nodes = []) {
   const spans = flattenTraceNodes(nodes)
   const actionable = spans.filter(span => !CONTAINER_SPAN_TYPES.has(span.span_type))
@@ -223,7 +292,7 @@ function traceNodeMatches(node, filter, highLatencyThreshold) {
   if (filter === 'errors') return ['failed', 'denied', 'abandoned'].includes(node.status)
   if (filter === 'slow') return highLatencyThreshold > 0 && (Number(node.duration_ms) || 0) >= highLatencyThreshold
   if (filter === 'tools') return ['tool_call', 'tool_execution'].includes(node.span_type)
-  if (filter === 'subagents') return node.span_type === 'subagent'
+  if (filter === 'subagents') return isSubagentTraceSpan(node)
   return true
 }
 
