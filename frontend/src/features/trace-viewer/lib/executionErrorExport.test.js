@@ -46,7 +46,7 @@ test('test_download_report_contains_full_paginated_error_context_when_step_faile
 
   // Assert
   assert.deepEqual(report, {
-    format: 'velpos.execution-errors.v2',
+    format: 'velpos.execution-errors.v3',
     session_id: 'session-1',
     run_id: 'run-1',
     exported_at: '2026-08-07T00:00:00.000Z',
@@ -64,13 +64,7 @@ test('test_download_report_contains_full_paginated_error_context_when_step_faile
         error_message: 'Invalid plugin response', error_count: 1,
         error_summary: { total: 1, failed_tools: ['plugin.tool'] },
       },
-      events: [
-        { type: 'tool_use', tool_use_id: 'tool-1', content: { input: true } },
-        { type: 'tool_result', tool_use_id: 'tool-1', is_error: true, error_message: 'boom' },
-      ],
-      error_events: [
-        { type: 'tool_result', tool_use_id: 'tool-1', is_error: true, error_message: 'boom' },
-      ],
+      event: { type: 'tool_result', tool_use_id: 'tool-1', is_error: true, error_message: 'boom' },
     }],
   })
   assert.deepEqual(requestedCursors, [{ cursor: 0, limit: 500 }, { cursor: 1, limit: 500 }])
@@ -133,7 +127,7 @@ test('test_download_report_includes_subagent_errors_when_nested_agent_failed', a
 
   // Assert
   assert.equal(report.errors[0].agent_span_id, 'agent-span-1')
-  assert.equal(report.errors[0].error_events[0].error_message, 'Child failure')
+  assert.equal(report.errors[0].event.error_message, 'Child failure')
 })
 
 test('test_displayed_exception_count_matches_download_summary_when_nested_agents_failed', async () => {
@@ -178,4 +172,52 @@ test('test_displayed_exception_count_matches_download_summary_when_nested_agents
 
   // Assert
   assert.equal(displayedCount, report.summary.error_count)
+})
+
+test('test_errors_array_length_matches_error_count_when_step_has_multiple_error_events', async () => {
+  // Arrange: one step with 3 error events should produce 3 flat error entries
+  const rootTree = {
+    agent_id: 'main',
+    tasks: [{
+      id: 'task-1',
+      subject: 'Run batch',
+      status: 'failed',
+      loops: [{
+        id: 'loop-1',
+        sequence: 1,
+        error_count: 3,
+        tool_names: ['batch.run'],
+      }],
+    }],
+  }
+  const fetchDetail = async () => ({
+    items: [
+      { type: 'tool_use', tool_use_id: 'tool-1', content: {} },
+      { type: 'tool_result', tool_use_id: 'tool-1', is_error: true, error_message: 'err-1' },
+      { type: 'tool_use', tool_use_id: 'tool-2', content: {} },
+      { type: 'tool_result', tool_use_id: 'tool-2', is_error: true, error_message: 'err-2' },
+      { type: 'tool_use', tool_use_id: 'tool-3', content: {} },
+      { type: 'tool_result', tool_use_id: 'tool-3', is_error: true, error_message: 'err-3' },
+    ],
+    next_cursor: null,
+  })
+
+  // Act
+  const report = await buildExecutionErrorReport({
+    sessionId: 'session-1',
+    runId: 'run-1',
+    rootTree,
+    fetchTree: async () => null,
+    fetchDetail,
+  })
+
+  // Assert: each error event is a separate entry in errors array
+  assert.equal(report.errors.length, 3)
+  assert.equal(report.summary.error_count, 3)
+  assert.equal(report.errors[0].event.error_message, 'err-1')
+  assert.equal(report.errors[1].event.error_message, 'err-2')
+  assert.equal(report.errors[2].event.error_message, 'err-3')
+  // All share the same step context
+  assert.equal(report.errors[0].step.id, 'loop-1')
+  assert.equal(report.errors[2].step.id, 'loop-1')
 })

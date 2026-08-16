@@ -73,26 +73,49 @@ export async function buildExecutionErrorReport({
 
   await visitTree(rootTree)
 
-  const stepErrorCount = errorSteps.reduce(
-    (count, item) => count + Math.max(item.step.error_count, item.step.error_message ? 1 : 0),
-    0,
-  )
-  const runErrorCount = agentErrors.length
+  const flatErrors = []
+  for (const step of errorSteps) {
+    const errorEvents = step.error_events
+    if (errorEvents.length > 0) {
+      for (const event of errorEvents) {
+        flatErrors.push({
+          agent_id: step.agent_id,
+          agent_span_id: step.agent_span_id,
+          task: step.task,
+          step: step.step,
+          event,
+        })
+      }
+    } else {
+      const inferredCount = Math.max(step.step.error_count, step.step.error_message ? 1 : 0)
+      for (let i = 0; i < inferredCount; i++) {
+        flatErrors.push({
+          agent_id: step.agent_id,
+          agent_span_id: step.agent_span_id,
+          task: step.task,
+          step: step.step,
+          event: null,
+        })
+      }
+    }
+  }
+
+  const errorCount = flatErrors.length + agentErrors.length
 
   return {
-    format: 'velpos.execution-errors.v2',
+    format: 'velpos.execution-errors.v3',
     session_id: sessionId,
     run_id: runId,
     exported_at: exportedAt,
     summary: {
-      error_count: stepErrorCount + runErrorCount,
+      error_count: errorCount,
       error_step_count: errorSteps.length,
       scanned_agent_count: scannedAgentCount,
     },
     run_error: rootTree?.error_message || null,
     agent_errors: agentErrors,
     provenance: rootTree?.provenance || null,
-    errors: errorSteps,
+    errors: flatErrors,
   }
 }
 
