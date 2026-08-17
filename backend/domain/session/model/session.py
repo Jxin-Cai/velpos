@@ -377,10 +377,6 @@ class Session:
         self._cancel_requested = False
         self._updated_time = datetime.now()
 
-    def update_trace_id(self, trace_id: str) -> None:
-        self._trace_id = trace_id
-        self._updated_time = datetime.now()
-
     def clear_context(self) -> None:
         """清空会话上下文，完全重置到初始状态。
 

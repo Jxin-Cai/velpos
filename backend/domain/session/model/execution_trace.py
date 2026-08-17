@@ -27,14 +27,6 @@ class ProjectionProvenance:
     warnings: tuple[str, ...] = ()
 
 
-class ErrorCategory(str, Enum):
-    PERMISSION_DENIED = "permission_denied"
-    TIMEOUT = "timeout"
-    INVALID_INPUT = "invalid_input"
-    EXECUTION_FAILURE = "execution_failure"
-    NETWORK_ERROR = "network_error"
-    UNKNOWN = "unknown"
-
 
 @dataclass(frozen=True)
 class ExecutionEvent:

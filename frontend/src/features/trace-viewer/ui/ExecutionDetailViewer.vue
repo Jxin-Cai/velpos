@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import { formatDuration as _formatDuration } from '@shared/lib/formatTime'
 import SpanPayloadViewer from './SpanPayloadViewer.vue'
 import InlineSubagentTree from './InlineSubagentTree.vue'
 
@@ -237,14 +238,7 @@ function errorCategoryLabel(category) {
   return map[category] || 'Error'
 }
 
-function formatDuration(ms) {
-  if (!ms || ms <= 0) return '—'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`
-  const minutes = Math.floor(ms / 60000)
-  const seconds = Math.round((ms % 60000) / 1000)
-  return `${minutes}m ${seconds}s`
-}
+const formatDuration = (ms) => _formatDuration(ms, { zeroValue: '—' })
 
 function formatTime(value) {
   if (!value) return ''

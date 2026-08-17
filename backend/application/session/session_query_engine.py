@@ -54,6 +54,20 @@ _shared_state = SessionExecutionState()
 
 
 class SessionQueryEngine:
+    @staticmethod
+    def _serialize_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item.get("id", ""),
+                "filename": item.get("filename", "attachment"),
+                "mime_type": item.get("mime_type", "application/octet-stream"),
+                "size_bytes": item.get("size_bytes", 0),
+                "path": item.get("path", ""),
+                "sha256": item.get("sha256", ""),
+            }
+            for item in attachments
+        ]
+
     _TRANSIENT_RESULT_ERROR_MARKERS = (
         "channel_unavailable",
         "service temporarily unavailable",
@@ -581,6 +595,7 @@ class SessionQueryEngine:
                     prompt=actual_prompt,
                     cwd=session.project_dir,
                     sdk_session_id=resume_sdk_session_id,
+                    enable_file_checkpointing=True,
                 )
                 return await self._stream_consumer.consume(session, msg_stream, run_id)
             raise
@@ -997,17 +1012,7 @@ class SessionQueryEngine:
                     "message_id": queued.client_message_id,
                     "prompt": queued.prompt,
                     "image_count": len(queued.image_paths),
-                    "attachments": [
-                        {
-                            "id": item.get("id", ""),
-                            "filename": item.get("filename", "attachment"),
-                            "mime_type": item.get("mime_type", "application/octet-stream"),
-                            "size_bytes": item.get("size_bytes", 0),
-                            "path": item.get("path", ""),
-                            "sha256": item.get("sha256", ""),
-                        }
-                        for item in queued.attachments
-                    ],
+                    "attachments": self._serialize_attachments(queued.attachments),
                 },
             )
             await self._recorder.record_audit_event(
@@ -1387,17 +1392,7 @@ class SessionQueryEngine:
             "run_id": ctx.run_id,
             "prompt": queued.prompt,
             "image_count": len(queued.image_paths),
-            "attachments": [
-                {
-                    "id": item.get("id", ""),
-                    "filename": item.get("filename", "attachment"),
-                    "mime_type": item.get("mime_type", "application/octet-stream"),
-                    "size_bytes": item.get("size_bytes", 0),
-                    "path": item.get("path", ""),
-                    "sha256": item.get("sha256", ""),
-                }
-                for item in queued.attachments
-            ],
+            "attachments": self._serialize_attachments(queued.attachments),
         }
 
     @staticmethod

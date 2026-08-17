@@ -1,5 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
+import { formatDuration } from '@shared/lib/formatTime'
+import { formatTokens } from '@shared/lib/formatNumber'
 import { useSession } from '@entities/session'
 import { useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTraceTree } from '../model/useTraceTree'
@@ -305,13 +307,6 @@ const traceTiming = computed(() => {
   }
 })
 
-function formatDuration(ms) {
-  if (!ms || ms <= 0) return '0ms'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`
-}
-
 function openSubagentTrace(subagent) {
   if (!subagent?.span_id) return
   viewMode.value = ViewMode.EXECUTION
@@ -320,13 +315,6 @@ function openSubagentTrace(subagent) {
     name: subagent.subagent || subagent.agent_id || 'Subagent',
     nonce: (focusSubagentRequest.value?.nonce || 0) + 1,
   }
-}
-
-function formatTokens(value) {
-  const number = Number(value) || 0
-  if (number >= 1000000) return `${(number / 1000000).toFixed(1)}m`
-  if (number >= 1000) return `${(number / 1000).toFixed(1)}k`
-  return String(number)
 }
 
 function formatCost(value) {

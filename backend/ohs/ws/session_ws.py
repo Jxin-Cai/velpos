@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from typing import Annotated, Any, AsyncContextManager, Awaitable, Callable
 
 from application.message.attachment_application_service import AttachmentApplicationService

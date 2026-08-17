@@ -5,10 +5,11 @@ import logging
 import os
 from pathlib import Path
 
-from application.git_helpers import get_current_git_branch as _get_current_git_branch
 from collections.abc import Awaitable, Callable
-from infr.client.claude_settings_env import resolve_default_model
 from typing import Any, AsyncContextManager
+
+from application.git_helpers import get_current_git_branch as _get_current_git_branch
+from infr.client.claude_settings_env import resolve_default_model
 
 from application.session.command.clear_context_command import ClearContextCommand
 from application.session.command.create_session_command import CreateSessionCommand
@@ -388,16 +389,6 @@ class SessionApplicationService:
 
     async def list_sessions(self) -> list[Session]:
         return await self._session_repository.find_all()
-
-    def disable_im_sync(self) -> None:
-        """Disable IM sync callbacks on the query engine.
-
-        Call this when the session service is used in an inbound IM context where
-        the IM adapter handles replies directly, to prevent duplicate messages being
-        sent back to the IM channel.
-        """
-        self._query_engine._on_assistant_response = None
-        self._query_engine._on_user_message = None
 
     async def commit(self) -> None:
         """Flush and commit the current unit of work to the database."""

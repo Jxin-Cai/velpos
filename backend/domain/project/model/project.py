@@ -66,19 +66,8 @@ class Project:
             self._agents["locked_by_task"] = locked_by
         self._updated_at = datetime.now()
 
-    def lock_agent(self, task_id: str) -> None:
-        self._agents["locked_by_task"] = task_id
-        self._updated_at = datetime.now()
-
-    def unlock_agent(self) -> None:
-        self._agents.pop("locked_by_task", None)
-        self._updated_at = datetime.now()
-
     def is_agent_locked(self) -> bool:
         return bool(self._agents.get("locked_by_task"))
-
-    def is_locked_by_task(self, task_id: str) -> bool:
-        return self._agents.get("locked_by_task") == task_id
 
     @property
     def plugins(self) -> dict[str, dict]:

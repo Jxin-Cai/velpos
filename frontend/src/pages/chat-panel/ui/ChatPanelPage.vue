@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, inject, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useGlobalHotkeys } from '@shared/lib/useGlobalHotkeys'
+import { formatTokens } from '@shared/lib/formatNumber'
 import { formatDuration } from '@features/message-display'
 import { useDialogManager } from '@shared/lib/useDialogManager'
 import {
@@ -378,10 +379,6 @@ const historyPanelStyle = computed(() => ({
   zIndex: 9999,
 }))
 
-function formatTokens(n) {
-  const value = Number(n) || 0
-  return `${(value / 1000).toFixed(2)}k`
-}
 
 function formatCacheHit(usage) {
   const input = Number(usage?.input_tokens) || 0
@@ -1550,7 +1547,7 @@ function formatMaxTokens(n) {
             <div class="history-header-main">
               <span class="history-title">Query History</span>
               <span class="history-total">
-                Context: {{ formatTokens(totalUsage.context) }} / Output: {{ formatTokens(totalUsage.output) }}
+                Context: {{ formatTokens(totalUsage.context, { precision: 2 }) }} / Output: {{ formatTokens(totalUsage.output, { precision: 2 }) }}
               </span>
             </div>
             </div>
@@ -1570,8 +1567,8 @@ function formatMaxTokens(n) {
                   <span v-if="q.is_error" class="history-error-tag">Error</span>
                 </div>
                 <div class="history-item-tokens">
-                  <span>Input {{ formatTokens(q.usage?.input_tokens) }}</span>
-                  <span>Output {{ formatTokens(q.usage?.output_tokens) }}</span>
+                  <span>Input {{ formatTokens(q.usage?.input_tokens, { precision: 2 }) }}</span>
+                  <span>Output {{ formatTokens(q.usage?.output_tokens, { precision: 2 }) }}</span>
                   <span>Cache hit {{ formatCacheHit(q.usage) }}</span>
                 </div>
               </div>

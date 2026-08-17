@@ -11,3 +11,13 @@ export function formatRelativeTime(input) {
   if (diffDay < 7) return `${diffDay}d ago`
   return new Date(ts).toLocaleDateString()
 }
+
+export function formatDuration(ms, { zeroValue = '0ms' } = {}) {
+  const value = Math.max(Number(ms) || 0, 0)
+  if (value === 0) return zeroValue
+  if (value < 1000) return `${Math.round(value)}ms`
+  if (value < 60000) return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)}s`
+  const minutes = Math.floor(value / 60000)
+  const seconds = Math.round((value % 60000) / 1000)
+  return `${minutes}m ${seconds}s`
+}

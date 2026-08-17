@@ -68,10 +68,6 @@ class TraceSpan:
     STATUS_ABANDONED = "abandoned"
 
     @property
-    def is_native_otel(self) -> bool:
-        return self.metadata.get("telemetry.source") == "claude_code_otel"
-
-    @property
     def is_subagent_invocation(self) -> bool:
         if self.span_type == self.SPAN_TYPE_SUBAGENT:
             return True

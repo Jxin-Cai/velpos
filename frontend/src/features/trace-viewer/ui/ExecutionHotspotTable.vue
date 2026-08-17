@@ -1,5 +1,7 @@
 <script setup>
 import { computed } from 'vue'
+import { formatDuration } from '@shared/lib/formatTime'
+import { formatTokens } from '@shared/lib/formatNumber'
 import { executionMetricPercent } from '../lib/executionAnalysis'
 
 const props = defineProps({
@@ -31,19 +33,6 @@ function stepTitle(step) {
   const tools = step.loop.tool_names || []
   if (tools.length) return tools.join(' + ')
   return step.loop.model ? `${step.loop.model.replace(/^claude-/, '')} response` : 'Model response'
-}
-
-function formatDuration(ms) {
-  if (!ms) return '0ms'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`
-}
-
-function formatTokens(value) {
-  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}m`
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
-  return String(value || 0)
 }
 
 function metricPercent(value, maximum) {

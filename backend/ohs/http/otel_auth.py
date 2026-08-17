@@ -45,7 +45,7 @@ def authorize_otel_request(token: str | None, request: Request) -> None:
     # Missing/short tokens are never eligible for compatibility acceptance.
     if (
         token is not None
-        and len(token) >= 32
+        and len(token) >= 64
         and native_otel_accept_legacy_loopback_token()
         and _is_loopback_request(request)
     ):

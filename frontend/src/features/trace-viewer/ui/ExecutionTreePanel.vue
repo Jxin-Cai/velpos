@@ -1,5 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
+import { formatDuration } from '@shared/lib/formatTime'
+import { formatTokens } from '@shared/lib/formatNumber'
 import { useSession } from '@entities/session'
 import { useExecutionTree } from '../model/useExecutionTree'
 import ExecutionTreeRow from './ExecutionTreeRow.vue'
@@ -134,20 +136,6 @@ function causalityLabel(loops, index) {
   if (!names.length) return null
   const display = names.slice(0, 3).join(', ')
   return names.length > 3 ? `Receives results from: ${display} +${names.length - 3}` : `Receives results from: ${display}`
-}
-
-function formatDuration(ms) {
-  const value = Math.max(Number(ms) || 0, 0)
-  if (value < 1000) return `${value}ms`
-  if (value < 60000) return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)}s`
-  return `${Math.floor(value / 60000)}m ${Math.round((value % 60000) / 1000)}s`
-}
-
-function formatTokens(value) {
-  const number = Math.max(Number(value) || 0, 0)
-  if (number >= 1000000) return `${(number / 1000000).toFixed(1)}m`
-  if (number >= 1000) return `${(number / 1000).toFixed(1)}k`
-  return String(number)
 }
 
 function openSubagent(subagent, resetTrail = false) {

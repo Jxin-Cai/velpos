@@ -806,29 +806,6 @@ async def get_project_repository(
     return ProjectRepositoryImpl(db_session)
 
 
-async def get_team_repository(
-    db_session: AsyncSession = Depends(get_async_session),
-) -> TeamRepositoryImpl:
-    return TeamRepositoryImpl(db_session)
-
-
-async def get_wish_card_repository(
-    db_session: AsyncSession = Depends(get_async_session),
-) -> WishCardRepositoryImpl:
-    return WishCardRepositoryImpl(db_session)
-
-
-async def get_card_execution_repository(
-    db_session: AsyncSession = Depends(get_async_session),
-) -> CardExecutionRepositoryImpl:
-    return CardExecutionRepositoryImpl(db_session)
-
-
-async def get_handoff_repository(
-    db_session: AsyncSession = Depends(get_async_session),
-) -> HandoffRepositoryImpl:
-    return HandoffRepositoryImpl(db_session)
-
 
 def get_trace_collector() -> TraceCollector:
     return _trace_collector

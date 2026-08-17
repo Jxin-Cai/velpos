@@ -31,8 +31,6 @@ async def _get_flow_engine_service(
 ) -> FlowEngineService:
     from application.team_board.card_execution_service import CardExecutionService
     from application.team_board.leader_session_manager import LeaderSessionManager
-    from infr.client.claude_agent_gateway import ClaudeAgentGateway
-    from infr.client.connection_manager import ConnectionManager
     from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
     from infr.repository.flow_plan_repository_impl import FlowPlanRepositoryImpl
     from infr.repository.handoff_repository_impl import HandoffRepositoryImpl

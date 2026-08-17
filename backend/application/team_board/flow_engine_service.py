@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from domain.team.repository.flow_plan_repository import FlowPlanRepository
     from domain.team.repository.team_repository import TeamRepository
     from domain.team.repository.wish_card_repository import WishCardRepository
-    from domain.team.model.stage_output import StageOutput
     from domain.team.repository.stage_output_repository import StageOutputRepository
 
 logger = logging.getLogger(__name__)

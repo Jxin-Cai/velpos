@@ -18,6 +18,7 @@ class ClaudeAgentGateway(ABC):
         mcp_servers: dict | None = None,
         max_turns: int | None = None,
         max_budget_usd: float | None = None,
+        enable_file_checkpointing: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Connect to Claude and send an initial query, returning that turn's stream.
 

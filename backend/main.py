@@ -459,11 +459,30 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to close IM API gateway", exc_info=True)
 
 
-app = FastAPI(title="Velpos", version="0.1.0", lifespan=lifespan)
+from infr.config.app_config import app_config as _app_config
+
+_docs_url = "/docs" if _app_config.mode == "dev" else None
+_redoc_url = "/redoc" if _app_config.mode == "dev" else None
+_openapi_url = "/openapi.json" if _app_config.mode == "dev" else None
+
+app = FastAPI(
+    title="Velpos",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
+)
 
 _cors_origins = _parse_cors_origins(
     os.getenv("CORS_ALLOW_ORIGINS", _DEFAULT_CORS_ORIGINS)
 )
+
+if "*" in _cors_origins and _app_config.mode == "pro":
+    raise RuntimeError(
+        "Wildcard CORS origins are not allowed in production mode with credentials. "
+        "Set CORS_ALLOW_ORIGINS to specific origins."
+    )
 
 app.add_middleware(
     CORSMiddleware,

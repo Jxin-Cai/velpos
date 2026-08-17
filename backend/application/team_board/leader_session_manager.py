@@ -153,21 +153,6 @@ class LeaderSessionManager:
             )
             await self._session_service.compact_session(session_id)
 
-    async def recover_session(self, team: Team, leader_slot: AgentSlot) -> Session:
-        """Recover from an ERROR state by creating a fresh session with team state summary."""
-        session = await self._create_leader_session(team, leader_slot)
-        team.leader_session_id = session.session_id
-        await self._team_repo.save(team)
-        logger.info(
-            "[team=%s] Leader session recovered: %s",
-            team.id,
-            session.session_id,
-        )
-
-        summary_prompt = self._build_team_state_summary(team)
-        safe_create_task(self._inject_state_summary(session.session_id, summary_prompt))
-        return session
-
     @staticmethod
     def build_coordination_context(team: Team) -> str:
         """Build authoritative runtime identifiers for every Leader request.

@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 from application.team_board.team_workspace_helpers import ensure_agent_project
 from domain.team.model.status import SlotRole
-from domain.team.model.team_domain_error import TeamDomainError
 
 if TYPE_CHECKING:
     from application.team_board.commands import CreateTeamCommand
