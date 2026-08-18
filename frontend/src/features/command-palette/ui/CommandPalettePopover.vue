@@ -157,7 +157,10 @@ function onSearchInput(e) {
     </div>
 
     <div ref="listEl" class="cmd-list">
-      <div v-if="loading" class="cmd-loading">Loading commands...</div>
+      <div v-if="loading" class="cmd-loading">
+        <span class="cmd-spinner" aria-hidden="true"></span>
+        Loading skills...
+      </div>
       <template v-else-if="manageMode">
         <div v-if="filteredPolicyRows.length === 0" class="cmd-empty">No commands found</div>
         <div
@@ -415,5 +418,31 @@ function onSearchInput(e) {
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.cmd-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.cmd-spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cmd-spin 0.7s linear infinite;
+}
+
+@keyframes cmd-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmd-spinner {
+    animation: none;
+  }
 }
 </style>

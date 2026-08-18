@@ -9,6 +9,7 @@ const error = ref(null)
 const searchQuery = ref('')
 
 let cachedProjectDir = null
+let loadingProjectDir = null
 let _loadCmdSeq = 0
 
 const policyRows = computed(() => {
@@ -50,7 +51,11 @@ export function useCommandPalette() {
     if (!force && cachedProjectDir === projectDir && commands.value.length > 0) {
       return
     }
+    if (!force && loading.value && loadingProjectDir === projectDir) {
+      return
+    }
     loading.value = true
+    loadingProjectDir = projectDir
     error.value = null
     const seq = ++_loadCmdSeq
     try {
@@ -66,7 +71,10 @@ export function useCommandPalette() {
       if (seq !== _loadCmdSeq) return
       error.value = e.message
     } finally {
-      if (seq === _loadCmdSeq) loading.value = false
+      if (seq === _loadCmdSeq) {
+        loading.value = false
+        loadingProjectDir = null
+      }
     }
   }
 
@@ -86,7 +94,6 @@ export function useCommandPalette() {
       await loadCommands(projectDir, true)
     } catch (e) {
       error.value = e.message
-    } finally {
       loading.value = false
     }
   }
@@ -105,6 +112,7 @@ export function useCommandPalette() {
 
   function invalidateCache() {
     cachedProjectDir = null
+    loadingProjectDir = null
     commands.value = []
     policies.value = []
   }

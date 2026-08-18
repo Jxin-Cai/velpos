@@ -12,7 +12,7 @@ const emit = defineEmits(['created', 'cancel'])
 
 useEscapeToClose(() => props.visible, () => handleCancel())
 
-const { categories: agentCategories, fetchAgents } = useAgentManager()
+const { categories: agentCategories, loading: agentsLoading, fetchAgents } = useAgentManager()
 
 const teamName = ref('')
 const creating = ref(false)
@@ -177,7 +177,11 @@ onMounted(() => {
                 </div>
               </div>
 
-              <div v-if="availableAgents.length === 0" class="empty-card">
+              <div v-if="agentsLoading && !availableAgents.length" class="empty-card">
+                <span class="empty-title">Loading agents...</span>
+                <span class="empty-desc">Fetching the agent catalog.</span>
+              </div>
+              <div v-else-if="availableAgents.length === 0" class="empty-card">
                 <span class="empty-title">No agents available</span>
                 <span class="empty-desc">Check the agent catalog configuration.</span>
               </div>

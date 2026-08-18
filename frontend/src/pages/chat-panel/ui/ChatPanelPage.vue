@@ -298,12 +298,7 @@ useDialog('command-palette', cmdVisible)
 const { compacting, compactContext } = useCompactContext()
 
 onMounted(async () => {
-  try {
-    const res = await listModels()
-    availableModels.value = res || []
-  } catch {
-    // fallback to empty — user can still type model names
-  }
+  loadAvailableModels()
   if (isAdmin.value) {
     try {
       const settings = await getSettings()
@@ -340,8 +335,13 @@ watch(currentSessionId, (newId) => {
     fetchImStatus(newId)
     fetchImChannels()
     invalidateCmdCache()
+    if (projectDir.value) loadCommands(projectDir.value)
   }
 })
+
+watch(projectDir, (dir) => {
+  if (dir) loadCommands(dir)
+}, { immediate: true })
 
 // Re-fetch channels when project plugins change
 watch(() => currentProject.value?.plugins, () => {
@@ -403,6 +403,41 @@ const totalUsage = computed(() => {
 const showModelMenu = ref(false)
 const currentModel = computed(() => session.value?.model || 'unknown')
 const availableModels = ref([])
+const modelsLoading = ref(true)
+let _modelsSeq = 0
+let _modelsPromise = null
+
+async function loadAvailableModels({ force = false } = {}) {
+  if (_modelsPromise) return _modelsPromise
+  if (!force && availableModels.value.length) return
+  modelsLoading.value = true
+  const seq = ++_modelsSeq
+  _modelsPromise = (async () => {
+    try {
+      const res = await listModels()
+      if (seq !== _modelsSeq) return
+      availableModels.value = res || []
+    } catch {
+      if (seq !== _modelsSeq) return
+    } finally {
+      if (seq === _modelsSeq) {
+        modelsLoading.value = false
+        _modelsPromise = null
+      }
+    }
+  })()
+  return _modelsPromise
+}
+
+function toggleModelMenu() {
+  showModelMenu.value = !showModelMenu.value
+  showEffortMenu.value = false
+  showPermMenu.value = false
+  showHistory.value = false
+  if (showModelMenu.value) {
+    loadAvailableModels({ force: !availableModels.value.length })
+  }
+}
 
 
 function getModelLabel(model) {
@@ -983,6 +1018,7 @@ let _copiedChipTimer = null
 const showOpenWithMenu = ref(false)
 const installedApps = ref([])
 const appsLoaded = ref(false)
+const appsLoading = ref(false)
 const claudeResumeSessionId = computed(() => session.value?.sdk_session_id || '')
 const claudeResumeCommand = computed(() => {
   const dir = projectDir.value
@@ -1027,12 +1063,17 @@ function openProjectDir() {
 }
 
 async function loadInstalledApps() {
-  if (appsLoaded.value) return
+  if (appsLoaded.value || appsLoading.value) return
+  appsLoading.value = true
   try {
     const res = await listApplications()
     installedApps.value = res
     appsLoaded.value = true
-  } catch { /* ignore */ }
+  } catch {
+    appsLoaded.value = true
+  } finally {
+    appsLoading.value = false
+  }
 }
 
 function toggleOpenWithMenu() {
@@ -1667,7 +1708,11 @@ function formatMaxTokens(n) {
                     <span v-else class="app-icon app-icon-placeholder">{{ app.name[0] }}</span>
                     {{ app.name }}
                   </button>
-                  <div v-if="appsLoaded && !installedApps.length" class="dropdown-empty">No apps detected</div>
+                  <div v-if="appsLoading" class="dropdown-empty dropdown-empty--loading">
+                    <span class="dropdown-spinner" aria-hidden="true"></span>
+                    Loading apps...
+                  </div>
+                  <div v-else-if="appsLoaded && !installedApps.length" class="dropdown-empty">No apps detected</div>
                 </div>
                 </Transition>
               </div>
@@ -1703,7 +1748,7 @@ function formatMaxTokens(n) {
             <button
               class="dash-chip dash-model"
               :disabled="!currentSessionId"
-              @click="showModelMenu = !showModelMenu; showEffortMenu = false; showPermMenu = false; showHistory = false"
+              @click="toggleModelMenu"
               title="Switch model"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1715,18 +1760,24 @@ function formatMaxTokens(n) {
             </button>
             <Transition name="dropdown-fade">
             <div v-if="showModelMenu" class="dropdown-menu model-menu">
-              <button
-                v-for="m in availableModels"
-                :key="m.value"
-                class="dropdown-item"
-                :class="{ active: m.value === currentModel }"
-                @click="handleModelSelect(m.value)"
-                :title="m.description || ''"
-              >
-                <span class="model-name">{{ m.displayName || m.value }}</span>
-                <span v-if="m.description" class="model-desc">{{ m.description }}</span>
-              </button>
-              <div v-if="!availableModels.length" class="dropdown-empty">No models available</div>
+              <div v-if="modelsLoading && !availableModels.length" class="dropdown-empty dropdown-empty--loading">
+                <span class="dropdown-spinner" aria-hidden="true"></span>
+                Loading models...
+              </div>
+              <template v-else>
+                <button
+                  v-for="m in availableModels"
+                  :key="m.value"
+                  class="dropdown-item"
+                  :class="{ active: m.value === currentModel }"
+                  @click="handleModelSelect(m.value)"
+                  :title="m.description || ''"
+                >
+                  <span class="model-name">{{ m.displayName || m.value }}</span>
+                  <span v-if="m.description" class="model-desc">{{ m.description }}</span>
+                </button>
+                <div v-if="!availableModels.length" class="dropdown-empty">No models available</div>
+              </template>
             </div>
             </Transition>
           </div>
@@ -1772,7 +1823,10 @@ function formatMaxTokens(n) {
             </button>
             <Transition name="dropdown-fade">
             <div v-if="showBranchMenu" class="dropdown-menu branch-menu">
-              <div v-if="branchLoading" class="dropdown-empty">Loading...</div>
+              <div v-if="branchLoading" class="dropdown-empty dropdown-empty--loading">
+                <span class="dropdown-spinner" aria-hidden="true"></span>
+                Loading branches...
+              </div>
               <div v-else-if="!branchList.length" class="dropdown-empty">No branches</div>
               <template v-else>
                 <button
@@ -2510,6 +2564,26 @@ function formatMaxTokens(n) {
   color: var(--text-muted);
   font-size: 11px;
   font-family: var(--font-mono);
+}
+
+.dropdown-empty--loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dropdown-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: dropdown-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes dropdown-spin {
+  to { transform: rotate(360deg); }
 }
 
 .dropdown-item.active {
@@ -3769,6 +3843,10 @@ button.dash-chip[disabled] {
   .multi-session-dialog,
   .compare-dialog {
     transition: none;
+  }
+
+  .dropdown-spinner {
+    animation: none;
   }
 
   .message-choice:hover:not(.active),

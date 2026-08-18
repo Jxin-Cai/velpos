@@ -109,8 +109,10 @@ export function useSettingsManager() {
     error.value = null
     try {
       await syncChannelProfile(profileId)
+      return true
     } catch (err) {
       error.value = err.message || 'Failed to sync channel profile'
+      return false
     } finally {
       operating.value = null
     }

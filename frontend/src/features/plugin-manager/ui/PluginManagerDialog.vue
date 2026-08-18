@@ -23,6 +23,7 @@ const {
   plugins,
   marketplaces,
   loading,
+  marketplacesLoading,
   operating,
   error,
   loadPlugins,
@@ -68,7 +69,7 @@ watch(() => props.visible, (val) => {
 
 function switchTab(tab) {
   activeTab.value = tab
-  if (tab === 'marketplaces' && marketplaces.value.length === 0) {
+  if (tab === 'marketplaces' && !marketplaces.value.length && !marketplacesLoading.value) {
     loadMarketplaces()
   }
 }
@@ -259,7 +260,7 @@ function handleClose() {
 
         <!-- Marketplaces Tab -->
         <template v-if="activeTab === 'marketplaces'">
-          <div v-if="loading" class="loading-state">
+          <div v-if="marketplacesLoading" class="loading-state">
             <div class="spinner"></div>
             <span>Loading marketplaces...</span>
           </div>

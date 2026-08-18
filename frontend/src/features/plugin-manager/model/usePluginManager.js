@@ -14,6 +14,7 @@ export function usePluginManager() {
   const plugins = ref([])
   const marketplaces = ref([])
   const loading = ref(false)
+  const marketplacesLoading = ref(false)
   const operating = ref(null) // plugin key or marketplace name currently being operated on
   const error = ref(null)
   let _loadSeq = 0
@@ -36,12 +37,15 @@ export function usePluginManager() {
   }
 
   async function loadMarketplaces() {
+    marketplacesLoading.value = true
     error.value = null
     try {
       const data = await apiListMarketplaces()
       marketplaces.value = data.marketplaces || []
     } catch (e) {
       error.value = e.message
+    } finally {
+      marketplacesLoading.value = false
     }
   }
 
@@ -114,6 +118,7 @@ export function usePluginManager() {
     plugins,
     marketplaces,
     loading,
+    marketplacesLoading,
     operating,
     error,
     loadPlugins,

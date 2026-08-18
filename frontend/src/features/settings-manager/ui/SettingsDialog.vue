@@ -5,6 +5,7 @@ import { useUserPreferences } from '@shared/lib/useUserPreferences'
 import { useDialogManager, useVisibleProxy, useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTimeout } from '@shared/lib/useTimeout'
 import CustomSelect from '@shared/ui/CustomSelect.vue'
+import ChannelSyncButton from './ChannelSyncButton.vue'
 
 const props = defineProps({
   visible: {
@@ -209,6 +210,10 @@ function getModelOptions(key) {
   }))
 }
 
+function hasModelOptions(key) {
+  return (fetchedModels.value[key] || []).length > 0
+}
+
 watch(() => props.visible, (val) => {
   if (val) {
     loadData()
@@ -273,7 +278,15 @@ async function onActivate(profileId) {
 }
 
 async function onSync(profileId) {
-  await handleSync(profileId)
+  syncingProfileId.value = profileId
+  const ok = await handleSync(profileId)
+  if (ok) {
+    syncedProfileId.value = profileId
+    setTimer(() => {
+      if (syncedProfileId.value === profileId) syncedProfileId.value = null
+    }, 1600)
+  }
+  syncingProfileId.value = null
 }
 
 function onFetchModelsForAdd() {
@@ -285,6 +298,8 @@ function onFetchModelsForEdit() {
 }
 
 const copyJsonSuccess = ref(false)
+const syncedProfileId = ref(null)
+const syncingProfileId = ref(null)
 
 const saveSuccess = ref(false)
 const { set: setTimer } = useTimeout()
@@ -401,13 +416,17 @@ async function copyJsonPreview() {
                 </div>
                 <div class="model-field-cell">
                   <select
-                    v-if="(fetchedModels['_add'] || []).length"
+                    v-if="hasModelOptions('_add')"
                     class="form-select"
                     v-model="addForm.model_config[FALLBACK_MODEL_KEY]"
                   >
                     <option value="">-- 无 --</option>
                     <option v-for="opt in getModelOptions('_add')" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
+                  <div v-else-if="fetchingModels === '_add'" class="model-field-loading">
+                    <span class="model-field-spinner" aria-hidden="true"></span>
+                    正在获取模型…
+                  </div>
                   <input v-else class="form-input" v-model="addForm.model_config[FALLBACK_MODEL_KEY]" placeholder="ANTHROPIC_MODEL" />
                 </div>
 
@@ -419,7 +438,7 @@ async function copyJsonPreview() {
                   </div>
                   <div class="model-field-cell">
                     <select
-                      v-if="(fetchedModels['_add'] || []).length"
+                      v-if="hasModelOptions('_add')"
                       class="form-select"
                       :value="addForm.model_config[r.modelKey] || ''"
                       @change="onModelIdChange(addForm, r, $event.target.value)"
@@ -427,6 +446,10 @@ async function copyJsonPreview() {
                       <option value="">-- 无 --</option>
                       <option v-for="opt in getModelOptions('_add')" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </select>
+                    <div v-else-if="fetchingModels === '_add'" class="model-field-loading">
+                      <span class="model-field-spinner" aria-hidden="true"></span>
+                      正在获取模型…
+                    </div>
                     <input
                       v-else
                       class="form-input"
@@ -467,11 +490,12 @@ async function copyJsonPreview() {
                         :disabled="operating === p.profile_id"
                         @click="onActivate(p.profile_id)"
                       >启用</button>
-                      <button
-                        class="btn-sync"
+                      <ChannelSyncButton
                         :disabled="operating === p.profile_id"
-                        @click="onSync(p.profile_id)"
-                      >{{ operating === p.profile_id ? '同步中…' : '同步' }}</button>
+                        :loading="syncingProfileId === p.profile_id"
+                        :success="syncedProfileId === p.profile_id"
+                        @confirm="onSync(p.profile_id)"
+                      />
                       <button class="btn-edit" type="button" @click="startEdit(p)">编辑</button>
                       <button
                         class="btn-delete"
@@ -531,13 +555,17 @@ async function copyJsonPreview() {
                       </div>
                       <div class="model-field-cell">
                         <select
-                          v-if="(fetchedModels[p.profile_id] || []).length"
+                          v-if="hasModelOptions(p.profile_id)"
                           class="form-select"
                           v-model="editForm.model_config[FALLBACK_MODEL_KEY]"
                         >
                           <option value="">-- 无 --</option>
                           <option v-for="opt in getModelOptions(p.profile_id)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                         </select>
+                        <div v-else-if="fetchingModels === p.profile_id" class="model-field-loading">
+                          <span class="model-field-spinner" aria-hidden="true"></span>
+                          正在获取模型…
+                        </div>
                         <input v-else class="form-input" v-model="editForm.model_config[FALLBACK_MODEL_KEY]" placeholder="ANTHROPIC_MODEL" />
                       </div>
 
@@ -549,7 +577,7 @@ async function copyJsonPreview() {
                         </div>
                         <div class="model-field-cell">
                           <select
-                            v-if="(fetchedModels[p.profile_id] || []).length"
+                            v-if="hasModelOptions(p.profile_id)"
                             class="form-select"
                             :value="editForm.model_config[r.modelKey] || ''"
                             @change="onModelIdChange(editForm, r, $event.target.value)"
@@ -557,6 +585,10 @@ async function copyJsonPreview() {
                             <option value="">-- 无 --</option>
                             <option v-for="opt in getModelOptions(p.profile_id)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                           </select>
+                          <div v-else-if="fetchingModels === p.profile_id" class="model-field-loading">
+                            <span class="model-field-spinner" aria-hidden="true"></span>
+                            正在获取模型…
+                          </div>
                           <input
                             v-else
                             class="form-input"
@@ -1150,6 +1182,33 @@ async function copyJsonPreview() {
   width: 100%;
 }
 
+.model-field-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  background: var(--bg-input, var(--bg-primary));
+}
+
+.model-field-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: model-field-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes model-field-spin {
+  to { transform: rotate(360deg); }
+}
+
 .model-field-cell--disabled {
   opacity: 0.5;
 }
@@ -1300,26 +1359,6 @@ async function copyJsonPreview() {
 }
 
 .btn-activate:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.btn-sync {
-  font-size: 12px;
-  padding: 4px 12px;
-  border: 1px solid var(--blue, #58a6ff);
-  color: var(--blue, #58a6ff);
-  background: transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--transition-fast);
-}
-
-.btn-sync:hover {
-  background: var(--blue-dim, rgba(88, 166, 255, 0.1));
-}
-
-.btn-sync:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -1599,5 +1638,6 @@ async function copyJsonPreview() {
 @media (prefers-reduced-motion: reduce) {
   .btn-primary, .json-copy-btn { transition: none; }
   .btn-primary:hover:not(:disabled) { transform: none; }
+  .model-field-spinner { animation: none; }
 }
 </style>

@@ -27,6 +27,7 @@ const skillCommands = ref([])
 const skillLoading = ref(false)
 const skillDropdownOpen = ref(false)
 const skillSearch = ref('')
+let skillLoadDir = ''
 
 const projectDir = computed(() => {
   const project = projects.value.find(p => p.id === props.projectId)
@@ -43,13 +44,25 @@ const filteredSkillCommands = computed(() => {
 
 async function loadSkillCommands() {
   const dir = projectDir.value
-  if (!dir) { skillCommands.value = []; return }
+  if (!dir) {
+    skillCommands.value = []
+    skillLoading.value = false
+    skillLoadDir = ''
+    return
+  }
+  if (skillLoading.value && skillLoadDir === dir) return
+  skillLoadDir = dir
   skillLoading.value = true
   try {
     const data = await fetchCommands(dir)
+    if (skillLoadDir !== dir) return
     skillCommands.value = (data.commands || []).filter(c => c.isUserInvocable !== false)
-  } catch { skillCommands.value = [] }
-  finally { skillLoading.value = false }
+  } catch {
+    if (skillLoadDir !== dir) return
+    skillCommands.value = []
+  } finally {
+    if (skillLoadDir === dir) skillLoading.value = false
+  }
 }
 
 function selectSkill(cmd) {
@@ -360,7 +373,11 @@ function taskPromptLabel(task) {
                   <button type="button" class="skill-change" @click="skillDropdownOpen = !skillDropdownOpen">Change</button>
                 </div>
                 <button v-else type="button" class="skill-trigger" @click="skillDropdownOpen = !skillDropdownOpen">
-                  {{ skillLoading ? 'Loading...' : 'Select Skill / Command (optional)' }}
+                  <span v-if="skillLoading" class="skill-trigger-loading">
+                    <span class="skill-spinner" aria-hidden="true"></span>
+                    Loading skills...
+                  </span>
+                  <span v-else>Select Skill / Command (optional)</span>
                 </button>
                 <div v-if="skillDropdownOpen" class="skill-dropdown">
                   <input
@@ -371,9 +388,14 @@ function taskPromptLabel(task) {
                     @keydown.escape.stop="skillDropdownOpen = false"
                   />
                   <div class="skill-list">
-                    <div v-if="filteredSkillCommands.length === 0" class="skill-empty">
-                      {{ skillLoading ? 'Loading...' : 'No skills found' }}
+                    <div v-if="skillLoading" class="skill-empty skill-empty--loading">
+                      <span class="skill-spinner" aria-hidden="true"></span>
+                      Loading skills...
                     </div>
+                    <div v-else-if="filteredSkillCommands.length === 0" class="skill-empty">
+                      No skills found
+                    </div>
+                    <template v-else>
                     <div
                       v-for="cmd in filteredSkillCommands"
                       :key="cmd.name"
@@ -386,6 +408,7 @@ function taskPromptLabel(task) {
                       </span>
                       <span class="skill-item-desc">{{ cmd.description }}</span>
                     </div>
+                    </template>
                   </div>
                 </div>
                 <div v-if="selectedSkill" class="skill-preview">
@@ -501,6 +524,10 @@ function taskPromptLabel(task) {
 .anchor-hint { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 .skill-selector { display: flex; flex-direction: column; gap: 6px; position: relative; }
 .skill-trigger { border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 6%, transparent); color: var(--text-secondary); padding: 9px 10px; cursor: pointer; font-size: 12px; text-align: left; transition: border-color 180ms ease, color 180ms ease, background 180ms ease; }
+.skill-trigger-loading { display: inline-flex; align-items: center; gap: 8px; }
+.skill-spinner { width: 12px; height: 12px; border: 1.5px solid color-mix(in srgb, var(--text-muted) 35%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: skill-spin 0.7s linear infinite; flex-shrink: 0; }
+@keyframes skill-spin { to { transform: rotate(360deg); } }
+.skill-empty--loading { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .skill-trigger:hover { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .skill-selected { display: flex; align-items: center; gap: 8px; }
 .skill-tag { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-family: var(--font-mono); font-size: 12px; font-weight: 700; }
