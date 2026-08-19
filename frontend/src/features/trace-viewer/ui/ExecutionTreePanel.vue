@@ -34,6 +34,7 @@ const {
   expandedLoops,
   loadTree,
   loadLoopDetail,
+  loadMoreLoopEvents,
   loadSubagentTree,
   toggleTask,
   toggleLoop,
@@ -274,6 +275,7 @@ watch(selectedLoopId, async (loopId) => {
                 :get-loop-detail="getLoopDetail"
                 :get-loop-load-state="getLoopLoadState"
                 :load-loop-detail="loadLoopDetail"
+                :load-more-events="loadMoreLoopEvents"
                 @open-subagent="openSubagent"
               />
               <ExecutionHotspotTable
@@ -298,6 +300,7 @@ watch(selectedLoopId, async (loopId) => {
                 :get-loop-detail="getLoopDetail"
                 :get-loop-load-state="getLoopLoadState"
                 :load-loop-detail="loadLoopDetail"
+                :load-more-events="loadMoreLoopEvents"
                 @toggle-inline-subagent="toggleInlineSubagent"
               />
             </aside>
@@ -416,6 +419,7 @@ watch(selectedLoopId, async (loopId) => {
             :get-loop-detail="getLoopDetail"
             :get-loop-load-state="getLoopLoadState"
             :load-loop-detail="loadLoopDetail"
+            :load-more-events="loadMoreLoopEvents"
             @toggle-inline-subagent="toggleInlineSubagent"
           />
         </div>

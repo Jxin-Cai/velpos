@@ -159,13 +159,13 @@ watch(pageTitle, value => { document.title = `${value} · Velpos 管理后台` }
         <div class="page-context">
           <span>管理后台 / {{ pageTitle }}</span>
         </div>
-        <AgentTemplateTab v-if="visitedPages.has('agents')" v-show="activePage === 'agents'" @dirty-change="agentFormDirty = $event" />
+        <AgentTemplateTab v-if="visitedPages.has('agents')" v-show="activePage === 'agents'" @dirty-change="agentFormDirty = $event === true" />
         <div v-if="visitedPages.has('claude-code')" v-show="activePage === 'claude-code'" class="stacked-pages">
-          <SettingsDialog :visible="true" embedded @dirty-change="claudeSettingsDirty = $event" />
-          <ClaudeMarketplacePanel @dirty-change="marketplaceDirty = $event" />
+          <SettingsDialog :visible="true" embedded @dirty-change="claudeSettingsDirty = $event === true" />
+          <ClaudeMarketplacePanel @dirty-change="marketplaceDirty = $event === true" />
         </div>
         <div v-if="visitedPages.has('git')" v-show="activePage === 'git'">
-          <GitManagerDialog :visible="true" embedded @dirty-change="gitDirty = $event" />
+          <GitManagerDialog :visible="true" embedded @dirty-change="gitDirty = $event === true" />
         </div>
         <UserManagementTab v-if="visitedPages.has('users')" v-show="activePage === 'users'" />
       </main>

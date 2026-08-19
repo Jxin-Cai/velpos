@@ -373,6 +373,7 @@ async def ingest_logs(
                         session_id=session_id,
                         run_id=run_id,
                         signal="log",
+                        event_name=event_name,
                         event_time=occurred_at,
                         span_id=span_id,
                         agent_id=str(attributes.get("agent_id") or "") or None,
@@ -475,6 +476,7 @@ async def ingest_metrics(
                             session_id=session_id,
                             run_id=run_id,
                             signal="metric",
+                            event_name=metric_name,
                             event_time=occurred_at,
                             agent_id=str(attributes.get("agent_id") or "") or None,
                             payload={

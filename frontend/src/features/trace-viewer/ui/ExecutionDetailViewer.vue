@@ -15,6 +15,7 @@ const props = defineProps({
   getLoopDetail: { type: Function, default: () => null },
   getLoopLoadState: { type: Function, default: () => 'idle' },
   loadLoopDetail: { type: Function, default: async () => {} },
+  loadMoreEvents: { type: Function, default: async () => {} },
 })
 
 const emit = defineEmits(['toggle-inline-subagent'])
@@ -50,15 +51,17 @@ const modelInputSources = computed(() => new Set(
 // output in that case so the UI still presents one complete model turn.
 const modelOutputByInputIndex = computed(() => {
   const pairs = new Map()
-  events.value.forEach((event, inputIndex) => {
-    if (event.type !== 'model_input' && event.type !== 'user_message') return
-    if (event.source_uuid) return
-    const outputIndex = events.value.findIndex((candidate, candidateIndex) => (
-      candidateIndex > inputIndex
-      && (candidate.type === 'model_output' || candidate.type === 'assistant_message')
-    ))
-    if (outputIndex >= 0) pairs.set(inputIndex, outputIndex)
-  })
+  let nextOutputIndex = null
+  for (let index = events.value.length - 1; index >= 0; index -= 1) {
+    const event = events.value[index]
+    const isInput = event.type === 'model_input' || event.type === 'user_message'
+    if (isInput && !event.source_uuid && nextOutputIndex != null) {
+      pairs.set(index, nextOutputIndex)
+    }
+    if (event.type === 'model_output' || event.type === 'assistant_message') {
+      nextOutputIndex = index
+    }
+  }
   return pairs
 })
 const pairedModelOutputIndices = computed(() => new Set(modelOutputByInputIndex.value.values()))
@@ -318,7 +321,7 @@ function itemDuration(item) {
           <h4>Recorded events</h4>
           <p>Model turns and tool calls are paired with their captured input and result payloads.</p>
         </div>
-        <span v-if="hasMore" class="more-badge">More available</span>
+        <span v-if="hasMore" class="more-badge">{{ events.length }} / {{ total }} loaded</span>
       </div>
 
       <ol v-if="eventItems.length" class="recorded-event-list">
@@ -361,8 +364,8 @@ function itemDuration(item) {
             </div>
 
             <div class="event-body" :class="{ 'event-body--split': item.input != null && item.output != null }">
-              <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Complete input" start-expanded />
-              <SpanPayloadViewer v-if="item.output != null" :payload="item.output" label="Complete output" start-expanded />
+              <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Complete input" />
+              <SpanPayloadViewer v-if="item.output != null" :payload="item.output" label="Complete output" />
               <div v-if="item.input == null && item.output == null" class="event-no-content">No payload was recorded for this event.</div>
             </div>
 
@@ -389,6 +392,7 @@ function itemDuration(item) {
                   :get-loop-detail="getLoopDetail"
                   :get-loop-load-state="getLoopLoadState"
                   :load-loop-detail="loadLoopDetail"
+                  :load-more-events="loadMoreEvents"
                 />
               </div>
             </div>
@@ -396,7 +400,19 @@ function itemDuration(item) {
         </li>
       </ol>
 
-      <div v-else-if="loadState === 'loaded'" class="detail-state">
+      <div v-if="eventItems.length && (hasMore || detail?.moreError)" class="event-load-more">
+        <button
+          type="button"
+          class="event-load-more-btn"
+          :disabled="detail?.loadingMore"
+          @click="loadMoreEvents(loopId, agentSpanId)"
+        >
+          {{ detail?.loadingMore ? 'Loading more events…' : 'Load more events' }}
+        </button>
+        <span v-if="detail?.moreError" class="event-load-more-error">{{ detail.moreError }}</span>
+      </div>
+
+      <div v-if="!eventItems.length && loadState === 'loaded'" class="detail-state">
         <p>No recorded events in this step.</p>
       </div>
     </template>
@@ -463,6 +479,12 @@ function itemDuration(item) {
 .event-body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--bg-secondary) 45%, var(--bg-primary)); }
 .event-body--split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .event-no-content { padding: 18px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+.event-load-more { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.event-load-more-btn { min-height: 36px; padding: 8px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; transition: border-color 150ms ease, color 150ms ease, background 150ms ease; }
+.event-load-more-btn:hover:not(:disabled) { border-color: var(--text-accent); background: var(--bg-hover); color: var(--text-primary); }
+.event-load-more-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+.event-load-more-btn:disabled { cursor: wait; opacity: .68; }
+.event-load-more-error { color: var(--color-error, #ef4444); font-size: 11px; }
 .subagent-actions { padding: 0 12px 12px; background: color-mix(in srgb, var(--bg-secondary) 45%, var(--bg-primary)); }
 .inline-expand-btn { min-height: 36px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; font-weight: 500; cursor: pointer; }
 .inline-expand-btn:hover { border-color: var(--text-accent); color: var(--text-accent); }

@@ -21,6 +21,9 @@ class ExecutionLedgerEventModel(Base):
     )
     run_id: Mapped[str] = mapped_column(String(32), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_name: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default="",
+    )
     span_id: Mapped[str] = mapped_column(String(16), nullable=False)
     parent_span_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
     span_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -36,4 +39,11 @@ class ExecutionLedgerEventModel(Base):
         UniqueConstraint("event_id", name="uq_execution_events_event_id"),
         Index("idx_execution_events_session_run_position", "session_id", "run_id", "position"),
         Index("idx_execution_events_span_position", "span_id", "position"),
+        Index(
+            "idx_execution_events_run_type_name",
+            "session_id",
+            "run_id",
+            "event_type",
+            "event_name",
+        ),
     )

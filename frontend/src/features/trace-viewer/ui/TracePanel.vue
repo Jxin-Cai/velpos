@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { formatDuration } from '@shared/lib/formatTime'
 import { formatTokens } from '@shared/lib/formatNumber'
 import { useSession } from '@entities/session'
@@ -9,6 +9,7 @@ import TraceSpanRow from './TraceSpanRow.vue'
 import TraceHotspotTable from './TraceHotspotTable.vue'
 import ExecutionTreePanel from './ExecutionTreePanel.vue'
 import {
+  fetchExecutionEvent,
   fetchExecutionEvents,
   fetchExecutionTree,
   fetchLoopDetail,
@@ -36,6 +37,9 @@ import {
 } from '../lib/traceAnalysis'
 
 const ViewMode = Object.freeze({ EXECUTION: 'execution', RAW_SPAN: 'raw_span', EVENTS: 'events' })
+const ERROR_EVENT_NAMES = Object.freeze(new Set(['api_error', 'api_refusal']))
+const HIDDEN_EVENT_ATTRIBUTES = Object.freeze(new Set(['event.name', 'event.timestamp', 'event.sequence']))
+const EVENT_ATTRIBUTE_LIMIT = 4
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -59,6 +63,11 @@ const exceptionCount = ref(0)
 const exceptionCountLoading = ref(false)
 const exporting = ref('')
 const exportError = ref('')
+const openEventPayloads = reactive(new Set())
+const verbatimPayloads = reactive(new Map())
+const payloadLoading = reactive(new Set())
+const payloadErrors = reactive(new Map())
+const eventPayloadTexts = new Map()
 let telemetryRequestId = 0
 let exceptionRequestId = 0
 let handledInitialSubagentFocus = ''
@@ -328,16 +337,85 @@ function formatEventTime(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-function eventAttributes(event) {
-  const attributes = event?.payload?.attributes || {}
-  return Object.entries(attributes)
-    .filter(([key, value]) => value !== '' && value != null && !['event.name', 'event.timestamp', 'event.sequence'].includes(key))
-    .slice(0, 4)
+function eventAttributes(payload) {
+  return Object.entries(payload?.attributes || {})
+    .filter(([key, value]) => value !== '' && value != null && !HIDDEN_EVENT_ATTRIBUTES.has(key))
+    .slice(0, EVENT_ATTRIBUTE_LIMIT)
 }
 
-function eventPayloadText(event) {
-  return JSON.stringify(event?.payload || {}, null, 2)
+const logEventRows = computed(() => (telemetry.value?.recent_events || []).map((event, index) => {
+  const payload = event?.payload || {}
+  const name = event?.event_name || payload.event_name || 'log'
+  return {
+    id: event?.event_id || `log-event-${index}`,
+    eventId: event?.event_id || '',
+    payload,
+    truncated: event?.payload_truncated === true,
+    eventTime: event?.event_time || '',
+    displayTime: formatEventTime(event?.event_time),
+    name,
+    spanId: payload.span_id || '',
+    isError: ERROR_EVENT_NAMES.has(name),
+    attributes: eventAttributes(payload),
+  }
+}))
+
+// An audit payload can carry a whole API request or response body. Serialize one
+// only once the reader opens it, and keep the text so unrelated re-renders of
+// this panel do not repeat the work for every listed event.
+function eventPayloadText(row) {
+  const verbatim = verbatimPayloads.get(row.id)
+  const cacheKey = verbatim ? `${row.id}:verbatim` : row.id
+  if (!eventPayloadTexts.has(cacheKey)) {
+    eventPayloadTexts.set(cacheKey, JSON.stringify(verbatim || row.payload, null, 2))
+  }
+  return eventPayloadTexts.get(cacheKey)
 }
+
+async function toggleEventPayload(row, open) {
+  if (!open) {
+    openEventPayloads.delete(row.id)
+    return
+  }
+  openEventPayloads.add(row.id)
+  await loadVerbatimPayload(row)
+}
+
+// The list only carries clipped copies of oversized fields, so reading one event
+// in full is a separate request instead of a bigger telemetry response.
+async function loadVerbatimPayload(row) {
+  if (!row.truncated || !row.eventId) return
+  if (verbatimPayloads.has(row.id) || payloadLoading.has(row.id)) return
+  const sessionId = currentSessionId.value
+  if (!sessionId) return
+
+  payloadLoading.add(row.id)
+  payloadErrors.delete(row.id)
+  try {
+    const event = await fetchExecutionEvent(sessionId, row.eventId)
+    verbatimPayloads.set(row.id, event?.payload || row.payload)
+  } catch (err) {
+    payloadErrors.set(row.id, err?.message || 'Failed to load the full payload')
+  } finally {
+    payloadLoading.delete(row.id)
+  }
+}
+
+watch(logEventRows, (rows) => {
+  const presentIds = new Set(rows.map(row => row.id))
+  for (const id of openEventPayloads) {
+    if (!presentIds.has(id)) openEventPayloads.delete(id)
+  }
+  for (const id of verbatimPayloads.keys()) {
+    if (!presentIds.has(id)) verbatimPayloads.delete(id)
+  }
+  for (const id of payloadErrors.keys()) {
+    if (!presentIds.has(id)) payloadErrors.delete(id)
+  }
+  for (const cacheKey of eventPayloadTexts.keys()) {
+    if (!presentIds.has(cacheKey.replace(/:verbatim$/, ''))) eventPayloadTexts.delete(cacheKey)
+  }
+})
 
 function handleExecutionSummary(summary) {
   const nextTree = summary?.tree || null
@@ -668,7 +746,7 @@ async function exportFullTrace() {
                 <span class="loading-ring" aria-hidden="true"></span>
                 <p>Loading OpenTelemetry events…</p>
               </div>
-              <div v-else-if="!telemetry?.recent_events?.length" class="trace-empty">
+              <div v-else-if="!logEventRows.length" class="trace-empty">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
                   <path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/>
                 </svg>
@@ -681,23 +759,28 @@ async function exportFullTrace() {
                     <span class="events-kicker">OTLP logs</span>
                     <h3>Structured events</h3>
                   </div>
-                  <span>Showing latest {{ telemetry.recent_events.length }}</span>
+                  <span>Showing latest {{ logEventRows.length }}</span>
                 </header>
                 <ol class="event-list">
-                  <li v-for="event in telemetry.recent_events" :key="event.event_id" class="event-row">
-                    <time :datetime="event.event_time">{{ formatEventTime(event.event_time) }}</time>
-                    <span class="event-marker" :class="{ 'is-error': ['api_error', 'api_refusal'].includes(event.payload?.event_name) }" aria-hidden="true"></span>
+                  <li v-for="row in logEventRows" :key="row.id" class="event-row">
+                    <time :datetime="row.eventTime">{{ row.displayTime }}</time>
+                    <span class="event-marker" :class="{ 'is-error': row.isError }" aria-hidden="true"></span>
                     <div class="event-content">
                       <div class="event-title-line">
-                        <strong>{{ event.payload?.event_name || 'log' }}</strong>
-                        <code v-if="event.payload?.span_id">{{ event.payload.span_id }}</code>
+                        <strong>{{ row.name }}</strong>
+                        <code v-if="row.spanId">{{ row.spanId }}</code>
                       </div>
-                      <div v-if="eventAttributes(event).length" class="event-attributes">
-                        <span v-for="([key, value]) in eventAttributes(event)" :key="key"><b>{{ key }}</b> {{ value }}</span>
+                      <div v-if="row.attributes.length" class="event-attributes">
+                        <span v-for="([key, value]) in row.attributes" :key="key"><b>{{ key }}</b> {{ value }}</span>
                       </div>
-                      <details class="event-payload">
+                      <details class="event-payload" @toggle="toggleEventPayload(row, $event.target.open)">
                         <summary>Full audit payload</summary>
-                        <pre>{{ eventPayloadText(event) }}</pre>
+                        <template v-if="openEventPayloads.has(row.id)">
+                          <p v-if="payloadLoading.has(row.id)" class="event-payload-note">Loading the full payload…</p>
+                          <p v-else-if="payloadErrors.get(row.id)" class="event-payload-note event-payload-note--error">{{ payloadErrors.get(row.id) }}</p>
+                          <p v-else-if="row.truncated && !verbatimPayloads.has(row.id)" class="event-payload-note">Oversized fields are clipped in this copy.</p>
+                          <pre>{{ eventPayloadText(row) }}</pre>
+                        </template>
                       </details>
                     </div>
                   </li>
@@ -1060,6 +1143,8 @@ async function exportFullTrace() {
 .event-attributes span { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
 .event-attributes b { margin-right: 3px; color: var(--text-tertiary); font-weight: 500; }
 .event-payload { margin-top: 7px; }
+.event-payload-note { margin: 8px 0 0; color: var(--text-tertiary); font-size: 10px; }
+.event-payload-note--error { color: var(--color-error, #ef4444); }
 .event-payload summary {
   width: fit-content;
   color: var(--text-tertiary);

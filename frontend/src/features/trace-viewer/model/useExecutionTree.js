@@ -11,6 +11,10 @@ const NodeStatus = Object.freeze({
 })
 
 const REFRESH_DEBOUNCE_MS = 1500
+// A single step can hold hundreds of events, each carrying a full model context
+// or tool payload. Render the first page immediately and let the reader pull the
+// rest on demand instead of blocking on the whole step.
+const DETAIL_PAGE_SIZE = 100
 
 export function useExecutionTree() {
   const { currentSessionId, getTraceSpansFor } = useSession()
@@ -116,25 +120,53 @@ export function useExecutionTree() {
 
     loopLoadState.set(key, NodeStatus.LOADING)
     try {
-      const items = []
-      const visitedCursors = new Set()
-      let cursor = 0
-      let total = 0
-      do {
-        if (visitedCursors.has(cursor)) {
-          throw new Error('Loop detail pagination returned a repeated cursor')
-        }
-        visitedCursors.add(cursor)
-        const page = await fetchLoopDetail(sessionId, runId, loopId, agentSpanId, cursor, 500)
-        items.push(...(page.items || []))
-        total = Math.max(Number(page.total) || 0, items.length)
-        cursor = page.next_cursor
-      } while (cursor != null)
-      loopDetails.set(key, { items, next_cursor: null, total })
+      const page = await fetchLoopDetail(sessionId, runId, loopId, agentSpanId, 0, DETAIL_PAGE_SIZE)
+      const items = page.items || []
+      loopDetails.set(key, {
+        items,
+        next_cursor: advancedCursor(page.next_cursor, 0),
+        total: Math.max(Number(page.total) || 0, items.length),
+        loadingMore: false,
+      })
       loopLoadState.set(key, NodeStatus.LOADED)
     } catch (err) {
       loopLoadState.set(key, NodeStatus.ERROR)
       loopDetails.set(key, { error: err?.message || 'Load failed' })
+    }
+  }
+
+  // Treat a cursor that does not move forward as the end of the step. Otherwise a
+  // backend that keeps returning the same cursor would let the reader append the
+  // same page forever.
+  function advancedCursor(nextCursor, requestedCursor) {
+    return Number.isFinite(nextCursor) && nextCursor > requestedCursor ? nextCursor : null
+  }
+
+  async function loadMoreLoopEvents(loopId, agentSpanId = null) {
+    const key = loopKey(loopId, agentSpanId)
+    const current = loopDetails.get(key)
+    if (!current?.items || current.next_cursor == null || current.loadingMore) return
+    const sessionId = currentSessionId.value
+    const runId = selectedRunId.value
+    if (!sessionId || !runId) return
+
+    const cursor = current.next_cursor
+    loopDetails.set(key, { ...current, loadingMore: true, moreError: '' })
+    try {
+      const page = await fetchLoopDetail(sessionId, runId, loopId, agentSpanId, cursor, DETAIL_PAGE_SIZE)
+      const items = [...current.items, ...(page.items || [])]
+      loopDetails.set(key, {
+        items,
+        next_cursor: advancedCursor(page.next_cursor, cursor),
+        total: Math.max(Number(page.total) || 0, items.length),
+        loadingMore: false,
+      })
+    } catch (err) {
+      loopDetails.set(key, {
+        ...current,
+        loadingMore: false,
+        moreError: err?.message || 'Failed to load more events',
+      })
     }
   }
 
@@ -320,6 +352,7 @@ export function useExecutionTree() {
     inlineSubagents,
     loadTree,
     loadLoopDetail,
+    loadMoreLoopEvents,
     loadSubagentTree,
     loadInlineSubagentTree,
     expandTask,

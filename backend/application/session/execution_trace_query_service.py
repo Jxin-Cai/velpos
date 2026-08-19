@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 _TREE_CACHE_TTL_S = 30.0
 _TREE_CACHE_MAX_ENTRIES = 64
-_tree_cache: dict[str, tuple[float, int, ExecutionAgent]] = {}
+_tree_cache: dict[str, tuple[float, str, ExecutionAgent]] = {}
 
 
 def _prune_expired_cache() -> None:
@@ -109,7 +110,11 @@ class ExecutionTraceQueryService:
             projection_spans = self._spans_owned_by_agent(agent_span, spans)
             if transcript_path:
                 try:
-                    records = self._read_all_records(project, session, transcript_path)
+                    records = await self._read_all_records_off_loop(
+                        project,
+                        session,
+                        transcript_path,
+                    )
                     records = self._filter_records_to_run(records, [agent_span])
                 except TranscriptNotFoundError:
                     logger.warning(
@@ -125,7 +130,7 @@ class ExecutionTraceQueryService:
                 records = self._records_from_agent_spans(agent_span, projection_spans)
         else:
             try:
-                all_records = self._read_all_records(project, session, None)
+                all_records = await self._read_all_records_off_loop(project, session, None)
                 records = self._filter_records_to_run(all_records, spans)
                 continuation_spans = await self._continuation_spans(
                     session_id,
@@ -487,7 +492,7 @@ class ExecutionTraceQueryService:
             and candidate.tool_use_id == span.tool_use_id
         ), None)
 
-    async def _get_cached_tree(
+    async def get_cached_execution_tree(
         self,
         session_id: str,
         run_id: str,
@@ -517,11 +522,30 @@ class ExecutionTraceQueryService:
         limit: int = 100,
     ) -> LoopDetailPage:
         """Return a paginated detail page for a specific loop within a run."""
-        agent = await self._get_cached_tree(session_id, run_id, agent_span_id)
+        agent = await self.get_cached_execution_tree(session_id, run_id, agent_span_id)
         loop = self._find_loop(agent, loop_id)
         if loop is None:
             raise BusinessException("loop not found")
         return loop.detail_page(cursor, limit)
+
+    async def _read_all_records_off_loop(
+        self,
+        project: Any,
+        session: Any,
+        transcript_path: str | None,
+    ) -> list[dict[str, Any]]:
+        """Read a transcript without blocking the event loop.
+
+        A session transcript grows to tens of megabytes, and the reader is
+        synchronous file I/O. Reading it inline stalls every other request served
+        by this worker for the duration of the parse.
+        """
+        return await asyncio.to_thread(
+            self._read_all_records,
+            project,
+            session,
+            transcript_path,
+        )
 
     def _read_all_records(
         self,

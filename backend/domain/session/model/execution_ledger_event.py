@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -32,6 +33,18 @@ _EVENT_TYPE_BY_ACTION = {
 }
 
 
+@dataclass(frozen=True)
+class RunEventCounts:
+    """Per-run event tallies computed by the store instead of in memory."""
+
+    log_event_count: int = 0
+    metric_sample_count: int = 0
+    log_counts_by_name: Mapping[str, int] = field(default_factory=dict)
+
+    def log_count_of(self, *event_names: str) -> int:
+        return sum(self.log_counts_by_name.get(name, 0) for name in event_names)
+
+
 @dataclass
 class ExecutionLedgerEvent:
     event_id: str
@@ -49,6 +62,9 @@ class ExecutionLedgerEvent:
     payload: dict[str, Any] = field(default_factory=dict)
     causation_event_id: str | None = None
     position: int | None = None
+    # Promoted out of the payload so that per-name tallies never require reading
+    # the payload text, which for raw API body events runs into megabytes.
+    event_name: str = ""
 
     @classmethod
     def from_span(cls, span: TraceSpan, action: str) -> ExecutionLedgerEvent:
@@ -82,6 +98,7 @@ class ExecutionLedgerEvent:
         signal: str,
         event_time: datetime,
         payload: dict[str, Any],
+        event_name: str = "",
         span_id: str = "",
         parent_span_id: str | None = None,
         agent_id: str | None = None,
@@ -93,6 +110,7 @@ class ExecutionLedgerEvent:
             else ExecutionLedgerEventType.OTEL_LOG
         )
         return cls(
+            event_name=event_name,
             event_id=event_id,
             session_id=session_id,
             run_id=run_id,
@@ -115,6 +133,7 @@ class ExecutionLedgerEvent:
             "session_id": self.session_id,
             "run_id": self.run_id,
             "event_type": self.event_type.value,
+            "event_name": self.event_name,
             "span_id": self.span_id,
             "parent_span_id": self.parent_span_id,
             "span_type": self.span_type,

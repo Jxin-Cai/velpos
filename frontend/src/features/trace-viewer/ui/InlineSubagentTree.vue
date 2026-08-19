@@ -9,6 +9,7 @@ const props = defineProps({
   getLoopDetail: { type: Function, required: true },
   getLoopLoadState: { type: Function, required: true },
   loadLoopDetail: { type: Function, required: true },
+  loadMoreEvents: { type: Function, default: async () => {} },
 })
 const emit = defineEmits(['open-subagent'])
 
@@ -127,6 +128,17 @@ function pairedEvents(items = []) {
                   <SpanPayloadViewer v-if="event.output != null" :payload="event.output" label="Output" />
                 </div>
               </div>
+              <div v-if="loopDetail(loop.id).next_cursor != null || loopDetail(loop.id).moreError" class="inline-load-more">
+                <button
+                  type="button"
+                  class="inline-load-more-btn"
+                  :disabled="loopDetail(loop.id).loadingMore"
+                  @click="loadMoreEvents(loop.id, agentSpanId)"
+                >
+                  {{ loopDetail(loop.id).loadingMore ? 'Loading more events…' : `Load more events (${loopDetail(loop.id).items.length} / ${loopDetail(loop.id).total})` }}
+                </button>
+                <span v-if="loopDetail(loop.id).moreError" class="inline-state--error">{{ loopDetail(loop.id).moreError }}</span>
+              </div>
             </template>
             <div v-else-if="loopState(loop.id) === 'loaded'" class="inline-state">No recorded events</div>
           </div>
@@ -205,6 +217,11 @@ function pairedEvents(items = []) {
   color: var(--text-tertiary);
 }
 .inline-state--error { color: var(--color-error, #ef4444); }
+.inline-load-more { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
+.inline-load-more-btn { min-height: 32px; padding: 6px 12px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; }
+.inline-load-more-btn:hover:not(:disabled) { border-color: var(--text-accent); color: var(--text-primary); }
+.inline-load-more-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+.inline-load-more-btn:disabled { cursor: wait; opacity: .68; }
 .inline-event { padding: 7px 8px; border-left: 2px solid var(--border-subtle); background: var(--bg-primary); }
 .inline-event-header { margin-bottom: 5px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
 .inline-event-payloads { display: grid; gap: 6px; }

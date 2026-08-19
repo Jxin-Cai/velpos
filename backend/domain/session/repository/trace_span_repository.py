@@ -26,7 +26,13 @@ class TraceSpanRepository(ABC):
     async def find_by_run(self, session_id: str, run_id: str) -> list[TraceSpan]: ...
 
     @abstractmethod
-    async def find_run_version(self, session_id: str, run_id: str) -> int: ...
+    async def find_run_version(self, session_id: str, run_id: str) -> str:
+        """Return a token that changes whenever a span of the run is written.
+
+        Spans are both appended and updated in place, so the token must cover
+        revisions as well as insertions; otherwise a completing span would leave
+        cached projections serving a stale status.
+        """
 
     @abstractmethod
     async def find_by_session(self, session_id: str, limit: int = 1000) -> list[TraceSpan]: ...

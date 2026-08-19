@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   createAgentTemplate,
   listClaudeMarketplacePlugins,
@@ -37,7 +37,7 @@ const filteredPlugins = computed(() => {
     .some(value => String(value || '').toLocaleLowerCase().includes(keyword)))
 })
 const currentSnapshot = computed(() => JSON.stringify({
-  form: form.value,
+  form: { ...form.value, color: String(form.value.color || '').toLowerCase() },
   plugins: [...selectedPlugins.value].sort(),
   localPlugins: preservedLocalPlugins.value,
 }))
@@ -94,6 +94,7 @@ onMounted(async () => {
     selectedPlugins.value = [...(config.plugins || [])]
     preservedLocalPlugins.value = [...(config.local_plugins || [])]
   }
+  await nextTick()
   initialSnapshot.value = currentSnapshot.value
   marketplacesLoading.value = true
   try {
