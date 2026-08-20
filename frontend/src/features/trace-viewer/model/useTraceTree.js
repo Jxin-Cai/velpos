@@ -3,6 +3,7 @@ import { useSession } from '@entities/session'
 import { fetchTraceRuns, fetchTraceTree } from '../api/traceApi'
 import {
   flattenTraceTree,
+  listRunIds,
   mergeTraceSpans,
   resolveSelectedRunId,
 } from '../lib/traceHistory'
@@ -41,9 +42,7 @@ export function useTraceTree() {
     return grouped
   })
 
-  const runIds = computed(() => {
-    return Object.keys(traceByRun.value).reverse()
-  })
+  const runIds = computed(() => listRunIds(traceSpans.value))
 
   const stats = computed(() => {
     const spans = selectedRunId.value

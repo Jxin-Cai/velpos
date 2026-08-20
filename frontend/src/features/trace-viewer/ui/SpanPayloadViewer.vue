@@ -29,10 +29,34 @@ const normalizedPayload = computed(() => {
   }
   return value
 })
-const formattedPayload = computed(() => {
+
+// Prompts and tool results are prose carrying real newlines. Serializing them
+// as JSON escapes those newlines into a single unreadable line, so the readable
+// text is offered as the default view whenever it can be recovered.
+function extractText(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    const blocks = value.map(extractText)
+    return blocks.every(block => block !== null) ? blocks.join('\n\n') : null
+  }
+  if (value && typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text
+    if (value.type === 'text' && typeof value.content === 'string') return value.content
+  }
+  return null
+}
+
+const textPayload = computed(() => {
+  const text = extractText(normalizedPayload.value)
+  return text && text.trim() ? text : null
+})
+const jsonPayload = computed(() => {
   const serialized = JSON.stringify(normalizedPayload.value, null, 2)
   return serialized ?? String(normalizedPayload.value)
 })
+const asText = ref(true)
+const showsText = computed(() => asText.value && Boolean(textPayload.value))
+const formattedPayload = computed(() => (showsText.value ? textPayload.value : jsonPayload.value))
 const isLong = computed(() => formattedPayload.value.length > PREVIEW_LIMIT)
 const displayText = computed(() => {
   if (!formattedPayload.value) return ''
@@ -41,8 +65,8 @@ const displayText = computed(() => {
   }
   return formattedPayload.value
 })
-const canHighlightPreview = computed(() => displayText.value.length <= MAX_HIGHLIGHT_CHARS)
-const canHighlightFull = computed(() => formattedPayload.value.length <= MAX_HIGHLIGHT_CHARS)
+const canHighlightPreview = computed(() => !showsText.value && displayText.value.length <= MAX_HIGHLIGHT_CHARS)
+const canHighlightFull = computed(() => !showsText.value && formattedPayload.value.length <= MAX_HIGHLIGHT_CHARS)
 const highlightedPayload = computed(() => (
   displayText.value && canHighlightPreview.value
     ? hljs.highlight(displayText.value, { language: 'json', ignoreIllegals: true }).value
@@ -55,6 +79,7 @@ const fullHighlightedPayload = computed(() => (
 ))
 const lineCount = computed(() => displayText.value ? displayText.value.split('\n').length : 0)
 const valueType = computed(() => {
+  if (showsText.value) return 'text'
   if (Array.isArray(normalizedPayload.value)) return 'array'
   if (normalizedPayload.value === null) return 'null'
   return typeof normalizedPayload.value === 'object' ? 'object' : typeof normalizedPayload.value
@@ -82,21 +107,37 @@ async function copyPayload() {
   <section v-if="payload != null" class="payload-viewer">
     <header class="payload-header">
       <span v-if="label" class="payload-label">{{ label }}</span>
-      <span class="payload-language">JSON</span>
+      <span class="payload-language">{{ showsText ? 'TEXT' : 'JSON' }}</span>
       <span class="payload-meta">{{ valueType }} · {{ lineCount }} lines</span>
       <div class="payload-actions">
-        <button type="button" class="payload-action" :title="copied ? 'Copied' : 'Copy JSON'" @click.stop="copyPayload">
+        <button
+          v-if="textPayload"
+          type="button"
+          class="payload-action"
+          :aria-pressed="!showsText"
+          :aria-label="showsText ? 'Show raw JSON' : 'Show readable text'"
+          :title="showsText ? 'Show raw JSON' : 'Show readable text'"
+          @click.stop="asText = !asText"
+        >
+          <svg v-if="showsText" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="M6 2.5H4.2A1.7 1.7 0 0 0 2.5 4.2v7.6A1.7 1.7 0 0 0 4.2 13.5H6M10 2.5h1.8a1.7 1.7 0 0 1 1.7 1.7v7.6a1.7 1.7 0 0 1-1.7 1.7H10"/></svg>
+          <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h6"/></svg>
+        </button>
+        <button
+          type="button"
+          class="payload-action"
+          :aria-label="copied ? 'Copied' : 'Copy'"
+          :title="copied ? 'Copied' : 'Copy'"
+          @click.stop="copyPayload"
+        >
           <svg v-if="!copied" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><rect x="5" y="5" width="7.5" height="8" rx="1.3"/><path d="M10.5 5V3.7A1.2 1.2 0 0 0 9.3 2.5H4.7a1.2 1.2 0 0 0-1.2 1.2v7.1A1.2 1.2 0 0 0 4.7 12H5"/></svg>
           <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3.5 8.2 3 3 6-6"/></svg>
-          <span>{{ copied ? 'Copied' : 'Copy' }}</span>
         </button>
-        <button type="button" class="payload-action" title="Open large JSON viewer" @click.stop="enlarged = true">
+        <button type="button" class="payload-action" aria-label="Open large viewer" title="Open large viewer" @click.stop="enlarged = true">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="M5.5 2.5H2.5v3M10.5 2.5h3v3M5.5 13.5H2.5v-3M10.5 13.5h3v-3"/><path d="m2.8 5.2 2.7-2.7M13.2 5.2l-2.7-2.7M2.8 10.8l2.7 2.7M13.2 10.8l-2.7 2.7"/></svg>
-          <span>Expand</span>
         </button>
       </div>
     </header>
-    <pre class="payload-content"><code v-if="canHighlightPreview" v-html="highlightedPayload"></code><code v-else>{{ displayText }}</code></pre>
+    <pre class="payload-content" :class="{ 'payload-content--text': showsText }"><code v-if="canHighlightPreview" v-html="highlightedPayload"></code><code v-else>{{ displayText }}</code></pre>
     <button
       v-if="isLong"
       type="button"
@@ -104,7 +145,7 @@ async function copyPayload() {
       :aria-expanded="expanded"
       @click.stop="expanded = !expanded"
     >
-      {{ expanded ? 'Collapse JSON' : `Show complete JSON (${formattedPayload.length.toLocaleString()} chars)` }}
+      {{ expanded ? 'Collapse' : `Show everything (${formattedPayload.length.toLocaleString()} chars)` }}
     </button>
   </section>
   <Teleport to="body">
@@ -112,34 +153,53 @@ async function copyPayload() {
       <section class="payload-modal-card">
         <header class="payload-modal-header">
           <div>
-            <div class="payload-modal-kicker">JSON payload</div>
+            <div class="payload-modal-kicker">{{ showsText ? 'Text payload' : 'JSON payload' }}</div>
             <h2>{{ label || 'Payload' }}</h2>
             <span>{{ formattedPayload.length.toLocaleString() }} chars · {{ formattedPayload.split('\n').length }} lines</span>
           </div>
           <div class="payload-modal-actions">
             <button
+              v-if="textPayload"
+              type="button"
+              class="payload-action payload-action--strong"
+              :aria-pressed="!showsText"
+              :aria-label="showsText ? 'Show raw JSON' : 'Show readable text'"
+              :title="showsText ? 'Show raw JSON' : 'Show readable text'"
+              @click="asText = !asText"
+            >
+              <svg v-if="showsText" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="M6 2.5H4.2A1.7 1.7 0 0 0 2.5 4.2v7.6A1.7 1.7 0 0 0 4.2 13.5H6M10 2.5h1.8a1.7 1.7 0 0 1 1.7 1.7v7.6a1.7 1.7 0 0 1-1.7 1.7H10"/></svg>
+              <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h6"/></svg>
+            </button>
+            <button
               type="button"
               class="payload-action payload-action--strong"
               :aria-pressed="wrapLines"
-              :title="wrapLines ? 'Disable automatic line wrapping' : 'Enable automatic line wrapping'"
+              :aria-label="wrapLines ? 'Disable line wrapping' : 'Enable line wrapping'"
+              :title="wrapLines ? 'Disable line wrapping' : 'Enable line wrapping'"
               @click="wrapLines = !wrapLines"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
                 <path d="M2.5 4h8M2.5 8h9.25a2 2 0 0 1 0 4H9.5"/>
                 <path d="m11 10-1.75 2L11 14"/>
               </svg>
-              <span>{{ wrapLines ? 'No wrap' : 'Wrap lines' }}</span>
             </button>
-            <button type="button" class="payload-action payload-action--strong" @click="copyPayload">
-              <span>{{ copied ? 'Copied' : 'Copy JSON' }}</span>
+            <button
+              type="button"
+              class="payload-action payload-action--strong"
+              :aria-label="copied ? 'Copied' : 'Copy'"
+              :title="copied ? 'Copied' : 'Copy'"
+              @click="copyPayload"
+            >
+              <svg v-if="!copied" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><rect x="5" y="5" width="7.5" height="8" rx="1.3"/><path d="M10.5 5V3.7A1.2 1.2 0 0 0 9.3 2.5H4.7a1.2 1.2 0 0 0-1.2 1.2v7.1A1.2 1.2 0 0 0 4.7 12H5"/></svg>
+              <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3.5 8.2 3 3 6-6"/></svg>
             </button>
-            <button type="button" class="payload-close" aria-label="Close JSON viewer" @click="enlarged = false">×</button>
+            <button type="button" class="payload-close" aria-label="Close viewer" @click="enlarged = false">×</button>
           </div>
         </header>
         <pre
           class="payload-modal-content"
           :class="{ 'payload-modal-content--wrapped': wrapLines }"
-        ><code v-if="canHighlightFull" v-html="fullHighlightedPayload"></code><code v-else>{{ formattedPayload }}</code></pre>
+        ><code v-if="canHighlightFull" v-html="fullHighlightedPayload"></code><code v-else :class="{ 'payload-plain-text': showsText }">{{ formattedPayload }}</code></pre>
       </section>
     </div>
   </Teleport>
@@ -215,6 +275,12 @@ async function copyPayload() {
   white-space: pre-wrap;
 }
 .payload-content code { font: inherit; }
+.payload-content--text {
+  color: var(--text-primary);
+  font-family: var(--font-sans, inherit);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
 .payload-content :deep(.hljs-attr) { color: var(--text-accent); }
 .payload-content :deep(.hljs-string) { color: var(--color-success, #22c55e); }
 .payload-content :deep(.hljs-number),
@@ -257,8 +323,8 @@ async function copyPayload() {
 .payload-modal-content :deep(.hljs-attr) { color: var(--text-accent); }
 .payload-modal-content :deep(.hljs-string) { color: var(--color-success, #22c55e); }
 .payload-modal-content :deep(.hljs-number), .payload-modal-content :deep(.hljs-literal) { color: var(--color-warning, #d97706); }
+.payload-plain-text { color: var(--text-primary); font-family: var(--font-sans, inherit); font-size: 13px; line-height: 1.75; }
 @media (max-width: 640px) {
-  .payload-action span { display: none; }
   .payload-modal { padding: 10px; }
   .payload-modal-card { width: 100%; height: 94vh; }
   .payload-modal-header { padding: 13px; }

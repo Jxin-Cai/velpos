@@ -34,7 +34,7 @@ export function importClaudeSession(claudeSessionId, cwd, name = '') {
 }
 
 export function listModels() {
-  return get('/sessions/meta/models')
+  return get('/sessions/meta/models', { cache: 'no-store', timeoutMs: 60000 })
 }
 
 export function fetchSessionTimelineEvents(sessionId, limit = 500, eventTypes = []) {

@@ -6,7 +6,7 @@ import { formatDuration } from '@features/message-display'
 import { useDialogManager } from '@shared/lib/useDialogManager'
 import {
   useSession,
-  listModels,
+  useAvailableModels,
   fetchSessionMessages,
   createSessionBranch,
   listSessionBranches,
@@ -44,6 +44,13 @@ const {
   restoredPrompt, setRestoredPrompt, setQueuedCommand, steeringQueued, setSteeringQueued,
   messageWindow, userMessageMarkers, prependMessagesFor,
 } = useSession()
+const {
+  availableModels,
+  modelsLoading,
+  modelsSettled,
+  loadAvailableModels,
+  beginModelsLoading,
+} = useAvailableModels()
 const { currentProject, updateProjectInList, projects } = useProject()
 
 const wsConnection = inject('wsConnection')
@@ -402,40 +409,19 @@ const totalUsage = computed(() => {
 // Model switching — dynamic from backend
 const showModelMenu = ref(false)
 const currentModel = computed(() => session.value?.model || 'unknown')
-const availableModels = ref([])
-const modelsLoading = ref(true)
-let _modelsSeq = 0
-let _modelsPromise = null
-
-async function loadAvailableModels({ force = false } = {}) {
-  if (_modelsPromise) return _modelsPromise
-  if (!force && availableModels.value.length) return
-  modelsLoading.value = true
-  const seq = ++_modelsSeq
-  _modelsPromise = (async () => {
-    try {
-      const res = await listModels()
-      if (seq !== _modelsSeq) return
-      availableModels.value = res || []
-    } catch {
-      if (seq !== _modelsSeq) return
-    } finally {
-      if (seq === _modelsSeq) {
-        modelsLoading.value = false
-        _modelsPromise = null
-      }
-    }
-  })()
-  return _modelsPromise
-}
 
 function toggleModelMenu() {
-  showModelMenu.value = !showModelMenu.value
+  const opening = !showModelMenu.value
+  showModelMenu.value = opening
   showEffortMenu.value = false
   showPermMenu.value = false
   showHistory.value = false
-  if (showModelMenu.value) {
-    loadAvailableModels({ force: !availableModels.value.length })
+  if (opening) {
+    if (!availableModels.value.length) {
+      beginModelsLoading()
+    }
+    // Always re-ask Claude Code CLI for models from current settings.
+    loadAvailableModels({ force: true })
   }
 }
 
@@ -600,6 +586,8 @@ const pendingSend = ref(false)
 let pendingSendTimer = null
 
 function handleSend(textOrData) {
+  // Refresh model catalog from current Claude settings on each send.
+  loadAvailableModels({ force: true })
   const isFollowUp = isRunning.value
   const result = useSendMessage(wsConnection.value).sendPrompt(textOrData, {
     optimistic: !isFollowUp,
@@ -1760,9 +1748,9 @@ function formatMaxTokens(n) {
             </button>
             <Transition name="dropdown-fade">
             <div v-if="showModelMenu" class="dropdown-menu model-menu">
-              <div v-if="modelsLoading && !availableModels.length" class="dropdown-empty dropdown-empty--loading">
+              <div v-if="!availableModels.length && (!modelsSettled || modelsLoading)" class="dropdown-empty dropdown-empty--loading">
                 <span class="dropdown-spinner" aria-hidden="true"></span>
-                Loading models...
+                正在加载模型…
               </div>
               <template v-else>
                 <button
@@ -1776,7 +1764,7 @@ function formatMaxTokens(n) {
                   <span class="model-name">{{ m.displayName || m.value }}</span>
                   <span v-if="m.description" class="model-desc">{{ m.description }}</span>
                 </button>
-                <div v-if="!availableModels.length" class="dropdown-empty">No models available</div>
+                <div v-if="!availableModels.length" class="dropdown-empty">暂无可用模型</div>
               </template>
             </div>
             </Transition>
@@ -2570,6 +2558,7 @@ function formatMaxTokens(n) {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 36px;
 }
 
 .dropdown-spinner {

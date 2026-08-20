@@ -34,6 +34,45 @@ export function taskSubagents(task, executionSubagents = []) {
   return [...result.values()]
 }
 
+// Subagents are listed per task and per step, which hides the order the agent
+// actually delegated work in. Walking tasks and steps in execution order
+// rebuilds that call chain, so a reader can follow the handoffs.
+export function buildSubagentChain(tasks, executionSubagents = []) {
+  const byToolUseId = new Map((executionSubagents || [])
+    .filter(subagent => subagent?.tool_use_id)
+    .map(subagent => [subagent.tool_use_id, subagent]))
+  const chain = new Map()
+
+  for (const [taskIndex, task] of (tasks || []).entries()) {
+    for (const [stepIndex, loop] of (task?.loops || []).entries()) {
+      const candidates = loop.subagents?.length
+        ? loop.subagents
+        : (loop.subagent_tool_use_ids || []).map(toolUseId => byToolUseId.get(toolUseId)).filter(Boolean)
+      for (const subagent of candidates) {
+        const key = subagent?.tool_use_id || subagent?.span_id
+        if (!key || chain.has(key)) continue
+        chain.set(key, {
+          ...byToolUseId.get(subagent.tool_use_id),
+          ...subagent,
+          key,
+          taskSequence: task.sequence || taskIndex + 1,
+          stepSequence: loop.sequence || stepIndex + 1,
+        })
+      }
+    }
+  }
+
+  // A subagent whose invoking step was filtered out, or was never linked to a
+  // step, still belongs to the run and would otherwise disappear.
+  for (const subagent of executionSubagents || []) {
+    const key = subagent?.tool_use_id || subagent?.span_id
+    if (!key || chain.has(key)) continue
+    chain.set(key, { ...subagent, key, taskSequence: null, stepSequence: null })
+  }
+
+  return [...chain.values()].map((item, index) => ({ ...item, order: index + 1 }))
+}
+
 function timestamp(value) {
   const parsed = Date.parse(value || '')
   return Number.isFinite(parsed) ? parsed : null

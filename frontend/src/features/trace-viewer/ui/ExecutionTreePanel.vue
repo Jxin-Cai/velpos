@@ -1,17 +1,19 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { formatDuration } from '@shared/lib/formatTime'
 import { formatTokens } from '@shared/lib/formatNumber'
 import { useSession } from '@entities/session'
 import { useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useExecutionTree } from '../model/useExecutionTree'
-import ExecutionTreeRow from './ExecutionTreeRow.vue'
+import ExecutionTaskList from './ExecutionTaskList.vue'
 import ExecutionDetailViewer from './ExecutionDetailViewer.vue'
-import InlineSubagentTree from './InlineSubagentTree.vue'
 import ExecutionHotspotTable from './ExecutionHotspotTable.vue'
+import SpanPayloadViewer from './SpanPayloadViewer.vue'
+import SubagentChainRail from './SubagentChainRail.vue'
 import {
   ExecutionPresentation,
   buildExecutionTaskRows,
+  buildSubagentChain,
   rankExecutionTasks,
   taskSubagents,
 } from '../lib/executionAnalysis'
@@ -19,6 +21,9 @@ import {
 const props = defineProps({
   runId: { type: String, default: null },
   focusSubagent: { type: Object, default: null },
+  // Trace spans can record an agent invocation that the projected tree missed,
+  // so both sources feed the chain to keep every delegation visible.
+  spanSubagents: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['summary-change'])
 
@@ -31,13 +36,11 @@ const {
   provenance,
   selectedLoopId,
   expandedTasks,
-  expandedLoops,
   loadTree,
   loadLoopDetail,
   loadMoreLoopEvents,
   loadSubagentTree,
   toggleTask,
-  toggleLoop,
   toggleInlineSubagent,
   selectLoop,
   getLoopDetail,
@@ -63,6 +66,7 @@ let handledFocusRequest = null
 const subagentTrail = ref([])
 const subagentPresentation = ref(ExecutionPresentation.FLOW)
 const subagentSelectedLoopId = ref(null)
+const focusedExpandedTasks = reactive(new Set())
 const focusedSubagent = computed(() => subagentTrail.value.at(-1) || null)
 const focusedSubagentState = computed(() => (
   focusedSubagent.value?.span_id ? getSubagentState(focusedSubagent.value.span_id) : null
@@ -78,6 +82,11 @@ const focusedRankedTasks = computed(() => rankExecutionTasks(focusedTaskRows.val
 const focusedDurationMs = computed(() => focusedTaskRows.value.reduce((total, row) => total + row.activeDurationMs, 0))
 const focusedTokens = computed(() => focusedTaskRows.value.reduce((total, row) => total + row.tokens, 0))
 const focusedStepCount = computed(() => focusedTaskRows.value.reduce((total, row) => total + row.steps.length, 0))
+const focusedDisplayTasks = computed(() => (focusedSubagentTree.value?.tasks || []).map((task, index) => ({
+  ...task,
+  sequence: task.sequence || index + 1,
+  subagents: taskSubagents(task, focusedSubagentTree.value?.subagents || []),
+})))
 const focusedSelectedLoop = computed(() => {
   for (const task of focusedSubagentTree.value?.tasks || []) {
     const loop = (task.loops || []).find(item => item.id === subagentSelectedLoopId.value)
@@ -133,25 +142,51 @@ const totalErrors = computed(() => (
 ))
 const hasErrors = computed(() => totalErrors.value > 0)
 
-function subagentsForLoop(loop) {
+const subagentChain = computed(() => buildSubagentChain(
+  tasks.value,
+  [...(tree.value?.subagents || []), ...props.spanSubagents],
+))
+const focusedSubagentChain = computed(() => buildSubagentChain(
+  focusedSubagentTree.value?.tasks || [],
+  focusedSubagentTree.value?.subagents || [],
+))
+
+function openSubagentFromChain(subagent) {
+  openSubagent(subagent, true)
+}
+
+function loopSubagents(loop, roster) {
   if (loop?.subagents?.length) return loop.subagents
   const toolUseIds = new Set(loop?.subagent_tool_use_ids || [])
   if (!toolUseIds.size) return []
-  return (tree.value?.subagents || []).filter(subagent => toolUseIds.has(subagent.tool_use_id))
+  return (roster || []).filter(subagent => toolUseIds.has(subagent.tool_use_id))
 }
 
-function causalityLabel(loops, index) {
-  if (index === 0) return null
-  const prev = loops[index - 1]
-  const names = prev?.tool_names || []
-  if (!names.length) return null
-  const display = names.slice(0, 3).join(', ')
-  return names.length > 3 ? `Receives results from: ${display} +${names.length - 3}` : `Receives results from: ${display}`
+function subagentsForLoop(loop) {
+  return loopSubagents(loop, tree.value?.subagents)
+}
+
+function focusedSubagentsForLoop(loop) {
+  return loopSubagents(loop, focusedSubagentTree.value?.subagents)
+}
+
+function subagentLoadState(subagent) {
+  return getSubagentState(subagent?.span_id)?.loading ? NodeStatus.LOADING : NodeStatus.IDLE
+}
+
+function focusedLoopLoadState(loopId) {
+  return getLoopLoadState(loopId, focusedSubagent.value?.span_id)
+}
+
+function toggleFocusedTask(taskId) {
+  if (focusedExpandedTasks.has(taskId)) focusedExpandedTasks.delete(taskId)
+  else focusedExpandedTasks.add(taskId)
 }
 
 function openSubagent(subagent, resetTrail = false) {
   if (!subagent?.span_id) return
   subagentSelectedLoopId.value = null
+  focusedExpandedTasks.clear()
   subagentPresentation.value = ExecutionPresentation.FLOW
   if (resetTrail) subagentTrail.value = [subagent]
   else if (focusedSubagent.value?.span_id !== subagent.span_id) subagentTrail.value = [...subagentTrail.value, subagent]
@@ -286,7 +321,7 @@ watch(tree, (value) => {
 
         <div v-if="focusedSubagentState?.loading" class="exec-loading"><span class="exec-spinner" aria-hidden="true"></span><span>Loading subagent trace…</span></div>
         <div v-else-if="focusedSubagentState?.error" class="exec-error">{{ focusedSubagentState.error }}</div>
-        <template v-else-if="focusedSubagentTree">
+        <div v-else-if="focusedSubagentTree" class="subagent-workspace">
           <section class="subagent-overview">
             <div class="subagent-identity">
               <span class="subagent-avatar" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3" y="4" width="10" height="8" rx="2"/><path d="M8 2v2M6 8h.01M10 8h.01"/></svg></span>
@@ -300,22 +335,47 @@ watch(tree, (value) => {
             </dl>
           </section>
 
-          <nav class="exec-presentation-bar subagent-presentation" aria-label="Subagent trace presentation">
-            <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.FLOW }" @click="subagentPresentation = ExecutionPresentation.FLOW">Execution chain</button>
-            <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.DURATION }" @click="subagentPresentation = ExecutionPresentation.DURATION">Duration <span aria-hidden="true">↓</span></button>
-            <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.TOKENS }" @click="subagentPresentation = ExecutionPresentation.TOKENS">Tokens <span aria-hidden="true">↓</span></button>
-          </nav>
+          <div class="exec-sticky">
+            <SubagentChainRail
+              :items="subagentChain"
+              :active-span-id="focusedSubagent.span_id"
+              @open-subagent="openSubagentFromChain"
+            />
+            <div class="exec-toolbar">
+              <nav class="exec-presentation-bar" aria-label="Subagent trace presentation">
+                <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.FLOW }" @click="subagentPresentation = ExecutionPresentation.FLOW">Execution chain</button>
+                <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.DURATION }" @click="subagentPresentation = ExecutionPresentation.DURATION">Duration <span aria-hidden="true">↓</span></button>
+                <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.TOKENS }" @click="subagentPresentation = ExecutionPresentation.TOKENS">Tokens <span aria-hidden="true">↓</span></button>
+              </nav>
+            </div>
+          </div>
 
-          <div class="subagent-workspace">
-            <div class="subagent-chain">
-              <InlineSubagentTree
+          <SubagentChainRail
+            :items="focusedSubagentChain"
+            label="Nested subagents"
+            @open-subagent="openSubagent"
+          />
+
+          <div class="subagent-body">
+            <div v-if="focusedSubagentTree.request" class="subagent-context-card">
+              <div class="context-card-label">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 8h9M8 4l4 4-4 4"/></svg>
+                Input from parent
+              </div>
+              <SpanPayloadViewer :payload="focusedSubagentTree.request" label="Parent prompt" />
+            </div>
+
+            <div class="subagent-steps">
+              <ExecutionTaskList
                 v-if="subagentPresentation === ExecutionPresentation.FLOW"
-                :tree="focusedSubagentTree"
-                :agent-span-id="focusedSubagent.span_id"
-                :get-loop-detail="getLoopDetail"
-                :get-loop-load-state="getLoopLoadState"
-                :load-loop-detail="loadLoopDetail"
-                :load-more-events="loadMoreLoopEvents"
+                :tasks="focusedDisplayTasks"
+                :expanded-tasks="focusedExpandedTasks"
+                :selected-loop-id="subagentSelectedLoopId"
+                :loop-load-state="focusedLoopLoadState"
+                :subagents-for-loop="focusedSubagentsForLoop"
+                :subagent-load-state="subagentLoadState"
+                @toggle-task="toggleFocusedTask"
+                @select-loop="selectFocusedLoop"
                 @open-subagent="openSubagent"
               />
               <ExecutionHotspotTable
@@ -327,89 +387,74 @@ watch(tree, (value) => {
                 @select-subagent="openSubagent"
               />
             </div>
+
+            <div v-if="focusedSubagentTree.status && focusedSubagentTree.status !== 'unknown'" class="subagent-context-card context-output">
+              <div class="context-card-label">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M13 8H4M8 4 4 8l4 4"/></svg>
+                Returned to parent
+              </div>
+              <span class="context-status" :class="`context-status--${focusedSubagentTree.status}`">{{ focusedSubagentTree.status }}</span>
+              <span v-if="focusedSubagentTree.error_message" class="context-error">{{ focusedSubagentTree.error_message }}</span>
+            </div>
           </div>
-        </template>
+        </div>
       </section>
       <div v-else class="exec-tree-body">
         <div class="exec-tree-section">
+          <slot name="prelude" />
+
           <section class="message-scope" aria-label="Current user message execution summary">
             <div class="message-scope-mark" aria-hidden="true">
               <svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-6l-3.5 2v-2h-1.5z"/></svg>
             </div>
             <div class="message-scope-content">
-              <div class="message-scope-kicker">This message</div>
-              <p>{{ requestSummary }}</p>
+              <p :title="requestSummary">{{ requestSummary }}</p>
               <div class="message-scope-stats">
-                <span><strong>{{ plannedTaskCount }}</strong> planned tasks</span>
+                <span><strong>{{ plannedTaskCount }}</strong> tasks</span>
                 <span><strong>{{ totalSteps }}</strong> steps</span>
                 <span><strong>{{ totalSubagents }}</strong> subagents</span>
                 <span :class="{ 'message-stat--error': totalErrors > 0 }"><strong>{{ totalErrors }}</strong> exceptions</span>
               </div>
             </div>
           </section>
-          <!-- Filter bar -->
-          <div v-if="hasErrors" class="exec-error-actions">
-            <nav class="exec-filter-bar" aria-label="Execution filter">
-              <button type="button" class="exec-filter-chip" :class="{ active: execFilter === 'all' }" @click="execFilter = 'all'">All</button>
-              <button v-if="totalErrors > 0" type="button" class="exec-filter-chip exec-filter-chip--error" :class="{ active: execFilter === 'errors' }" @click="execFilter = 'errors'">
-                Errors only
-                <span class="filter-count">{{ totalErrors }}</span>
-              </button>
-            </nav>
-          </div>
 
-          <nav class="exec-presentation-bar" aria-label="Agent flow presentation">
-            <button type="button" class="exec-presentation-btn" :class="{ active: execPresentation === ExecutionPresentation.FLOW }" @click="execPresentation = ExecutionPresentation.FLOW">Flow</button>
-            <button type="button" class="exec-presentation-btn" :class="{ active: execPresentation === ExecutionPresentation.DURATION }" @click="execPresentation = ExecutionPresentation.DURATION">Task duration <span aria-hidden="true">↓</span></button>
-            <button type="button" class="exec-presentation-btn" :class="{ active: execPresentation === ExecutionPresentation.TOKENS }" @click="execPresentation = ExecutionPresentation.TOKENS">Task tokens <span aria-hidden="true">↓</span></button>
-          </nav>
-
-          <div v-if="execPresentation === ExecutionPresentation.FLOW" class="tree-caption tree-caption--sticky">
-            <span>{{ plannedTaskCount ? 'Tasks created for this message' : 'Direct execution for this message' }}</span>
-            <span class="tree-count">{{ plannedTaskCount || totalSteps }}</span>
+          <!-- Pinned so the delegation chain and the active agent stay readable
+               while the reader scrolls through steps. -->
+          <div class="exec-sticky">
+            <SubagentChainRail :items="subagentChain" @open-subagent="openSubagentFromChain" />
+            <div class="exec-toolbar">
+              <nav class="exec-presentation-bar" aria-label="Agent flow presentation">
+                <button type="button" class="exec-presentation-btn" :class="{ active: execPresentation === ExecutionPresentation.FLOW }" @click="execPresentation = ExecutionPresentation.FLOW">Flow</button>
+                <button type="button" class="exec-presentation-btn" :class="{ active: execPresentation === ExecutionPresentation.DURATION }" @click="execPresentation = ExecutionPresentation.DURATION">Task duration <span aria-hidden="true">↓</span></button>
+                <button type="button" class="exec-presentation-btn" :class="{ active: execPresentation === ExecutionPresentation.TOKENS }" @click="execPresentation = ExecutionPresentation.TOKENS">Task tokens <span aria-hidden="true">↓</span></button>
+              </nav>
+              <nav v-if="hasErrors" class="exec-filter-bar" aria-label="Execution filter">
+                <button type="button" class="exec-filter-chip" :class="{ active: execFilter === 'all' }" @click="execFilter = 'all'">All</button>
+                <button type="button" class="exec-filter-chip exec-filter-chip--error" :class="{ active: execFilter === 'errors' }" @click="execFilter = 'errors'">
+                  Errors only
+                  <span class="filter-count">{{ totalErrors }}</span>
+                </button>
+              </nav>
+              <span v-if="execPresentation === ExecutionPresentation.FLOW" class="exec-toolbar-count">
+                {{ plannedTaskCount ? 'Tasks for this message' : 'Direct execution' }}
+                <strong>{{ plannedTaskCount || totalSteps }}</strong>
+              </span>
+            </div>
           </div>
 
           <!-- Main agent tasks -->
-          <template v-if="execPresentation === ExecutionPresentation.FLOW">
-            <ExecutionTreeRow
-              v-for="task in displayTasks"
-              :key="task.id"
-              :node="task"
-              node-type="task"
-              :depth="0"
-              :expanded="expandedTasks.has(task.id)"
-              @toggle="toggleTask(task.id)"
-              @open-subagent="openSubagent"
-            >
-              <template v-for="(loop, loopIndex) in task.loops" :key="loop.id">
-              <!-- Causality label between loops -->
-              <div v-if="causalityLabel(task.loops, loopIndex)" class="causality-label">
-                <span class="causality-arrow" aria-hidden="true">&#x2190;</span>
-                {{ causalityLabel(task.loops, loopIndex) }}
-              </div>
-              <ExecutionTreeRow
-                :node="loop"
-                node-type="loop"
-                :depth="1"
-                :expanded="expandedLoops.has(loop.id)"
-                :selected="selectedLoopId === loop.id"
-                :load-state="getLoopLoadState(loop.id)"
-                @select-loop="selectLoop"
-                @toggle="toggleLoop"
-              >
-              <ExecutionTreeRow
-                v-for="subagent in subagentsForLoop(loop)"
-                :key="subagent.tool_use_id"
-                :node="subagent"
-                node-type="subagent"
-                :depth="2"
-                :load-state="getSubagentState(subagent.span_id)?.loading ? 'loading' : 'idle'"
-                @open-subagent="openSubagent"
-              />
-              </ExecutionTreeRow>
-              </template>
-            </ExecutionTreeRow>
-          </template>
+          <ExecutionTaskList
+            v-if="execPresentation === ExecutionPresentation.FLOW"
+            :tasks="displayTasks"
+            :expanded-tasks="expandedTasks"
+            :selected-loop-id="selectedLoopId"
+            :loop-load-state="loopId => getLoopLoadState(loopId)"
+            :subagents-for-loop="subagentsForLoop"
+            :subagent-load-state="subagentLoadState"
+            @toggle-task="toggleTask"
+            @select-loop="selectLoop"
+            @open-subagent="openSubagent"
+          />
           <ExecutionHotspotTable
             v-else
             :rows="rankedTasks"
@@ -422,7 +467,9 @@ watch(tree, (value) => {
       </div>
     </template>
 
-    <Teleport to="#trace-detail-drawer-host">
+    <!-- Deferred because the host lives in the dialog that mounts in the same
+         render pass, so it is not queryable yet when this panel mounts. -->
+    <Teleport defer to="#trace-detail-drawer-host">
       <Transition name="exec-drawer">
         <aside
           v-if="drawerLoopId"
@@ -467,14 +514,23 @@ watch(tree, (value) => {
 
 <style scoped>
 .exec-tree-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
-  flex: 0 0 auto;
-  min-height: auto;
-  overflow: visible;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
-.subagent-drilldown { min-width: 0; padding: 8px 10px 24px; }
-.subagent-drilldown-header { position: sticky; z-index: 4; top: 0; min-height: 46px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 9px 9px 0 0; background: color-mix(in srgb, var(--bg-secondary) 94%, var(--dialog-surface)); }
+.subagent-drilldown {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px 10px 0;
+}
+.subagent-drilldown-header { flex: 0 0 auto; min-height: 42px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 9px 9px 0 0; background: color-mix(in srgb, var(--bg-secondary) 94%, var(--dialog-surface)); }
 .subagent-back { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-primary); color: var(--text-secondary); font-size: 10px; font-weight: 600; cursor: pointer; }
 .subagent-back:hover { border-color: var(--text-accent); color: var(--text-accent); }
 .subagent-back:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
@@ -486,21 +542,21 @@ watch(tree, (value) => {
 .subagent-run-status.status-completed { color: var(--color-success, #22c55e); }
 .subagent-run-status.status-running { color: var(--text-accent); }
 .subagent-run-status.status-failed, .subagent-run-status.status-error { color: var(--color-error, #ef4444); }
-.subagent-overview { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px; border: 1px solid var(--border-subtle); border-top: 0; background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-primary)); }
-.subagent-identity { min-width: 0; display: flex; align-items: center; gap: 11px; }
-.subagent-avatar { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; background: color-mix(in srgb, var(--text-accent) 12%, var(--bg-secondary)); color: var(--text-accent); }
-.subagent-avatar svg { width: 19px; fill: none; stroke: currentColor; stroke-width: 1.35; }
+.subagent-overview { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 9px 12px; border: 1px solid var(--border-subtle); border-top: 0; background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-primary)); }
+.subagent-identity { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.subagent-avatar { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; background: color-mix(in srgb, var(--text-accent) 12%, var(--bg-secondary)); color: var(--text-accent); }
+.subagent-avatar svg { width: 16px; fill: none; stroke: currentColor; stroke-width: 1.35; }
 .subagent-identity small { color: var(--text-accent); font-family: var(--font-mono); font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.subagent-identity h3 { margin: 2px 0; color: var(--text-primary); font-size: 15px; }
+.subagent-identity h3 { margin: 1px 0; color: var(--text-primary); font-size: 13px; }
 .subagent-identity code { color: var(--text-tertiary); font-size: 9px; }
 .subagent-stats { display: grid; grid-template-columns: repeat(4, minmax(66px, auto)); margin: 0; }
 .subagent-stats div { padding: 5px 11px; border-left: 1px solid var(--border-subtle); }
 .subagent-stats dt { color: var(--text-tertiary); font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }
 .subagent-stats dd { margin: 3px 0 0; color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; font-weight: 650; }
-.subagent-presentation { margin-left: 0; }
-.subagent-workspace { min-width: 0; }
-.subagent-chain { min-width: 0; }
-.subagent-chain :deep(.inline-subagent-container) { margin-top: 0; }
+.subagent-workspace { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; padding-bottom: 20px; scrollbar-gutter: stable; }
+.subagent-workspace > * { flex: 0 0 auto; }
+.subagent-body { min-width: 0; }
+.subagent-steps { min-width: 0; }
 .exec-loading, .exec-error, .exec-empty {
   display: flex;
   flex-direction: column;
@@ -543,8 +599,7 @@ watch(tree, (value) => {
   white-space: pre-wrap;
 }
 .exec-empty p { margin: 0; color: var(--text-secondary); font-size: 13px; }
-.exec-error-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 6px 10px 2px; }
-.exec-presentation-bar { display: inline-flex; align-self: flex-start; gap: 3px; margin: 8px 10px 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-secondary); }
+.exec-presentation-bar { display: inline-flex; align-self: flex-start; gap: 3px; margin: 4px 0 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-secondary); }
 .exec-presentation-btn { min-height: 28px; padding: 5px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text-tertiary); font-size: 10px; font-weight: 600; cursor: pointer; }
 .exec-presentation-btn:hover { color: var(--text-primary); }
 .exec-presentation-btn.active { background: var(--bg-primary); color: var(--text-accent); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
@@ -556,86 +611,108 @@ watch(tree, (value) => {
 .exec-filter-chip--error.active { border-color: var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error) 8%, var(--bg-primary)); color: var(--color-error, #ef4444); }
 .filter-count { padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-error, #ef4444) 12%, transparent); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
 .message-stat--error, .message-stat--error strong { color: var(--color-error, #ef4444) !important; }
-.causality-label { display: flex; align-items: center; gap: 5px; padding: 2px 10px 2px 52px; color: var(--text-tertiary); font-size: 10px; font-style: italic; }
-.causality-arrow { color: var(--text-accent); font-style: normal; font-weight: 600; }
+.subagent-context-card { margin: 6px 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--text-accent) 28%, var(--border-subtle)); border-radius: 7px; background: var(--bg-primary); }
+.subagent-context-card.context-output { border-color: color-mix(in srgb, var(--color-success, #22c55e) 28%, var(--border-subtle)); }
+.context-card-label { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--text-tertiary); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.context-card-label svg { color: var(--text-accent); }
+.context-output .context-card-label svg { color: var(--color-success, #22c55e); }
+.context-status { padding: 2px 7px; border-radius: 4px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 11px; font-weight: 500; }
+.context-status--completed { color: var(--color-success, #22c55e); }
+.context-status--failed { color: var(--color-error, #ef4444); }
+.context-error { display: block; margin-top: 5px; color: var(--color-error, #ef4444); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .exec-spinner { width: 16px; height: 16px; border: 1.5px solid var(--border); border-top-color: var(--text-secondary); border-radius: 50%; animation: exec-panel-spin 700ms linear infinite; }
 .exec-tree-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-height: auto;
-  overflow: visible;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 .exec-tree-section {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
-  overflow: visible;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0 10px 20px 4px;
   scrollbar-gutter: stable;
 }
-.message-scope {
-  position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 11px;
-  margin: 8px 8px 4px;
-  padding: 13px 14px 13px 12px;
-  border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-primary));
+/* Children must keep their natural height; as flex items they would otherwise
+   be squeezed once the task list outgrows the scroller. */
+.exec-tree-section > * { flex: 0 0 auto; }
+.exec-sticky {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  flex: 0 0 auto;
+  padding-bottom: 2px;
+  background: var(--dialog-surface);
+  box-shadow: 0 6px 10px -8px rgba(0, 0, 0, .35);
 }
-.message-scope::after {
-  position: absolute;
-  bottom: -13px;
-  left: 28px;
-  width: 1px;
-  height: 13px;
-  background: color-mix(in srgb, var(--text-accent) 36%, var(--border-subtle));
-  content: '';
-}
-.message-scope-mark {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--text-accent) 13%, var(--bg-secondary));
-  color: var(--text-accent);
-}
-.message-scope-mark svg { width: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; }
-.message-scope-content { min-width: 0; }
-.message-scope-kicker { color: var(--text-accent); font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.message-scope p { display: -webkit-box; margin: 4px 0 9px; overflow: hidden; color: var(--text-primary); font-size: 12px; line-height: 1.5; white-space: pre-wrap; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.message-scope-stats { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
-.message-scope-stats strong { color: var(--text-secondary); font-weight: 650; }
-.tree-caption {
+.exec-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  min-height: 34px;
-  padding: 6px 10px 8px;
+  gap: 6px 12px;
+  padding: 0 10px 4px;
+}
+.exec-toolbar-count {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: .06em;
   text-transform: uppercase;
 }
-.tree-caption--sticky {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-  background: var(--dialog-surface);
-}
-.tree-count {
+.exec-toolbar-count strong {
   padding: 2px 7px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   letter-spacing: 0;
-  text-transform: none;
 }
+.message-scope {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 8px 4px;
+  padding: 7px 11px;
+  border: 1px solid color-mix(in srgb, var(--text-accent) 22%, var(--border-subtle));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-primary));
+}
+.message-scope-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-accent) 13%, var(--bg-secondary));
+  color: var(--text-accent);
+}
+.message-scope-mark svg { width: 13px; fill: none; stroke: currentColor; stroke-width: 1.35; }
+.message-scope-content { display: contents; }
+.message-scope p {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-scope-stats { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 12px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
+.message-scope-stats strong { color: var(--text-secondary); font-weight: 650; }
 .exec-detail-drawer {
   position: absolute;
   top: 0;
@@ -644,7 +721,7 @@ watch(tree, (value) => {
   z-index: 30;
   display: flex;
   flex-direction: column;
-  width: min(640px, 78%);
+  width: min(1040px, 88%);
   overflow: hidden;
   pointer-events: auto;
   border-left: 1px solid var(--border-subtle);

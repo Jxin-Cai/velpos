@@ -1,41 +1,26 @@
 import { ref, computed, watch } from 'vue'
-import { useSession } from '@entities/session'
-import { listModels, getProjectUsage } from '@entities/session'
+import { useSession, useAvailableModels, getProjectUsage } from '@entities/session'
 
 const DEFAULT_CONTEXT_SIZE = 200000
 
-// Cached model context sizes from backend
-const modelContextSizes = ref({})
+const { availableModels: sharedModels, loadAvailableModels } = useAvailableModels()
+const modelContextSizes = computed(() => {
+  const sizes = {}
+  for (const m of sharedModels.value) {
+    if (m.value && m.context_window) {
+      sizes[m.value] = m.context_window
+    }
+  }
+  return sizes
+})
 const projectUsageSummary = ref(null)
 let usageFetchKey = ''
 let _usageSeq = 0
-let _modelsPromise = null
-
-
-async function ensureModelsFetched() {
-  if (_modelsPromise) return _modelsPromise
-  _modelsPromise = (async () => {
-    try {
-      const res = await listModels()
-      const models = res || []
-      const sizes = {}
-      for (const m of models) {
-        if (m.value && m.context_window) {
-          sizes[m.value] = m.context_window
-        }
-      }
-      modelContextSizes.value = sizes
-    } catch {
-      _modelsPromise = null
-    }
-  })()
-  return _modelsPromise
-}
 
 export function useSessionStats() {
   const { session, messages, queryHistory } = useSession()
 
-  ensureModelsFetched()
+  loadAvailableModels()
 
   async function refreshUsage() {
     const current = session.value

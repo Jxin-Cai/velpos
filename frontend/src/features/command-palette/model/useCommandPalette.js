@@ -59,13 +59,23 @@ export function useCommandPalette() {
     error.value = null
     const seq = ++_loadCmdSeq
     try {
-      const [commandData, policyData] = await Promise.all([
-        fetchCommands(projectDir),
-        fetchCommandPolicies(projectDir),
-      ])
-      if (seq !== _loadCmdSeq) return
-      commands.value = (commandData.commands || []).filter(c => c.isUserInvocable !== false)
-      policies.value = policyData.policies || []
+      const delays = [0, 1200, 2500]
+      let loadedCommands = []
+      let loadedPolicies = []
+      for (const delay of delays) {
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+        if (seq !== _loadCmdSeq) return
+        const [commandData, policyData] = await Promise.all([
+          fetchCommands(projectDir),
+          fetchCommandPolicies(projectDir),
+        ])
+        if (seq !== _loadCmdSeq) return
+        loadedCommands = (commandData.commands || []).filter(c => c.isUserInvocable !== false)
+        loadedPolicies = policyData.policies || []
+        if (loadedCommands.length) break
+      }
+      commands.value = loadedCommands
+      policies.value = loadedPolicies
       cachedProjectDir = projectDir
     } catch (e) {
       if (seq !== _loadCmdSeq) return

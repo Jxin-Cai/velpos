@@ -34,7 +34,6 @@ export function useExecutionTree() {
   let loadedContextKey = null
 
   const expandedTasks = reactive(new Set())
-  const expandedLoops = reactive(new Set())
   const expandedSubagents = reactive(new Map())
   const inlineSubagents = reactive(new Map())
 
@@ -48,10 +47,7 @@ export function useExecutionTree() {
   const selectedLoopId = ref(null)
 
   const tasks = computed(() => tree.value?.tasks || [])
-  const agentId = computed(() => tree.value?.agent_id || '')
   const provenance = computed(() => tree.value?.provenance || null)
-  const dependencies = computed(() => tree.value?.dependencies || [])
-  const subagents = computed(() => tree.value?.subagents || [])
 
   function loopKey(loopId, agentSpanId = null) {
     return agentSpanId ? `${agentSpanId}:${loopId}` : loopId
@@ -69,7 +65,6 @@ export function useExecutionTree() {
     expandedSubagents.clear()
     inlineSubagents.clear()
     expandedTasks.clear()
-    expandedLoops.clear()
   }
 
   function reconcileViewerState(result) {
@@ -79,9 +74,6 @@ export function useExecutionTree() {
 
     for (const taskId of expandedTasks) {
       if (!taskIds.has(taskId)) expandedTasks.delete(taskId)
-    }
-    for (const loopId of expandedLoops) {
-      if (!loopIds.has(loopId)) expandedLoops.delete(loopId)
     }
 
     if (selectedLoopId.value && !loopIds.has(selectedLoopId.value)) {
@@ -239,56 +231,11 @@ export function useExecutionTree() {
     }
   }
 
-  function expandTask(taskId) {
-    expandedTasks.add(taskId)
-  }
-
-  function collapseTask(taskId) {
-    expandedTasks.delete(taskId)
-  }
-
   function toggleTask(taskId) {
     if (expandedTasks.has(taskId)) {
       expandedTasks.delete(taskId)
     } else {
       expandedTasks.add(taskId)
-    }
-  }
-
-  function expandLoop(loopId) {
-    expandedLoops.add(loopId)
-    if (!loopDetails.has(loopId)) {
-      loadLoopDetail(loopId)
-    }
-  }
-
-  function collapseLoop(loopId) {
-    expandedLoops.delete(loopId)
-  }
-
-  function toggleLoop(loopId) {
-    if (expandedLoops.has(loopId)) {
-      collapseLoop(loopId)
-    } else {
-      expandLoop(loopId)
-    }
-  }
-
-  function expandSubagent(spanId) {
-    if (!expandedSubagents.has(spanId)) {
-      loadSubagentTree(spanId)
-    }
-  }
-
-  function collapseSubagent(spanId) {
-    expandedSubagents.delete(spanId)
-  }
-
-  function toggleSubagent(spanId) {
-    if (expandedSubagents.has(spanId)) {
-      collapseSubagent(spanId)
-    } else {
-      expandSubagent(spanId)
     }
   }
 
@@ -328,14 +275,6 @@ export function useExecutionTree() {
     if (state === NodeStatus.IDLE || state === NodeStatus.ERROR) {
       loadLoopDetail(loopId)
     }
-  }
-
-  function isTaskExpanded(taskId) {
-    return expandedTasks.has(taskId)
-  }
-
-  function isLoopExpanded(loopId) {
-    return expandedLoops.has(loopId)
   }
 
   function getLoopDetail(loopId, agentSpanId = null) {
@@ -399,43 +338,23 @@ export function useExecutionTree() {
     loading,
     error,
     tasks,
-    agentId,
     provenance,
-    dependencies,
-    subagents,
-    selectedRunId,
     selectedLoopId,
     expandedTasks,
-    expandedLoops,
-    expandedSubagents,
-    inlineSubagents,
     loadTree,
     loadLoopDetail,
     loadMoreLoopEvents,
     loadSubagentTree,
-    loadInlineSubagentTree,
-    expandTask,
-    collapseTask,
     toggleTask,
-    expandLoop,
-    collapseLoop,
-    toggleLoop,
-    expandSubagent,
-    collapseSubagent,
-    toggleSubagent,
     toggleInlineSubagent,
     selectLoop,
-    isTaskExpanded,
-    isLoopExpanded,
     getLoopDetail,
     getLoopLoadState,
     getSubagentState,
     getInlineSubagentState,
-    llmRequests,
     getLlmRequestForLoop,
     getLlmRequestDetail,
     loadLlmRequestDetail,
-    refreshSummary,
     NodeStatus,
   }
 }

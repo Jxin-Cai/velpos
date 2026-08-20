@@ -205,9 +205,10 @@ class ClaudeAgentGateway(ABC):
 
     @abstractmethod
     async def get_models(self) -> list[dict[str, Any]]:
-        """Get available models from Claude Code.
+        """Reload available models from current Claude settings via Claude Code CLI.
 
         Returns a list of model dicts with at least 'value' and 'displayName'.
+        Callers should treat this as a fresh catalog, not a process-lifetime cache.
         """
         ...
 

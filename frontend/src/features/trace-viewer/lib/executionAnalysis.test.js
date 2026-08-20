@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   ExecutionPresentation,
   buildExecutionTaskRows,
+  buildSubagentChain,
   executionMetricPercent,
   executionStepTokens,
   rankExecutionTasks,
@@ -92,4 +93,52 @@ test('test_lists_unique_subagents_when_task_calls_agents_across_steps', () => {
 
   // Assert
   assert.deepEqual(result, [agent])
+})
+
+test('test_orders_subagents_by_invocation_when_tasks_delegate_across_steps', () => {
+  // Arrange
+  const explore = { tool_use_id: 'agent-1', span_id: 'span-1', subagent: 'Explore' }
+  const review = { tool_use_id: 'agent-2', span_id: 'span-2', subagent: 'Review' }
+  const tasks = [
+    task('first', [{ ...loop('one', 100, 0, 0, 1), subagents: [explore] }]),
+    task('second', [{ ...loop('two', 100, 0, 0, 2), subagents: [review] }]),
+  ]
+
+  // Act
+  const chain = buildSubagentChain(tasks)
+
+  // Assert
+  assert.deepEqual(
+    chain.map(item => [item.order, item.subagent, item.stepSequence]),
+    [[1, 'Explore', 1], [2, 'Review', 2]],
+  )
+})
+
+test('test_lists_subagent_once_when_the_same_agent_runs_in_several_steps', () => {
+  // Arrange
+  const agent = { tool_use_id: 'agent-1', span_id: 'span-1', subagent: 'Explore' }
+  const tasks = [task('repeat', [
+    { ...loop('one', 100, 0, 0, 1), subagents: [agent] },
+    { ...loop('two', 100, 0, 0, 2), subagents: [agent] },
+  ])]
+
+  // Act
+  const chain = buildSubagentChain(tasks)
+
+  // Assert
+  assert.deepEqual(chain.map(item => item.key), ['agent-1'])
+})
+
+test('test_appends_subagent_when_no_step_references_its_invocation', () => {
+  // Arrange
+  const orphan = { tool_use_id: 'agent-9', span_id: 'span-9', subagent: 'Detached' }
+
+  // Act
+  const chain = buildSubagentChain([task('empty', [loop('one', 100, 0, 0, 1)])], [orphan])
+
+  // Assert
+  assert.deepEqual(
+    chain.map(item => [item.key, item.stepSequence]),
+    [['agent-9', null]],
+  )
 })

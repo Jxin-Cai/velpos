@@ -1,4 +1,5 @@
 export { useSession } from './model/useSession'
+export { useAvailableModels, loadAvailableModels } from './model/useAvailableModels'
 export {
   createSession,
   listSessions,

@@ -54,10 +54,6 @@ export async function fetchTelemetrySummary(sessionId, runId) {
   )
 }
 
-export async function fetchSpanDetail(sessionId, spanId) {
-  return get(`/sessions/${sessionId}/traces/${spanId}`, TRACE_REQUEST_OPTIONS)
-}
-
 export async function fetchExecutionTree(sessionId, runId, agentSpanId = null) {
   const params = agentSpanId ? `?agent_span_id=${encodeURIComponent(agentSpanId)}` : ''
   return get(`/sessions/${sessionId}/runs/${runId}/execution-tree${params}`, TRACE_REQUEST_OPTIONS)

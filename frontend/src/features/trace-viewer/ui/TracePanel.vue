@@ -1,7 +1,6 @@
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { formatDuration } from '@shared/lib/formatTime'
-import { formatTokens } from '@shared/lib/formatNumber'
 import { useSession } from '@entities/session'
 import { useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTraceTree } from '../model/useTraceTree'
@@ -33,8 +32,10 @@ import {
   filterTraceRows,
   filterTraceTree,
   flattenTraceNodes,
+  isSubagentTraceSpan,
   rankTraceRows,
 } from '../lib/traceAnalysis'
+import TraceTelemetryStrip from './TraceTelemetryStrip.vue'
 
 const ViewMode = Object.freeze({ EXECUTION: 'execution', RAW_SPAN: 'raw_span', EVENTS: 'events' })
 const ERROR_EVENT_NAMES = Object.freeze(new Set(['api_error', 'api_refusal']))
@@ -182,9 +183,15 @@ const overallStatus = computed(() => {
   return { label: 'Completed', className: 'is-completed' }
 })
 
+const sessionSubagents = computed(() => buildSubagentRoster(
+  flattenTraceNodes(traceTree.value || []).filter(isSubagentTraceSpan),
+  executionTree.value?.subagents || [],
+))
+
 // Codex-style state separates active blockers from the terminal run outcome.
 const sessionState = computed(() => {
-  const isLatestRun = runIds.value.length === 0 || selectedRunId.value === runIds.value[0]
+  const isLatestRun = runIds.value.length === 0
+    || selectedRunId.value === runIds.value[runIds.value.length - 1]
   const pendingRequest = recovery.value?.pending_request
   if (isLatestRun && pendingRequest) {
     const waitsForChoice = pendingRequest.interaction_type === 'user_choice'
@@ -273,12 +280,6 @@ const sessionState = computed(() => {
 })
 
 const traceAnalysis = computed(() => buildTraceAnalysis(traceTree.value || []))
-const sessionSubagents = computed(() => {
-  return buildSubagentRoster(
-    flattenTraceNodes(traceTree.value || []),
-    executionTree.value?.subagents || [],
-  )
-})
 const highLatencyThreshold = computed(() => traceAnalysis.value.thresholds.p90)
 
 const filteredTree = computed(() => {
@@ -315,21 +316,6 @@ const traceTiming = computed(() => {
     })),
   }
 })
-
-function openSubagentTrace(subagent) {
-  if (!subagent?.span_id) return
-  viewMode.value = ViewMode.EXECUTION
-  focusSubagentRequest.value = {
-    spanId: subagent.span_id,
-    name: subagent.subagent || subagent.agent_id || 'Subagent',
-    nonce: (focusSubagentRequest.value?.nonce || 0) + 1,
-  }
-}
-
-function formatCost(value) {
-  const number = Number(value) || 0
-  return number < 0.01 ? `$${number.toFixed(4)}` : `$${number.toFixed(2)}`
-}
 
 function formatEventTime(value) {
   if (!value) return '—'
@@ -517,10 +503,6 @@ async function exportFullTrace() {
           <div id="trace-detail-drawer-host" class="trace-detail-drawer-host"></div>
           <header class="trace-header">
             <div class="trace-heading">
-              <div class="trace-eyebrow">
-                <span class="eyebrow-mark" aria-hidden="true"></span>
-                History
-              </div>
               <div class="trace-title-line">
                 <h2 id="trace-panel-title" class="trace-title">Execution trace</h2>
                 <span v-if="telemetry?.source === 'claude_code_otel'" class="native-otel-badge" title="Captured from Claude Code's native OpenTelemetry exporter">
@@ -531,7 +513,6 @@ async function exportFullTrace() {
                   {{ overallStatus.label }}
                 </span>
               </div>
-              <p class="trace-subtitle">Follow each agent turn and inspect every tool request and response in context.</p>
             </div>
             <div class="trace-header-actions">
               <button class="header-icon-btn" type="button" :title="isFullscreen ? 'Exit full screen' : 'Observe in full screen'" :aria-label="isFullscreen ? 'Exit full screen trace view' : 'Open full screen trace view'" :aria-pressed="isFullscreen" @click="isFullscreen = !isFullscreen">
@@ -560,12 +541,25 @@ async function exportFullTrace() {
                 aria-label="选择 Trace 运行记录"
                 @change="loadTraceForRun($event.target.value)"
               >
-                <option v-for="rid in runIds" :key="rid" :value="rid">{{ rid }}</option>
+                <option v-for="(rid, index) in runIds" :key="rid" :value="rid">{{ index + 1 }} · {{ rid }}</option>
               </select>
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <path d="m4 6 4 4 4-4" />
               </svg>
             </label>
+            <div class="run-actions">
+              <button type="button" class="trace-download-btn trace-download-btn--error" :disabled="Boolean(exporting)" :aria-busy="exporting === 'exceptions'" :title="exporting === 'exceptions' ? 'Collecting exceptions…' : 'Export exceptions, including nested agents'" @click="exportExceptions">
+                <span v-if="exporting === 'exceptions'" class="loading-ring loading-ring--small" aria-hidden="true"></span>
+                <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 10v3h10v-3M8 2v8M5 7l3 3 3-3"/></svg>
+                <span>Exceptions</span>
+                <strong v-if="exceptionCount > 0" class="run-action-count">{{ exceptionCount }}</strong>
+              </button>
+              <button type="button" class="trace-download-btn" :disabled="Boolean(exporting)" :aria-busy="exporting === 'trace'" :title="exporting === 'trace' ? 'Collecting full trace…' : 'Export the complete trace'" @click="exportFullTrace">
+                <span v-if="exporting === 'trace'" class="loading-ring loading-ring--small" aria-hidden="true"></span>
+                <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 10v3h10v-3M8 2v8M5 7l3 3 3-3"/></svg>
+                <span>Full trace</span>
+              </button>
+            </div>
           </div>
 
           <nav class="view-mode-bar" aria-label="View mode">
@@ -590,89 +584,37 @@ async function exportFullTrace() {
           </nav>
 
           <main ref="traceBodyEl" class="trace-body" :class="{ 'trace-body--execution': viewMode === ViewMode.EXECUTION }">
-            <section
-              class="session-status-card"
-              :class="`session-status-card--${sessionState.tone}`"
-              role="region"
-              aria-label="Session and subagent status"
-            >
-              <span class="session-state-icon" aria-hidden="true"><i></i></span>
-              <span class="session-status-main" role="status" aria-live="polite" aria-atomic="true">
-                <span class="session-status-category">Session · {{ sessionState.category }}</span>
-                <strong>{{ sessionState.label }}</strong>
-                <span v-if="sessionState.detail">{{ sessionState.detail }}</span>
-              </span>
-              <span class="session-next-action">
-                <small>Next action</small>
-                <strong>{{ sessionState.action }}</strong>
-              </span>
-              <div v-if="sessionSubagents.length" class="session-agent-rail">
-                <span class="agent-rail-label"><small>Subagents</small><strong>{{ sessionSubagents.length }} used</strong></span>
-                <div class="agent-rail-list">
-                  <button v-for="(subagent, index) in sessionSubagents" :key="subagent.key || subagent.span_id || subagent.tool_use_id" type="button" :disabled="!subagent.span_id" :aria-label="`Open ${subagent.subagent} execution steps`" @click="openSubagentTrace(subagent)">
-                    <span class="agent-rail-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3" y="4" width="10" height="8" rx="2"/><path d="M8 2v2M6 8h.01M10 8h.01"/></svg></span>
-                    <span><small>Agent {{ index + 1 }} · {{ subagent.status || 'recorded' }}</small><strong>{{ subagent.subagent || subagent.agent_id || 'Subagent' }}</strong><small v-if="subagent.duration_ms">{{ formatDuration(subagent.duration_ms) }} · open execution steps</small><small v-else>Open execution steps</small></span>
-                    <svg class="agent-rail-open" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <section v-if="telemetry || telemetryLoading" class="telemetry-strip" aria-label="OpenTelemetry run summary" :aria-busy="telemetryLoading">
-              <div class="telemetry-source-card">
-                <span class="telemetry-label">Signals</span>
-                <strong>{{ telemetry?.source === 'claude_code_otel' ? 'Claude Code native' : 'Compatibility trace' }}</strong>
-                <span>{{ telemetry?.trace_count || 0 }} trace · {{ telemetry?.log_event_count || 0 }} logs · {{ telemetry?.metric_sample_count || 0 }} metrics</span>
-              </div>
-              <div class="telemetry-stat">
-                <span>Token usage</span>
-                <strong>{{ formatTokens((telemetry?.input_tokens || 0) + (telemetry?.output_tokens || 0)) }}</strong>
-                <small>{{ formatTokens(telemetry?.cache_read_tokens || 0) }} cache read</small>
-              </div>
-              <div class="telemetry-stat">
-                <span>Estimated cost</span>
-                <strong>{{ formatCost(telemetry?.cost_usd) }}</strong>
-                <small>{{ telemetry?.llm_request_count || 0 }} requests · {{ telemetry?.raw_api_body_count || 0 }} raw bodies</small>
-              </div>
-              <div class="telemetry-stat">
-                <span>LLM latency p95</span>
-                <strong>{{ formatDuration(telemetry?.llm_latency_p95_ms || 0) }}</strong>
-                <small>p50 {{ formatDuration(telemetry?.llm_latency_p50_ms || 0) }} · TTFT {{ formatDuration(telemetry?.ttft_p95_ms || 0) }}</small>
-              </div>
-              <div class="telemetry-stat" :class="{ 'telemetry-stat--error': telemetry?.api_error_count }">
-                <span>API errors</span>
-                <strong>{{ telemetry?.api_error_count || 0 }}</strong>
-                <small>{{ telemetry?.retry_count || 0 }} retries · {{ telemetry?.api_refusal_count || 0 }} refusals</small>
-              </div>
-            </section>
             <p v-if="telemetryError" class="telemetry-error" role="status">{{ telemetryError }}</p>
-
-            <section v-if="selectedRunId" class="trace-actions" aria-label="Trace audit exports">
-              <div class="exception-total" :class="{ 'has-exceptions': exceptionCount > 0 }">
-                <span>Exceptions</span>
-                <strong>{{ exceptionCountLoading ? '…' : exceptionCount }}</strong>
-                <small>Includes nested agents</small>
-              </div>
-              <div class="trace-action-buttons">
-                <button type="button" class="trace-download-btn trace-download-btn--error" :disabled="Boolean(exporting)" :aria-busy="exporting === 'exceptions'" @click="exportExceptions">
-                  <span v-if="exporting === 'exceptions'" class="loading-ring loading-ring--small" aria-hidden="true"></span>
-                  <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 10v3h10v-3M8 2v8M5 7l3 3 3-3"/></svg>
-                  {{ exporting === 'exceptions' ? 'Collecting exceptions…' : 'Export exceptions' }}
-                </button>
-                <button type="button" class="trace-download-btn" :disabled="Boolean(exporting)" :aria-busy="exporting === 'trace'" @click="exportFullTrace">
-                  <span v-if="exporting === 'trace'" class="loading-ring loading-ring--small" aria-hidden="true"></span>
-                  <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 10v3h10v-3M8 2v8M5 7l3 3 3-3"/></svg>
-                  {{ exporting === 'trace' ? 'Collecting full trace…' : 'Export full trace' }}
-                </button>
-              </div>
-            </section>
             <p v-if="exportError" class="trace-export-error" role="alert">{{ exportError }}</p>
 
             <template v-if="viewMode === ViewMode.EXECUTION">
-              <ExecutionTreePanel :run-id="selectedRunId" :focus-subagent="focusSubagentRequest" @summary-change="handleExecutionSummary" />
+              <ExecutionTreePanel
+                :run-id="selectedRunId"
+                :focus-subagent="focusSubagentRequest"
+                :span-subagents="sessionSubagents"
+                @summary-change="handleExecutionSummary"
+              >
+                <!-- Rendered inside the step scroller so it frees space once the reader scrolls. -->
+                <template #prelude>
+                  <TraceTelemetryStrip
+                    :telemetry="telemetry"
+                    :loading="telemetryLoading"
+                    :session-state="sessionState"
+                    :exception-count="exceptionCount"
+                    :exception-count-loading="exceptionCountLoading"
+                  />
+                </template>
+              </ExecutionTreePanel>
             </template>
 
             <template v-else-if="viewMode === ViewMode.RAW_SPAN">
+              <TraceTelemetryStrip
+                :telemetry="telemetry"
+                :loading="telemetryLoading"
+                :session-state="sessionState"
+                :exception-count="exceptionCount"
+                :exception-count-loading="exceptionCountLoading"
+              />
               <div v-if="loading" class="trace-empty">
                 <span class="loading-ring" aria-hidden="true"></span>
                 <p>Loading execution history…</p>
@@ -851,34 +793,21 @@ async function exportFullTrace() {
 .trace-header {
   display: flex;
   flex-shrink: 0;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 22px 24px 18px;
+  padding: 12px 20px 10px;
 }
 .trace-header-actions { display: inline-flex; align-items: center; gap: 4px; }
 .header-icon-btn { width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--text-tertiary); cursor: pointer; }
 .header-icon-btn:hover { border-color: var(--border-subtle); background: var(--bg-hover); color: var(--text-primary); }
 .header-icon-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
 .trace-heading { min-width: 0; }
-.trace-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 7px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.eyebrow-mark { width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); }
 .trace-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .trace-title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -914,7 +843,6 @@ async function exportFullTrace() {
   font-weight: 600;
   letter-spacing: .02em;
 }
-.trace-subtitle { margin: 7px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.5; }
 .close-btn {
   display: flex;
   flex: 0 0 36px;
@@ -932,15 +860,14 @@ async function exportFullTrace() {
 }
 .close-btn:hover { border-color: var(--border-subtle); background: var(--bg-hover); color: var(--text-primary); }
 .run-bar {
-  min-height: 48px;
+  min-height: 38px;
   display: flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 24px;
+  padding: 4px 20px;
   border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
 }
 .run-identity { display: flex; align-items: center; min-width: 0; gap: 8px; }
@@ -955,6 +882,14 @@ async function exportFullTrace() {
   white-space: nowrap;
 }
 .run-position { padding-left: 8px; border-left: 1px solid var(--border-subtle); font-family: var(--font-mono); }
+.run-actions { display: flex; flex-shrink: 0; align-items: center; gap: 6px; margin-left: auto; }
+.run-action-count {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-error, #ef4444) 15%, transparent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
 .view-mode-bar {
   display: flex;
   align-items: center;
@@ -1005,114 +940,24 @@ async function exportFullTrace() {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 16px 24px;
+  padding: 10px 16px 24px;
   scrollbar-gutter: stable;
 }
+/* The step list owns the remaining height and scrolls on its own, so the run
+   summary never pushes the steps out of view. */
 .trace-body--execution {
-  display: block;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
 }
 .trace-flow-overview { display: grid; grid-template-columns: repeat(4, minmax(105px, auto)) minmax(220px, 1fr); align-items: center; gap: 8px 18px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 9px; background: color-mix(in srgb, #8b5cf6 4%, var(--bg-secondary)); }
 .trace-flow-overview div { display: grid; gap: 2px; }
 .trace-flow-overview small { color: var(--text-tertiary); font-size: 8px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
 .trace-flow-overview strong { color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; }
 .trace-flow-overview p { margin: 0; color: var(--text-tertiary); font-size: 9px; line-height: 1.45; }
-.session-status-card {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: 34px minmax(180px, 1fr) minmax(210px, .8fr);
-  align-items: center;
-  gap: 12px;
-  margin: 0 12px 4px;
-  padding: 11px 14px;
-  border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--text-accent) 5%, var(--bg-secondary));
-}
-.session-status-card--blocked { border-color: color-mix(in srgb, var(--color-warning, #f59e0b) 38%, var(--border-subtle)); background: color-mix(in srgb, var(--color-warning, #f59e0b) 7%, var(--bg-secondary)); }
-.session-status-card--warning, .session-status-card--error { border-color: color-mix(in srgb, var(--color-error, #ef4444) 30%, var(--border-subtle)); background: color-mix(in srgb, var(--color-error, #ef4444) 5%, var(--bg-secondary)); }
-.session-state-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--text-accent) 12%, var(--bg-primary)); color: var(--text-accent); }
-.session-state-icon i { width: 9px; height: 9px; border: 2px solid currentColor; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 14%, transparent); }
-.session-status-card--active .session-state-icon i { animation: live-pulse 1.5s ease-in-out infinite; }
-.session-status-card--blocked .session-state-icon { background: color-mix(in srgb, var(--color-warning, #f59e0b) 13%, var(--bg-primary)); color: var(--color-warning, #f59e0b); }
-.session-status-card--warning .session-state-icon, .session-status-card--error .session-state-icon { background: color-mix(in srgb, var(--color-error, #ef4444) 12%, var(--bg-primary)); color: var(--color-error, #ef4444); }
-.session-status-card--complete .session-state-icon { background: color-mix(in srgb, var(--color-success, #22c55e) 12%, var(--bg-primary)); color: var(--color-success, #22c55e); }
-.session-status-main { min-width: 0; display: grid; gap: 2px; }
-.session-status-category { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
-.session-status-main strong { overflow: hidden; color: var(--text-primary); font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
-.session-status-main > span:last-child { color: var(--text-tertiary); font-size: 10px; }
-.session-next-action { min-width: 0; display: grid; gap: 2px; padding-left: 14px; border-left: 1px solid var(--border-subtle); }
-.session-next-action small { color: var(--text-tertiary); font-size: 9px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
-.session-next-action strong { overflow: hidden; color: var(--text-secondary); font-size: 10px; font-weight: 540; text-overflow: ellipsis; white-space: nowrap; }
-.session-agent-rail { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; padding-top: 9px; border-top: 1px solid var(--border-subtle); }
-.agent-rail-label { display: grid; gap: 1px; }
-.agent-rail-label small { color: var(--text-tertiary); font-size: 8px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
-.agent-rail-label strong { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
-.agent-rail-list { min-width: 0; display: flex; gap: 6px; overflow-x: auto; padding: 1px 1px 3px; scrollbar-width: thin; }
-.agent-rail-list button { min-width: 210px; max-width: 290px; min-height: 52px; display: grid; grid-template-columns: 28px minmax(0, 1fr) 12px; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle)); border-radius: 7px; background: var(--bg-primary); color: inherit; cursor: pointer; text-align: left; }
-.agent-rail-list button:hover { border-color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 6%, var(--bg-primary)); }
-.agent-rail-list button:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
-.agent-rail-list button:disabled { opacity: .55; cursor: not-allowed; }
-.agent-rail-icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; background: color-mix(in srgb, var(--text-accent) 11%, var(--bg-secondary)); color: var(--text-accent); }
-.agent-rail-icon svg { width: 13px; fill: none; stroke: currentColor; stroke-width: 1.35; }
-.agent-rail-list button > span:nth-child(2) { min-width: 0; display: grid; gap: 1px; }
-.agent-rail-list button strong { overflow: hidden; color: var(--text-primary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.agent-rail-list button small { overflow: hidden; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
-.agent-rail-open { color: var(--text-tertiary); }
-.telemetry-strip {
-  display: grid;
-  flex: 0 0 auto;
-  grid-template-columns: minmax(180px, 1.35fr) repeat(4, minmax(120px, 1fr));
-  margin: 12px 12px 4px;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-}
-.telemetry-source-card,
-.telemetry-stat {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 11px 14px;
-  border-right: 1px solid var(--border-subtle);
-}
-.telemetry-stat:last-child { border-right: 0; }
-.telemetry-source-card {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--text-accent) 10%, var(--bg-primary)), var(--bg-secondary));
-}
-.telemetry-label,
-.telemetry-stat > span {
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: .08em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.telemetry-source-card strong { color: var(--text-primary); font-size: 12px; font-weight: 600; }
-.telemetry-source-card > span:last-child,
-.telemetry-stat small { color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
-.telemetry-stat strong {
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 15px;
-  font-weight: 600;
-}
-.telemetry-stat--error strong { color: var(--color-error, #ef4444); }
-.telemetry-error { margin: 5px 14px 0; color: var(--color-warning, #f59e0b); font-size: 11px; }
-.trace-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 12px 4px; padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: 9px; background: color-mix(in srgb, var(--bg-secondary) 72%, transparent); }
-.exception-total { min-width: 150px; display: grid; grid-template-columns: auto auto; align-items: baseline; justify-content: start; gap: 2px 8px; }
-.exception-total > span { color: var(--text-tertiary); font-size: 10px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
-.exception-total strong { color: var(--text-primary); font-family: var(--font-mono); font-size: 18px; line-height: 1; }
-.exception-total small { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 9px; }
-.exception-total.has-exceptions strong { color: var(--color-error, #ef4444); }
-.trace-action-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
-.trace-download-btn { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 11px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
+.telemetry-error { margin: 0 14px 5px; color: var(--color-warning, #f59e0b); font-size: 11px; }
+.trace-download-btn { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-primary); color: var(--text-secondary); font-size: 10px; font-weight: 600; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
 .trace-download-btn:hover:not(:disabled) { border-color: var(--text-accent); background: var(--bg-hover); color: var(--text-primary); }
 .trace-download-btn--error { border-color: color-mix(in srgb, var(--color-error, #ef4444) 30%, var(--border-subtle)); color: var(--color-error, #ef4444); }
 .trace-download-btn--error:hover:not(:disabled) { border-color: var(--color-error, #ef4444); background: color-mix(in srgb, var(--color-error, #ef4444) 7%, var(--bg-primary)); color: var(--color-error, #ef4444); }
@@ -1176,7 +1021,6 @@ async function exportFullTrace() {
   white-space: pre-wrap;
   word-break: break-word;
 }
-@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .trace-empty {
   min-height: 320px;
   display: flex;
@@ -1243,41 +1087,28 @@ async function exportFullTrace() {
 @media (prefers-reduced-motion: reduce) {
   .trace-sheet-enter-active, .trace-sheet-leave-active,
   .trace-sheet-enter-active .trace-panel, .trace-sheet-leave-active .trace-panel { transition: none; }
-  .loading-ring, .trace-state.is-running .state-dot, .session-state-icon i { animation: none; }
+  .loading-ring, .trace-state.is-running .state-dot { animation: none; }
 }
 @media (max-width: 640px) {
   .trace-overlay { padding: 0; }
   .trace-panel { width: 100vw; height: 100dvh; border: 0; border-radius: 0; }
-  .trace-header { padding: 18px 18px 14px; }
-  .trace-title { font-size: 18px; }
-  .trace-subtitle { max-width: 280px; }
-  .run-bar { padding: 8px 18px; }
+  .trace-header { padding: 12px 16px 8px; }
+  .trace-title { font-size: 16px; }
+  .run-bar { padding: 4px 16px; }
   .trace-run-id { max-width: 150px; }
-  .trace-body { padding: 14px 10px 20px; }
-  .trace-actions { align-items: stretch; flex-direction: column; margin-inline: 4px; }
-  .trace-action-buttons { justify-content: stretch; }
+  .trace-body { padding: 10px 10px 20px; }
   .trace-download-btn { flex: 1; }
   .trace-waterfall-header { grid-template-columns: minmax(210px, 1fr) minmax(160px, .9fr); }
-  .session-status-card { grid-template-columns: 30px minmax(0, 1fr); margin-inline: 4px; }
-  .session-next-action { grid-column: 1 / -1; padding: 8px 0 0; border-top: 1px solid var(--border-subtle); border-left: 0; }
-  .session-agent-rail { grid-template-columns: 1fr; }
+  .run-actions { width: 100%; }
   .trace-analysis-toolbar { align-items: flex-start; flex-direction: column; }
   .latency-legend { flex-wrap: wrap; justify-content: flex-start; }
   .latency-legend > span:first-child { width: 100%; margin: 0; }
   .latency-legend strong { width: 100%; margin-left: 0; }
-  .telemetry-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 10px 4px 4px; }
-  .telemetry-source-card { grid-column: 1 / -1; }
-  .telemetry-source-card, .telemetry-stat { border-right: 0; border-bottom: 1px solid var(--border-subtle); }
-  .telemetry-stat:nth-last-child(-n + 2) { border-bottom: 0; }
   .event-row { grid-template-columns: 62px 8px minmax(0, 1fr); gap: 7px; }
   .trace-footer { gap: 12px; padding: 8px 18px; overflow-x: auto; }
   .trace-flow-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .trace-flow-overview p { grid-column: 1 / -1; }
   .footer-divider, .footer-spacer { display: none; }
-}
-@media (min-width: 641px) and (max-width: 980px) {
-  .telemetry-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .telemetry-source-card { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
 }
 @media (min-width: 1440px) {
   .trace-panel { width: min(1440px, calc(100vw - (var(--dialog-gutter) * 2))); }

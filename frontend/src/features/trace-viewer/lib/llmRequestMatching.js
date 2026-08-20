@@ -54,4 +54,3 @@ export function matchRequestsToLoops(loops, requests) {
   return matches
 }
 
-export const MATCH_TOLERANCE = MATCH_TOLERANCE_MS

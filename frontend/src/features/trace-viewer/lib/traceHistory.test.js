@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   flattenTraceTree,
+  listRunIds,
   mergeTraceSpans,
   resolveSelectedRunId,
   traceRunVersion,
@@ -22,8 +23,8 @@ test('test_keeps_explicit_run_when_recent_history_does_not_contain_it', () => {
 test('test_selects_latest_run_when_no_run_was_explicitly_selected', () => {
   // Arrange
   const spans = [
-    { id: 'old-run', run_id: 'run-1' },
-    { id: 'new-run', run_id: 'run-2' },
+    { id: 'old-run', run_id: 'run-1', started_time: '2026-08-12T14:00:00' },
+    { id: 'new-run', run_id: 'run-2', started_time: '2026-08-12T16:00:00' },
   ]
 
   // Act
@@ -31,6 +32,41 @@ test('test_selects_latest_run_when_no_run_was_explicitly_selected', () => {
 
   // Assert
   assert.equal(selectedRunId, 'run-2')
+})
+
+test('test_lists_run_ids_in_chronological_call_order', () => {
+  // Arrange — spans arrive with the selected older run appended last,
+  // the same shape loadTraceForRun writes into session state.
+  const spans = [
+    { id: 'new-run', run_id: 'run-2', started_time: '2026-08-12T16:00:00' },
+    { id: 'mid-run', run_id: 'run-3', started_time: '2026-08-12T15:00:00' },
+    { id: 'old-run', run_id: 'run-1', started_time: '2026-08-12T14:00:00' },
+  ]
+
+  // Act
+  const runIds = listRunIds(spans)
+
+  // Assert
+  assert.deepEqual(runIds, ['run-1', 'run-3', 'run-2'])
+})
+
+test('test_keeps_run_order_when_selected_run_spans_are_appended_last', () => {
+  // Arrange
+  const otherRuns = [
+    { id: 'run-2-root', run_id: 'run-2', started_time: '2026-08-12T16:00:00' },
+    { id: 'run-3-root', run_id: 'run-3', started_time: '2026-08-12T15:00:00' },
+  ]
+  const hydratedOlderRun = [
+    { id: 'run-1-root', run_id: 'run-1', started_time: '2026-08-12T14:00:00' },
+    { id: 'run-1-step', run_id: 'run-1', started_time: '2026-08-12T14:00:01' },
+  ]
+
+  // Act
+  const runIds = listRunIds([...otherRuns, ...hydratedOlderRun])
+
+  // Assert
+  assert.deepEqual(runIds, ['run-1', 'run-3', 'run-2'])
+  assert.equal(runIds.indexOf('run-1') + 1, 1)
 })
 
 test('test_merges_hydrated_older_run_with_recent_history', () => {

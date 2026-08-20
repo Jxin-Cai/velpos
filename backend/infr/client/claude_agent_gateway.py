@@ -102,6 +102,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         self._last_activity: dict[str, float] = {}
         # session_id -> asyncio.TimerHandle for scheduled idle disconnect
         self._idle_timers: dict[str, asyncio.TimerHandle] = {}
+        self._models_lock = asyncio.Lock()
         # sessions actively running a query (protected from idle disconnect)
         self._active_sessions: set[str] = set()
         # session_id -> coarse SDK state for UI diagnostics
@@ -1034,41 +1035,70 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         logger.info("未找到 SDK session_id 对应的 JSONL 文件: session=%s", session_id)
 
     async def get_models(self) -> list[dict[str, Any]]:
-        """Get available models by connecting a temporary SDK client and reading server info."""
-        raw_models: list[dict[str, Any]] = []
+        """Reload available models from current Claude settings via CLI.
 
-        # Reuse any existing client to avoid spawning a new process
+        Always re-reads ``~/.claude/settings.json`` env and asks Claude Code CLI
+        for a fresh initialize catalog — never returns a process-lifetime cache.
+        """
+        async with self._models_lock:
+            raw_models = await self._load_models_until_ready()
+            return [dict(model) for model in self._with_context_windows(raw_models)]
+
+    async def _load_models_until_ready(self) -> list[dict[str, Any]]:
+        delays = (0.0, 0.8, 1.6, 3.0)
+        last: list[dict[str, Any]] = []
+        for delay in delays:
+            if delay:
+                await asyncio.sleep(delay)
+            # Prefer a temp client so each call loads current settings.json env.
+            last = await self._read_models_from_temp_client()
+            if last:
+                return last
+            # Fallback only if spawning a temp CLI fails (e.g. CLI busy).
+            last = await self._read_models_from_existing_clients()
+            if last:
+                return last
+        return last
+
+    async def _read_models_from_existing_clients(self) -> list[dict[str, Any]]:
         for client in list(self._clients.values()):
             try:
                 info = await client.get_server_info()
-                if info and "models" in info:
-                    raw_models = info["models"]
-                    break
+                models = (info or {}).get("models") or []
+                if models:
+                    return models
             except Exception:
                 logger.debug("Failed to get models from existing client", exc_info=True)
+        return []
 
-        # No active client — create a temporary one
-        if not raw_models:
-            client = ClaudeSDKClient(options=ClaudeAgentOptions(
-                cli_path=self._cli_path,
-                permission_mode=self._permission_mode,
-                max_buffer_size=self._max_buffer_size,
-                env=load_claude_settings_env(),
-            ))
+    async def _read_models_from_temp_client(self) -> list[dict[str, Any]]:
+        client = ClaudeSDKClient(options=ClaudeAgentOptions(
+            cli_path=self._cli_path,
+            permission_mode=self._permission_mode,
+            max_buffer_size=self._max_buffer_size,
+            setting_sources=["user", "project"],
+            env=load_claude_settings_env(),
+        ))
+        try:
+            await client.connect()
+            info = await client.get_server_info()
+            return (info or {}).get("models") or []
+        except Exception:
+            logger.debug("Failed to get models from temporary client", exc_info=True)
+            return []
+        finally:
             try:
-                await client.connect()
-                info = await client.get_server_info()
-                raw_models = (info or {}).get("models", [])
-            finally:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    logger.debug("Failed to disconnect temp client for model fetch", exc_info=True)
+                await client.disconnect()
+            except Exception:
+                logger.debug("Failed to disconnect temp client for model fetch", exc_info=True)
 
+    def _with_context_windows(self, raw_models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        models: list[dict[str, Any]] = []
         for model in raw_models:
-            model["context_window"] = self._context_window_for_model(model)
-
-        return raw_models
+            enriched = dict(model)
+            enriched["context_window"] = self._context_window_for_model(enriched)
+            models.append(enriched)
+        return models
 
     async def get_models_for_channel(
         self,

@@ -21,9 +21,28 @@ export function mergeTraceSpans(persisted, current) {
   ))
 }
 
+export function listRunIds(spans) {
+  // Order by each run's earliest span so Switch run stays chronological
+  // even after loadTraceForRun appends the selected run's spans last.
+  const firstStarted = new Map()
+  for (const span of spans || []) {
+    const runId = span?.run_id
+    if (!runId) continue
+    const started = span.started_time || ''
+    const previous = firstStarted.get(runId)
+    if (previous == null || started < previous) firstStarted.set(runId, started)
+  }
+  return [...firstStarted.keys()].sort((a, b) => {
+    const timeA = firstStarted.get(a) || ''
+    const timeB = firstStarted.get(b) || ''
+    if (timeA !== timeB) return timeA < timeB ? -1 : 1
+    return a < b ? -1 : a > b ? 1 : 0
+  })
+}
+
 export function resolveSelectedRunId(selectedRunId, spans) {
   if (selectedRunId) return selectedRunId
-  const runIds = [...new Set(spans.map(span => span.run_id).filter(Boolean))]
+  const runIds = listRunIds(spans)
   return runIds.length ? runIds[runIds.length - 1] : null
 }
 
