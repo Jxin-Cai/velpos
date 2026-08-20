@@ -32,6 +32,17 @@ class SubagentPlaceholderDto(BaseModel):
     is_expandable: bool = False
 
 
+class LoopTimingDto(BaseModel):
+    span_id: str | None = None
+    ttft_ms: int = 0
+    request_duration_ms: int = 0
+    decode_ms: int = 0
+    attempt: int = 1
+    retry_count: int = 0
+    output_tokens_per_second: float | None = None
+    is_recorded: bool = False
+
+
 class LoopDto(BaseModel):
     id: str
     task_id: str
@@ -50,6 +61,7 @@ class LoopDto(BaseModel):
     error_message: str | None = None
     error_count: int = 0
     error_summary: dict[str, Any] = Field(default_factory=dict)
+    timing: LoopTimingDto = Field(default_factory=LoopTimingDto)
 
 
 class TaskDependencyDto(BaseModel):

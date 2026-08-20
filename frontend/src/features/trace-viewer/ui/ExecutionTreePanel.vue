@@ -1,8 +1,9 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { formatDuration } from '@shared/lib/formatTime'
 import { formatTokens } from '@shared/lib/formatNumber'
 import { useSession } from '@entities/session'
+import { useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useExecutionTree } from '../model/useExecutionTree'
 import ExecutionTreeRow from './ExecutionTreeRow.vue'
 import ExecutionDetailViewer from './ExecutionDetailViewer.vue'
@@ -22,7 +23,6 @@ const props = defineProps({
 const emit = defineEmits(['summary-change'])
 
 const { currentSessionId } = useSession()
-const detailSection = ref(null)
 const {
   tree,
   loading,
@@ -44,8 +44,18 @@ const {
   getLoopLoadState,
   getSubagentState,
   getInlineSubagentState,
+  getLlmRequestForLoop,
+  getLlmRequestDetail,
+  loadLlmRequestDetail,
   NodeStatus,
 } = useExecutionTree()
+
+const selectedLlmRequest = computed(() => (
+  selectedLoopId.value ? getLlmRequestForLoop(selectedLoopId.value) : null
+))
+const selectedLlmRequestState = computed(() => (
+  selectedLlmRequest.value ? getLlmRequestDetail(selectedLlmRequest.value.event_id) : null
+))
 
 const execFilter = ref('all')
 const execPresentation = ref(ExecutionPresentation.FLOW)
@@ -155,11 +165,48 @@ function leaveSubagent() {
 }
 
 function selectFocusedLoop(loopId) {
+  if (subagentSelectedLoopId.value === loopId) {
+    subagentSelectedLoopId.value = null
+    return
+  }
   subagentSelectedLoopId.value = loopId
   const spanId = focusedSubagent.value?.span_id
   const state = getLoopLoadState(loopId, spanId)
   if (state === NodeStatus.IDLE || state === NodeStatus.ERROR) loadLoopDetail(loopId, spanId)
 }
+
+const drawerLoopId = computed(() => (
+  focusedSubagent.value ? subagentSelectedLoopId.value : selectedLoopId.value
+))
+const drawerLoop = computed(() => (
+  focusedSubagent.value ? focusedSelectedLoop.value : selectedLoop.value
+))
+const drawerDetail = computed(() => {
+  if (!drawerLoopId.value) return null
+  return focusedSubagent.value
+    ? getLoopDetail(drawerLoopId.value, focusedSubagent.value.span_id)
+    : getLoopDetail(drawerLoopId.value)
+})
+const drawerLoadState = computed(() => {
+  if (!drawerLoopId.value) return NodeStatus.IDLE
+  return focusedSubagent.value
+    ? getLoopLoadState(drawerLoopId.value, focusedSubagent.value.span_id)
+    : getLoopLoadState(drawerLoopId.value)
+})
+const drawerProvenance = computed(() => (
+  focusedSubagent.value ? focusedSubagentTree.value?.provenance : provenance.value
+))
+const drawerTitle = computed(() => {
+  const sequence = drawerLoop.value?.sequence || '—'
+  return focusedSubagent.value ? `Subagent step ${sequence}` : `Step ${sequence} detail`
+})
+
+function closeDetail() {
+  if (focusedSubagent.value) subagentSelectedLoopId.value = null
+  else selectedLoopId.value = null
+}
+
+useEscapeToClose(() => Boolean(drawerLoopId.value), closeDetail, 200)
 
 watch([() => props.runId, currentSessionId], ([runId, sessionId]) => {
   if (runId && sessionId) {
@@ -187,13 +234,6 @@ watch(tree, (value) => {
   emit('summary-change', { tree: value })
 }, { immediate: true })
 
-watch(selectedLoopId, async (loopId) => {
-  if (!loopId) return
-  await nextTick()
-  if (window.matchMedia('(max-width: 899px)').matches) {
-    detailSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-})
 </script>
 
 <template>
@@ -266,7 +306,7 @@ watch(selectedLoopId, async (loopId) => {
             <button type="button" class="exec-presentation-btn" :class="{ active: subagentPresentation === ExecutionPresentation.TOKENS }" @click="subagentPresentation = ExecutionPresentation.TOKENS">Tokens <span aria-hidden="true">↓</span></button>
           </nav>
 
-          <div class="subagent-workspace" :class="{ 'has-detail': subagentSelectedLoopId }">
+          <div class="subagent-workspace">
             <div class="subagent-chain">
               <InlineSubagentTree
                 v-if="subagentPresentation === ExecutionPresentation.FLOW"
@@ -287,27 +327,10 @@ watch(selectedLoopId, async (loopId) => {
                 @select-subagent="openSubagent"
               />
             </div>
-            <aside v-if="subagentSelectedLoopId" class="exec-detail-section subagent-detail" aria-live="polite">
-              <div class="detail-section-header"><span class="detail-section-title">Subagent step {{ focusedSelectedLoop?.sequence || '—' }}</span><button class="detail-close-btn" type="button" aria-label="Close detail" @click="subagentSelectedLoopId = null"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div>
-              <ExecutionDetailViewer
-                :loop-id="subagentSelectedLoopId"
-                :loop="focusedSelectedLoop"
-                :detail="getLoopDetail(subagentSelectedLoopId, focusedSubagent.span_id)"
-                :load-state="getLoopLoadState(subagentSelectedLoopId, focusedSubagent.span_id)"
-                :provenance="focusedSubagentTree.provenance"
-                :agent-span-id="focusedSubagent.span_id"
-                :get-inline-subagent-state="getInlineSubagentState"
-                :get-loop-detail="getLoopDetail"
-                :get-loop-load-state="getLoopLoadState"
-                :load-loop-detail="loadLoopDetail"
-                :load-more-events="loadMoreLoopEvents"
-                @toggle-inline-subagent="toggleInlineSubagent"
-              />
-            </aside>
           </div>
         </template>
       </section>
-      <div v-else class="exec-tree-body" :class="{ 'has-detail': selectedLoopId }">
+      <div v-else class="exec-tree-body">
         <div class="exec-tree-section">
           <section class="message-scope" aria-label="Current user message execution summary">
             <div class="message-scope-mark" aria-hidden="true">
@@ -396,35 +419,49 @@ watch(selectedLoopId, async (loopId) => {
             @select-subagent="openSubagent"
           />
         </div>
+      </div>
+    </template>
 
-        <!-- Loop detail pane -->
-        <div v-if="selectedLoopId" ref="detailSection" class="exec-detail-section" aria-live="polite">
+    <Teleport to="#trace-detail-drawer-host">
+      <Transition name="exec-drawer">
+        <aside
+          v-if="drawerLoopId"
+          class="exec-detail-drawer"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="exec-detail-drawer-title"
+          aria-live="polite"
+        >
           <div class="detail-section-header">
-            <span class="detail-section-title">
-              Step {{ selectedLoop?.sequence || '—' }} detail
-            </span>
-            <button class="detail-close-btn" type="button" @click="selectedLoopId = null" aria-label="Close detail">
+            <span id="exec-detail-drawer-title" class="detail-section-title">{{ drawerTitle }}</span>
+            <button class="detail-close-btn" type="button" aria-label="Close detail" @click="closeDetail">
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <path d="m4 4 8 8M12 4l-8 8" />
               </svg>
             </button>
           </div>
-          <ExecutionDetailViewer
-            :loop-id="selectedLoopId"
-            :loop="selectedLoop"
-            :detail="getLoopDetail(selectedLoopId)"
-            :load-state="getLoopLoadState(selectedLoopId)"
-            :provenance="provenance"
-            :get-inline-subagent-state="getInlineSubagentState"
-            :get-loop-detail="getLoopDetail"
-            :get-loop-load-state="getLoopLoadState"
-            :load-loop-detail="loadLoopDetail"
-            :load-more-events="loadMoreLoopEvents"
-            @toggle-inline-subagent="toggleInlineSubagent"
-          />
-        </div>
-      </div>
-    </template>
+          <div class="exec-detail-drawer-body">
+            <ExecutionDetailViewer
+              :loop-id="drawerLoopId"
+              :loop="drawerLoop"
+              :detail="drawerDetail"
+              :load-state="drawerLoadState"
+              :provenance="drawerProvenance"
+              :agent-span-id="focusedSubagent?.span_id"
+              :llm-request="focusedSubagent ? null : selectedLlmRequest"
+              :llm-request-state="focusedSubagent ? null : selectedLlmRequestState"
+              :load-llm-request-detail="loadLlmRequestDetail"
+              :get-inline-subagent-state="getInlineSubagentState"
+              :get-loop-detail="getLoopDetail"
+              :get-loop-load-state="getLoopLoadState"
+              :load-loop-detail="loadLoopDetail"
+              :load-more-events="loadMoreLoopEvents"
+              @toggle-inline-subagent="toggleInlineSubagent"
+            />
+          </div>
+        </aside>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -461,11 +498,9 @@ watch(selectedLoopId, async (loopId) => {
 .subagent-stats dt { color: var(--text-tertiary); font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }
 .subagent-stats dd { margin: 3px 0 0; color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; font-weight: 650; }
 .subagent-presentation { margin-left: 0; }
-.subagent-workspace { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
-.subagent-workspace.has-detail { grid-template-columns: minmax(360px, .85fr) minmax(480px, 1.35fr); }
+.subagent-workspace { min-width: 0; }
 .subagent-chain { min-width: 0; }
 .subagent-chain :deep(.inline-subagent-container) { margin-top: 0; }
-.subagent-detail { min-width: 0; }
 .exec-loading, .exec-error, .exec-empty {
   display: flex;
   flex-direction: column;
@@ -601,22 +636,48 @@ watch(selectedLoopId, async (loopId) => {
   letter-spacing: 0;
   text-transform: none;
 }
-.exec-detail-section {
-  min-width: 0;
-  overflow: visible;
+.exec-detail-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 78%);
+  overflow: hidden;
+  pointer-events: auto;
   border-left: 1px solid var(--border-subtle);
+  background: var(--dialog-surface);
+  box-shadow: -16px 0 40px rgba(0, 0, 0, .18);
+}
+.exec-detail-drawer::before {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  width: 3px;
+  height: 36px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  transform: translateY(-50%);
+  content: '';
+  pointer-events: none;
+}
+.exec-detail-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: color-mix(in srgb, var(--bg-secondary) 45%, var(--dialog-surface));
   scrollbar-gutter: stable;
 }
 .detail-section-header {
-  position: sticky;
-  z-index: 3;
-  top: 0;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  min-height: 42px;
-  padding: 8px 16px;
+  min-height: 48px;
+  padding: 8px 14px 8px 20px;
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-secondary) 92%, var(--dialog-surface));
 }
@@ -631,27 +692,28 @@ watch(selectedLoopId, async (loopId) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 160ms ease, color 160ms ease;
 }
 .detail-close-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .detail-close-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 1px; }
-@media (min-width: 900px) {
-  .exec-tree-body.has-detail { grid-template-columns: minmax(360px, 0.85fr) minmax(480px, 1.35fr); }
+.exec-drawer-enter-active,
+.exec-drawer-leave-active {
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+}
+.exec-drawer-enter-from,
+.exec-drawer-leave-to {
+  transform: translateX(100%);
 }
 @media (max-width: 899px) {
-  .exec-tree-body { overflow-y: auto; }
-  .exec-tree-section, .exec-detail-section { overflow: visible; }
-  .exec-detail-section { border-top: 1px solid var(--border-subtle); border-left: 0; }
-  .tree-caption--sticky, .detail-section-header { position: static; }
-  .subagent-workspace.has-detail { grid-template-columns: 1fr; }
+  .exec-detail-drawer { width: min(100%, calc(100% - 28px)); }
   .subagent-overview { align-items: flex-start; flex-direction: column; }
   .subagent-stats { width: 100%; }
 }
@@ -662,5 +724,9 @@ watch(selectedLoopId, async (loopId) => {
   .subagent-stats div:nth-child(3) { border-left: 0; }
 }
 @keyframes exec-panel-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .exec-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .exec-spinner { animation: none; }
+  .exec-drawer-enter-active,
+  .exec-drawer-leave-active { transition: none; }
+}
 </style>

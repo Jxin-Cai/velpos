@@ -514,6 +514,7 @@ async function exportFullTrace() {
           aria-labelledby="trace-panel-title"
           tabindex="-1"
         >
+          <div id="trace-detail-drawer-host" class="trace-detail-drawer-host"></div>
           <header class="trace-header">
             <div class="trace-heading">
               <div class="trace-eyebrow">
@@ -819,6 +820,7 @@ async function exportFullTrace() {
   backdrop-filter: blur(8px);
 }
 .trace-panel {
+  position: relative;
   width: min(1280px, calc(100vw - (var(--dialog-gutter) * 2)));
   height: calc(100dvh - (var(--dialog-gutter) * 2));
   display: flex;
@@ -831,6 +833,12 @@ async function exportFullTrace() {
   box-shadow: var(--dialog-shadow);
   user-select: text;
   -webkit-user-select: text;
+}
+.trace-detail-drawer-host {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
 }
 .trace-overlay--fullscreen { padding: 0; }
 .trace-panel.trace-panel--fullscreen { width: 100vw; height: 100dvh; border: 0; border-radius: 0; }

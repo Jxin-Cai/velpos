@@ -16,6 +16,7 @@ from ohs.http.dto.execution_trace_dto import (
     ExecutionTreeResponse,
     LoopDetailPageResponse,
     LoopDto,
+    LoopTimingDto,
     ProvenanceDto,
     SubagentPlaceholderDto,
     TaskDependencyDto,
@@ -82,6 +83,21 @@ class ExecutionTraceAssembler:
             error_message=loop.error_message,
             error_count=loop.error_count,
             error_summary=loop.error_summary,
+            timing=ExecutionTraceAssembler._to_timing_dto(loop),
+        )
+
+    @staticmethod
+    def _to_timing_dto(loop: AgentLoop) -> LoopTimingDto:
+        timing = loop.timing
+        return LoopTimingDto(
+            span_id=timing.span_id,
+            ttft_ms=timing.ttft_ms,
+            request_duration_ms=timing.request_duration_ms,
+            decode_ms=timing.decode_ms,
+            attempt=timing.attempt,
+            retry_count=timing.retry_count,
+            output_tokens_per_second=loop.output_tokens_per_second,
+            is_recorded=timing.is_recorded,
         )
 
     @staticmethod

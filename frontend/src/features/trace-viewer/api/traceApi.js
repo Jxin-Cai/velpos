@@ -34,6 +34,19 @@ export async function fetchExecutionEvent(sessionId, eventId) {
   )
 }
 
+// Request summaries carry only counts and a system prompt preview so the list
+// stays small; the full envelope is fetched per request on demand.
+export async function fetchLlmRequests(sessionId, runId) {
+  return get(`/sessions/${sessionId}/runs/${runId}/llm-requests`, TRACE_REQUEST_OPTIONS)
+}
+
+export async function fetchLlmRequestDetail(sessionId, eventId) {
+  return get(
+    `/sessions/${sessionId}/llm-requests/${encodeURIComponent(eventId)}`,
+    TRACE_REQUEST_OPTIONS,
+  )
+}
+
 export async function fetchTelemetrySummary(sessionId, runId) {
   return get(
     `/sessions/${sessionId}/runs/${runId}/telemetry-summary`,

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { formatDuration as _formatDuration } from '@shared/lib/formatTime'
 import SpanPayloadViewer from './SpanPayloadViewer.vue'
 import InlineSubagentTree from './InlineSubagentTree.vue'
+import LlmRequestInspector from './LlmRequestInspector.vue'
 
 const props = defineProps({
   loopId: { type: String, default: null },
@@ -11,6 +12,9 @@ const props = defineProps({
   loadState: { type: String, default: 'idle' },
   provenance: { type: Object, default: null },
   agentSpanId: { type: String, default: null },
+  llmRequest: { type: Object, default: null },
+  llmRequestState: { type: Object, default: null },
+  loadLlmRequestDetail: { type: Function, default: async () => {} },
   getInlineSubagentState: { type: Function, default: () => null },
   getLoopDetail: { type: Function, default: () => null },
   getLoopLoadState: { type: Function, default: () => 'idle' },
@@ -97,6 +101,13 @@ const retrySequence = computed(() => {
 
 const THINKING_KEYWORDS = ['retry', 'error', 'fallback', 'failed', 'alternative', 'workaround']
 
+// A turn that only called tools carries no spoken output, since reasoning and
+// tool calls are rendered as their own cards. Drop the empty block list so the
+// card reads as "no payload" instead of showing a bare `[]`.
+function spokenContent(content) {
+  return Array.isArray(content) && content.length === 0 ? undefined : content
+}
+
 const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
   if (event.type === 'tool_result' && pairedResultIds.value.has(event.tool_use_id)) return []
   if (event.type === 'tool_use' && subagentToolIds.value.has(event.tool_use_id)) return []
@@ -158,7 +169,7 @@ const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
       label: 'Model turn',
       title: props.loop?.model || 'Input and output',
       input: event.content,
-      output: output?.content,
+      output: spokenContent(output?.content),
       endedTime: output?.timestamp,
       inputSummary: event.metadata?.input_summary || null,
     }]
@@ -172,7 +183,7 @@ const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
       kind: 'output',
       label: 'Model output',
       title: props.loop?.model || 'Assistant response',
-      output: event.content,
+      output: spokenContent(event.content),
     }]
   }
 
@@ -217,6 +228,21 @@ const tokenTooltip = computed(() => {
   return parts.join(' · ')
 })
 const isReconstructed = computed(() => props.provenance?.reconstructed_from_transcript)
+
+// Time to first token separates prompt processing from decoding, which is what
+// tells a slow prompt apart from a long answer. It is only present when the run
+// was recorded with native Claude Code telemetry.
+const timing = computed(() => (props.loop?.timing?.is_recorded ? props.loop.timing : null))
+const timingTooltip = computed(() => {
+  if (!timing.value) return ''
+  const parts = [`Request: ${formatDuration(timing.value.request_duration_ms)}`]
+  if (timing.value.decode_ms) parts.push(`Decode: ${formatDuration(timing.value.decode_ms)}`)
+  if (timing.value.output_tokens_per_second) {
+    parts.push(`${timing.value.output_tokens_per_second} tok/s`)
+  }
+  if (timing.value.retry_count) parts.push(`${timing.value.retry_count} provider retries`)
+  return parts.join(' · ')
+})
 
 function formatTokensK(n) {
   if (!n) return '0'
@@ -290,6 +316,15 @@ function itemDuration(item) {
         </div>
         <dl class="step-stats">
           <div><dt>Duration</dt><dd>{{ formatDuration(loop?.duration_ms) }}</dd></div>
+          <div v-if="timing">
+            <dt>First token</dt>
+            <dd :title="timingTooltip">
+              {{ timing.ttft_ms ? formatDuration(timing.ttft_ms) : '—' }}
+              <span v-if="timing.output_tokens_per_second" class="throughput-badge">
+                {{ timing.output_tokens_per_second }} tok/s
+              </span>
+            </dd>
+          </div>
           <div><dt>Events</dt><dd>{{ total }}</dd></div>
           <div><dt>Tools</dt><dd>{{ toolCallCount }}</dd></div>
           <div>
@@ -315,6 +350,13 @@ function itemDuration(item) {
           {{ provenance.completeness }}
         </span>
       </div>
+
+      <LlmRequestInspector
+        v-if="llmRequest"
+        :summary="llmRequest"
+        :state="llmRequestState"
+        :load-detail="loadLlmRequestDetail"
+      />
 
       <div class="event-list-heading">
         <div>
@@ -466,6 +508,7 @@ function itemDuration(item) {
 .event-retry-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, #f59e0b 12%, transparent); color: #d97706; font-size: 9px; font-weight: 600; text-transform: uppercase; }
 .event-retried-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--text-accent) 10%, transparent); color: var(--text-accent); font-size: 9px; font-weight: 600; }
 .cache-hit-badge { margin-left: 4px; padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-success, #22c55e) 12%, transparent); color: var(--color-success, #22c55e); font-size: 9px; font-weight: 600; }
+.throughput-badge { margin-left: 4px; padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--text-accent) 12%, transparent); color: var(--text-accent); font-size: 9px; font-weight: 600; }
 .input-summary-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-secondary)); }
 .summary-chip { padding: 3px 8px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
 .summary-chip strong { color: var(--text-primary); font-weight: 650; }

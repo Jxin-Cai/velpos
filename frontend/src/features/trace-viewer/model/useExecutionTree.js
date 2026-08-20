@@ -1,7 +1,13 @@
 import { ref, reactive, computed, onScopeDispose, watch } from 'vue'
 import { useSession } from '@entities/session'
-import { fetchExecutionTree, fetchLoopDetail } from '../api/traceApi'
+import {
+  fetchExecutionTree,
+  fetchLlmRequestDetail,
+  fetchLlmRequests,
+  fetchLoopDetail,
+} from '../api/traceApi'
 import { traceRunVersion } from '../lib/traceHistory'
+import { matchRequestsToLoops } from '../lib/llmRequestMatching'
 
 const NodeStatus = Object.freeze({
   IDLE: 'idle',
@@ -35,6 +41,9 @@ export function useExecutionTree() {
   const loopDetails = reactive(new Map())
   const loopLoadState = reactive(new Map())
 
+  const llmRequests = ref([])
+  const llmRequestDetails = reactive(new Map())
+
   const selectedRunId = ref(null)
   const selectedLoopId = ref(null)
 
@@ -56,6 +65,7 @@ export function useExecutionTree() {
     selectedLoopId.value = null
     loopDetails.clear()
     loopLoadState.clear()
+    llmRequestDetails.clear()
     expandedSubagents.clear()
     inlineSubagents.clear()
     expandedTasks.clear()
@@ -97,6 +107,7 @@ export function useExecutionTree() {
       }
       tree.value = result
       loadedContextKey = nextContextKey
+      loadLlmRequests(sessionId, runId, requestId)
     } catch (err) {
       if (requestId !== loadRequestId) return
       error.value = isSameContext
@@ -108,6 +119,50 @@ export function useExecutionTree() {
       }
     } finally {
       if (requestId === loadRequestId) loading.value = false
+    }
+  }
+
+  // Raw request bodies are optional telemetry: a run recorded with body logging
+  // disabled is still a complete trace, so a failure here must not surface as a
+  // tree error.
+  async function loadLlmRequests(sessionId, runId, requestId) {
+    try {
+      const result = await fetchLlmRequests(sessionId, runId)
+      if (requestId !== loadRequestId) return
+      llmRequests.value = result?.requests || []
+    } catch {
+      if (requestId !== loadRequestId) return
+      llmRequests.value = []
+    }
+  }
+
+  const requestsByLoopId = computed(() => matchRequestsToLoops(
+    tasks.value.flatMap(task => task.loops || []),
+    llmRequests.value,
+  ))
+
+  function getLlmRequestForLoop(loopId) {
+    return requestsByLoopId.value.get(loopId) || null
+  }
+
+  function getLlmRequestDetail(eventId) {
+    return llmRequestDetails.get(eventId) || null
+  }
+
+  async function loadLlmRequestDetail(eventId) {
+    if (!eventId || llmRequestDetails.get(eventId)?.loading) return
+    const sessionId = currentSessionId.value
+    if (!sessionId) return
+    llmRequestDetails.set(eventId, { loading: true, detail: null, error: '' })
+    try {
+      const detail = await fetchLlmRequestDetail(sessionId, eventId)
+      llmRequestDetails.set(eventId, { loading: false, detail, error: '' })
+    } catch (err) {
+      llmRequestDetails.set(eventId, {
+        loading: false,
+        detail: null,
+        error: err?.message || 'Failed to load request',
+      })
     }
   }
 
@@ -264,6 +319,10 @@ export function useExecutionTree() {
   }
 
   function selectLoop(loopId) {
+    if (selectedLoopId.value === loopId) {
+      selectedLoopId.value = null
+      return
+    }
     selectedLoopId.value = loopId
     const state = getLoopLoadState(loopId)
     if (state === NodeStatus.IDLE || state === NodeStatus.ERROR) {
@@ -372,6 +431,10 @@ export function useExecutionTree() {
     getLoopLoadState,
     getSubagentState,
     getInlineSubagentState,
+    llmRequests,
+    getLlmRequestForLoop,
+    getLlmRequestDetail,
+    loadLlmRequestDetail,
     refreshSummary,
     NodeStatus,
   }

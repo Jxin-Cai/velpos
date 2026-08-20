@@ -248,11 +248,12 @@ function viewEvents() {
         class="exec-events-btn"
         :class="{ 'is-active': selected }"
         :disabled="loadState === 'loading'"
-        :aria-label="selected ? 'Viewing step events' : 'View step events'"
+        :aria-expanded="selected"
+        :aria-label="selected ? 'Hide step detail' : 'View step detail'"
         @click.stop="viewEvents"
       >
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h10"/><circle cx="5" cy="3.5" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".7" fill="currentColor" stroke="none"/><circle cx="11" cy="12.5" r=".7" fill="currentColor" stroke="none"/></svg>
-        <span>{{ selected ? 'Viewing events' : 'View events' }}</span>
+        <span>{{ selected ? 'Hide detail' : 'View detail' }}</span>
       </button>
       <button
         v-if="nodeType === 'subagent'"

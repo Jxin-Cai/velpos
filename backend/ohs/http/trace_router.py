@@ -5,6 +5,10 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 
 from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from application.session.llm_request_query_service import (
+    MAX_REQUEST_SCAN,
+    LlmRequestQueryService,
+)
 from domain.session.model.execution_ledger_event import (
     ExecutionLedgerEvent,
     ExecutionLedgerEventType,
@@ -15,12 +19,15 @@ from domain.session.repository.trace_span_repository import TraceSpanRepository
 from ohs.dependencies import (
     get_execution_ledger_event_repository,
     get_execution_trace_query_service,
+    get_llm_request_query_service,
     get_trace_span_repository,
 )
 from ohs.http.api_response import ApiResponse
 from ohs.http.assembler.audit_payload_assembler import trim_audit_payload
 from ohs.http.assembler.execution_trace_assembler import ExecutionTraceAssembler
+from ohs.http.assembler.llm_request_assembler import LlmRequestAssembler
 from ohs.http.dto.execution_trace_dto import ExecutionTreeResponse, LoopDetailPageResponse
+from ohs.http.dto.llm_request_dto import LlmRequestDetailDto, LlmRequestListResponse
 
 router = APIRouter(prefix="/api/sessions", tags=["Trace"])
 
@@ -44,6 +51,7 @@ ExecutionEventRepoDep = Annotated[
     Depends(get_execution_ledger_event_repository),
 ]
 ExecutionTraceQueryDep = Annotated[ExecutionTraceQueryService, Depends(get_execution_trace_query_service)]
+LlmRequestQueryDep = Annotated[LlmRequestQueryService, Depends(get_llm_request_query_service)]
 
 
 def _build_tree(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -311,6 +319,35 @@ async def get_execution_event(
     if event is None:
         return ApiResponse.fail(code=404, message="Execution event not found")
     return ApiResponse.success(event.to_dict())
+
+
+@router.get(
+    "/{session_id}/runs/{run_id}/llm-requests",
+    summary="List the decomposed provider requests issued during a run",
+)
+async def list_llm_requests(
+    session_id: str,
+    run_id: str,
+    service: LlmRequestQueryDep,
+    limit: int = Query(default=MAX_REQUEST_SCAN, ge=1, le=MAX_REQUEST_SCAN),
+) -> ApiResponse[LlmRequestListResponse]:
+    page = await service.list_requests(session_id, run_id, limit=limit)
+    return ApiResponse.success(LlmRequestAssembler.to_list_response(page))
+
+
+@router.get(
+    "/{session_id}/llm-requests/{event_id}",
+    summary="Get one provider request split into system, messages, and tools",
+)
+async def get_llm_request(
+    session_id: str,
+    event_id: str,
+    service: LlmRequestQueryDep,
+) -> ApiResponse[LlmRequestDetailDto]:
+    record = await service.get_request(session_id, event_id)
+    if record is None:
+        return ApiResponse.fail(code=404, message="LLM request not found")
+    return ApiResponse.success(LlmRequestAssembler.to_detail(record))
 
 
 @router.get("/{session_id}/traces/{span_id}", summary="Get span detail")
