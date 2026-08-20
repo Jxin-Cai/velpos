@@ -5,14 +5,17 @@ import hljs from 'highlight.js/lib/common'
 const props = defineProps({
   payload: { type: [String, Number, Boolean, Array, Object], default: null },
   label: { type: String, default: '' },
-  startExpanded: { type: Boolean, default: false },
 })
 
-const expanded = ref(props.startExpanded)
+const expanded = ref(false)
 const enlarged = ref(false)
 const copied = ref(false)
 const wrapLines = ref(true)
 const PREVIEW_LIMIT = 1600
+// Syntax highlighting is regex-heavy and runs on the main thread. Trace
+// payloads can carry whole model contexts, where highlighting freezes the
+// panel for seconds; render those as plain text instead.
+const MAX_HIGHLIGHT_CHARS = 200000
 
 const normalizedPayload = computed(() => {
   if (props.payload == null) return ''
@@ -38,13 +41,15 @@ const displayText = computed(() => {
   }
   return formattedPayload.value
 })
+const canHighlightPreview = computed(() => displayText.value.length <= MAX_HIGHLIGHT_CHARS)
+const canHighlightFull = computed(() => formattedPayload.value.length <= MAX_HIGHLIGHT_CHARS)
 const highlightedPayload = computed(() => (
-  displayText.value
+  displayText.value && canHighlightPreview.value
     ? hljs.highlight(displayText.value, { language: 'json', ignoreIllegals: true }).value
     : ''
 ))
 const fullHighlightedPayload = computed(() => (
-  formattedPayload.value
+  formattedPayload.value && canHighlightFull.value
     ? hljs.highlight(formattedPayload.value, { language: 'json', ignoreIllegals: true }).value
     : ''
 ))
@@ -91,7 +96,7 @@ async function copyPayload() {
         </button>
       </div>
     </header>
-    <pre class="payload-content"><code v-html="highlightedPayload"></code></pre>
+    <pre class="payload-content"><code v-if="canHighlightPreview" v-html="highlightedPayload"></code><code v-else>{{ displayText }}</code></pre>
     <button
       v-if="isLong"
       type="button"
@@ -134,7 +139,7 @@ async function copyPayload() {
         <pre
           class="payload-modal-content"
           :class="{ 'payload-modal-content--wrapped': wrapLines }"
-        ><code v-html="fullHighlightedPayload"></code></pre>
+        ><code v-if="canHighlightFull" v-html="fullHighlightedPayload"></code><code v-else>{{ formattedPayload }}</code></pre>
       </section>
     </div>
   </Teleport>

@@ -343,6 +343,37 @@ async def test_records_structured_api_event_when_log_payload_arrives() -> None:
 
 
 @pytest.mark.asyncio
+async def test_promotes_log_event_name_out_of_payload_when_log_payload_arrives() -> None:
+    # Arrange
+    span_repository = _SpanRepositoryStub()
+    event_repository = _EventRepositoryStub()
+    payload = {
+        "resourceLogs": [{
+            "resource": _resource(),
+            "scopeLogs": [{
+                "logRecords": [{
+                    "timeUnixNano": "1786586402000000000",
+                    "body": {"stringValue": "claude_code.api_error"},
+                    "attributes": [
+                        {"key": "event.name", "value": {"stringValue": "api_error"}},
+                    ],
+                }],
+            }],
+        }],
+    }
+
+    # Act
+    events = await ingest_logs(
+        payload,
+        span_repository,  # type: ignore[arg-type]
+        event_repository,  # type: ignore[arg-type]
+    )
+
+    # Assert
+    assert events[0].event_name == "api_error"
+
+
+@pytest.mark.asyncio
 async def test_records_token_sample_when_metric_payload_arrives() -> None:
     # Arrange
     span_repository = _SpanRepositoryStub()
@@ -378,6 +409,39 @@ async def test_records_token_sample_when_metric_payload_arrives() -> None:
     # Assert
     assert events[0].payload["metric_name"] == "claude_code.token.usage"
     assert events[0].payload["value"] == 450
+
+
+@pytest.mark.asyncio
+async def test_promotes_metric_name_out_of_payload_when_metric_payload_arrives() -> None:
+    # Arrange
+    span_repository = _SpanRepositoryStub()
+    event_repository = _EventRepositoryStub()
+    payload = {
+        "resourceMetrics": [{
+            "resource": _resource(),
+            "scopeMetrics": [{
+                "metrics": [{
+                    "name": "claude_code.cost.usage",
+                    "sum": {
+                        "dataPoints": [{
+                            "timeUnixNano": "1786586402000000000",
+                            "asDouble": 0.25,
+                        }],
+                    },
+                }],
+            }],
+        }],
+    }
+
+    # Act
+    events = await ingest_metrics(
+        payload,
+        span_repository,  # type: ignore[arg-type]
+        event_repository,  # type: ignore[arg-type]
+    )
+
+    # Assert
+    assert events[0].event_name == "claude_code.cost.usage"
 
 
 @pytest.mark.asyncio

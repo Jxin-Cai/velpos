@@ -1,24 +1,49 @@
 from __future__ import annotations
 
-from collections import Counter
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 
 from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from application.session.llm_request_query_service import (
+    MAX_REQUEST_SCAN,
+    LlmRequestQueryService,
+)
+from domain.session.model.execution_ledger_event import (
+    ExecutionLedgerEvent,
+    ExecutionLedgerEventType,
+)
 from domain.session.model.trace_span import TraceSpan
 from domain.session.repository.execution_ledger_event_repository import ExecutionLedgerEventRepository
 from domain.session.repository.trace_span_repository import TraceSpanRepository
 from ohs.dependencies import (
     get_execution_ledger_event_repository,
     get_execution_trace_query_service,
+    get_llm_request_query_service,
     get_trace_span_repository,
 )
 from ohs.http.api_response import ApiResponse
+from ohs.http.assembler.audit_payload_assembler import trim_audit_payload
 from ohs.http.assembler.execution_trace_assembler import ExecutionTraceAssembler
+from ohs.http.assembler.llm_request_assembler import LlmRequestAssembler
 from ohs.http.dto.execution_trace_dto import ExecutionTreeResponse, LoopDetailPageResponse
+from ohs.http.dto.llm_request_dto import LlmRequestDetailDto, LlmRequestListResponse
 
 router = APIRouter(prefix="/api/sessions", tags=["Trace"])
+
+_RECENT_LOG_EVENT_LIMIT = 100
+# Cost carrying events hold only a small attribute map, so the whole run's worth
+# can be summed without the payload weight that raw body events carry.
+_COST_EVENT_SCAN_LIMIT = 5001
+_COST_LOG_EVENT_NAME = "api_request"
+_COST_METRIC_NAME = "claude_code.cost.usage"
+_RAW_BODY_EVENT_NAMES = ("api_request_body", "api_response_body")
+_API_FAILURE_EVENT_NAMES = (
+    "api_error",
+    "api_refusal",
+    "api_retries_exhausted",
+    "internal_error",
+)
 
 TraceRepoDep = Annotated[TraceSpanRepository, Depends(get_trace_span_repository)]
 ExecutionEventRepoDep = Annotated[
@@ -26,6 +51,7 @@ ExecutionEventRepoDep = Annotated[
     Depends(get_execution_ledger_event_repository),
 ]
 ExecutionTraceQueryDep = Annotated[ExecutionTraceQueryService, Depends(get_execution_trace_query_service)]
+LlmRequestQueryDep = Annotated[LlmRequestQueryService, Depends(get_llm_request_query_service)]
 
 
 def _build_tree(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -146,6 +172,45 @@ def _number(value: Any) -> float:
         return 0.0
 
 
+async def _run_cost_usd(
+    event_repo: ExecutionLedgerEventRepository,
+    session_id: str,
+    run_id: str,
+) -> float:
+    """Sum the run cost from API request events, falling back to cost metrics."""
+    api_requests = await event_repo.find_by_event_names(
+        session_id,
+        run_id,
+        ExecutionLedgerEventType.OTEL_LOG,
+        (_COST_LOG_EVENT_NAME,),
+        limit=_COST_EVENT_SCAN_LIMIT,
+    )
+    cost_usd = sum(
+        _number(event.payload.get("attributes", {}).get("cost_usd"))
+        for event in api_requests
+    )
+    if cost_usd:
+        return cost_usd
+
+    cost_metrics = await event_repo.find_by_event_names(
+        session_id,
+        run_id,
+        ExecutionLedgerEventType.OTEL_METRIC,
+        (_COST_METRIC_NAME,),
+        limit=_COST_EVENT_SCAN_LIMIT,
+    )
+    return sum(_number(event.payload.get("value")) for event in cost_metrics)
+
+
+def _to_clipped_event_dict(event: ExecutionLedgerEvent) -> dict[str, Any]:
+    trimmed = trim_audit_payload(event.payload)
+    return {
+        **event.to_dict(),
+        "payload": trimmed.payload,
+        "payload_truncated": trimmed.truncated,
+    }
+
+
 @router.get(
     "/{session_id}/runs/{run_id}/telemetry-summary",
     summary="Summarize native Claude Code OpenTelemetry signals",
@@ -157,12 +222,6 @@ async def get_telemetry_summary(
     event_repo: ExecutionEventRepoDep,
 ) -> ApiResponse[dict]:
     spans = await span_repo.find_by_run(session_id, run_id)
-    events = await event_repo.find_by_run_after(
-        session_id,
-        run_id,
-        after_position=0,
-        limit=5001,
-    )
     native_spans = [
         span
         for span in spans
@@ -183,32 +242,8 @@ async def get_telemetry_summary(
         for span in native_spans
         if span.metadata.get("otel.span_name") == "claude_code.interaction"
     ]
-    log_events = [event for event in events if event.payload.get("signal") == "log"]
-    metric_events = [event for event in events if event.payload.get("signal") == "metric"]
-    event_counts = Counter(
-        str(event.payload.get("event_name") or "log") for event in log_events
-    )
-    api_requests = [
-        event
-        for event in log_events
-        if event.payload.get("event_name") == "api_request"
-    ]
-    api_errors = [
-        event
-        for event in log_events
-        if event.payload.get("event_name")
-        in {"api_error", "api_refusal", "api_retries_exhausted", "internal_error"}
-    ]
-    cost_usd = sum(
-        _number(event.payload.get("attributes", {}).get("cost_usd"))
-        for event in api_requests
-    )
-    if not cost_usd:
-        cost_usd = sum(
-            _number(event.payload.get("value"))
-            for event in metric_events
-            if event.payload.get("metric_name") == "claude_code.cost.usage"
-        )
+    counts = await event_repo.count_by_run(session_id, run_id)
+    cost_usd = await _run_cost_usd(event_repo, session_id, run_id)
     latencies = [span.duration_ms for span in llm_spans if span.duration_ms > 0]
     ttft_values = [
         int(_number(span.metadata.get("ttft_ms")))
@@ -234,7 +269,13 @@ async def get_telemetry_summary(
         for span in native_spans
         if span.metadata.get("otel.trace_id")
     }
-    recent_events = [event.to_dict() for event in log_events[-100:]]
+    recent = await event_repo.find_recent_by_type(
+        session_id,
+        run_id,
+        ExecutionLedgerEventType.OTEL_LOG,
+        limit=_RECENT_LOG_EVENT_LIMIT,
+    )
+    recent_events = [_to_clipped_event_dict(event) for event in recent]
 
     return ApiResponse.success({
         "source": "claude_code_otel" if native_spans else "legacy_trace",
@@ -242,18 +283,16 @@ async def get_telemetry_summary(
         "interaction_count": len(interaction_spans),
         "llm_request_count": len(llm_spans),
         "tool_count": len(tool_spans),
-        "log_event_count": len(log_events),
-        "metric_sample_count": len(metric_events),
-        "api_error_count": len(api_errors),
-        "api_refusal_count": event_counts["api_refusal"],
+        "log_event_count": counts.log_event_count,
+        "metric_sample_count": counts.metric_sample_count,
+        "api_error_count": counts.log_count_of(*_API_FAILURE_EVENT_NAMES),
+        "api_refusal_count": counts.log_count_of("api_refusal"),
         "retry_count": retry_count,
         "permission_wait_count": len(permission_wait_spans),
         "permission_wait_ms": sum(span.duration_ms for span in permission_wait_spans),
         "hook_count": len(hook_spans),
-        "raw_api_body_count": (
-            event_counts["api_request_body"] + event_counts["api_response_body"]
-        ),
-        "event_counts": dict(event_counts),
+        "raw_api_body_count": counts.log_count_of(*_RAW_BODY_EVENT_NAMES),
+        "event_counts": dict(counts.log_counts_by_name),
         "cost_usd": round(cost_usd, 6),
         "input_tokens": sum(int(span.metadata.get("input_tokens") or 0) for span in llm_spans),
         "output_tokens": sum(int(span.metadata.get("output_tokens") or 0) for span in llm_spans),
@@ -265,6 +304,50 @@ async def get_telemetry_summary(
         "ttft_p95_ms": _percentile(ttft_values, 0.95),
         "recent_events": recent_events,
     })
+
+
+@router.get(
+    "/{session_id}/execution-events/{event_id}",
+    summary="Get the verbatim audit payload of one execution event",
+)
+async def get_execution_event(
+    session_id: str,
+    event_id: str,
+    repo: ExecutionEventRepoDep,
+) -> ApiResponse[dict]:
+    event = await repo.find_by_event_id(session_id, event_id)
+    if event is None:
+        return ApiResponse.fail(code=404, message="Execution event not found")
+    return ApiResponse.success(event.to_dict())
+
+
+@router.get(
+    "/{session_id}/runs/{run_id}/llm-requests",
+    summary="List the decomposed provider requests issued during a run",
+)
+async def list_llm_requests(
+    session_id: str,
+    run_id: str,
+    service: LlmRequestQueryDep,
+    limit: int = Query(default=MAX_REQUEST_SCAN, ge=1, le=MAX_REQUEST_SCAN),
+) -> ApiResponse[LlmRequestListResponse]:
+    page = await service.list_requests(session_id, run_id, limit=limit)
+    return ApiResponse.success(LlmRequestAssembler.to_list_response(page))
+
+
+@router.get(
+    "/{session_id}/llm-requests/{event_id}",
+    summary="Get one provider request split into system, messages, and tools",
+)
+async def get_llm_request(
+    session_id: str,
+    event_id: str,
+    service: LlmRequestQueryDep,
+) -> ApiResponse[LlmRequestDetailDto]:
+    record = await service.get_request(session_id, event_id)
+    if record is None:
+        return ApiResponse.fail(code=404, message="LLM request not found")
+    return ApiResponse.success(LlmRequestAssembler.to_detail(record))
 
 
 @router.get("/{session_id}/traces/{span_id}", summary="Get span detail")
@@ -286,7 +369,7 @@ async def get_execution_tree(
     service: ExecutionTraceQueryDep,
     agent_span_id: str | None = Query(default=None, description="Optional agent span to scope the tree"),
 ) -> ApiResponse[ExecutionTreeResponse]:
-    agent = await service.get_execution_tree(session_id, run_id, agent_span_id)
+    agent = await service.get_cached_execution_tree(session_id, run_id, agent_span_id)
     dto = ExecutionTraceAssembler.to_tree_response(agent)
     return ApiResponse.success(dto)
 

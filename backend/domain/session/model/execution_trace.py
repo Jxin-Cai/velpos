@@ -45,6 +45,35 @@ class ExecutionEvent:
 
 
 @dataclass(frozen=True)
+class LoopTiming:
+    """Provider-reported latency for the model call behind one step.
+
+    A step's wall duration says nothing about where the time went. Time to
+    first token separates queueing and prompt processing from decoding, which
+    is what tells a slow prompt apart from a long answer.
+    """
+
+    span_id: str | None = None
+    ttft_ms: int = 0
+    request_duration_ms: int = 0
+    attempt: int = 1
+
+    @property
+    def retry_count(self) -> int:
+        return max(self.attempt - 1, 0)
+
+    @property
+    def decode_ms(self) -> int:
+        if self.ttft_ms <= 0 or self.request_duration_ms <= self.ttft_ms:
+            return 0
+        return self.request_duration_ms - self.ttft_ms
+
+    @property
+    def is_recorded(self) -> bool:
+        return self.ttft_ms > 0 or self.request_duration_ms > 0
+
+
+@dataclass(frozen=True)
 class SubagentPlaceholder:
     tool_use_id: str
     subagent: str | None
@@ -75,6 +104,16 @@ class AgentLoop:
     duration_ms: int = 0
     error_message: str | None = None
     sequence: int = 0
+    timing: LoopTiming = field(default_factory=LoopTiming)
+
+    @property
+    def output_tokens_per_second(self) -> float | None:
+        """Decode throughput, or None when the inputs were not recorded."""
+        output_tokens = int(self.usage.get("output_tokens") or 0)
+        decode_ms = self.timing.decode_ms
+        if output_tokens <= 0 or decode_ms <= 0:
+            return None
+        return round(output_tokens / (decode_ms / 1000), 1)
 
     @property
     def subagent_count(self) -> int:

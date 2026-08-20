@@ -25,6 +25,28 @@ export async function fetchExecutionEvents(sessionId, runId, afterSequence = 0, 
   )
 }
 
+// The telemetry summary clips oversized audit fields so that a page of raw API
+// bodies does not run into megabytes. Use this to pull one event verbatim.
+export async function fetchExecutionEvent(sessionId, eventId) {
+  return get(
+    `/sessions/${sessionId}/execution-events/${encodeURIComponent(eventId)}`,
+    TRACE_REQUEST_OPTIONS,
+  )
+}
+
+// Request summaries carry only counts and a system prompt preview so the list
+// stays small; the full envelope is fetched per request on demand.
+export async function fetchLlmRequests(sessionId, runId) {
+  return get(`/sessions/${sessionId}/runs/${runId}/llm-requests`, TRACE_REQUEST_OPTIONS)
+}
+
+export async function fetchLlmRequestDetail(sessionId, eventId) {
+  return get(
+    `/sessions/${sessionId}/llm-requests/${encodeURIComponent(eventId)}`,
+    TRACE_REQUEST_OPTIONS,
+  )
+}
+
 export async function fetchTelemetrySummary(sessionId, runId) {
   return get(
     `/sessions/${sessionId}/runs/${runId}/telemetry-summary`,

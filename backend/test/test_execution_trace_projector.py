@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from domain.session.model.execution_trace import (
     ExecutionEventType,
     ProjectionCompleteness,
@@ -30,6 +32,193 @@ def test_creates_implicit_task_and_loop_when_transcript_has_no_explicit_task() -
     assert projection.tasks[0].loops[0].assistant_content == ({"type": "text", "text": "Done"},)
     assert projection.tasks[0].loops[0].model_input[0]["content"] == [{"type": "text", "text": "Implement it"}]
     assert projection.tasks[0].loops[0].provenance.reconstructed_from_transcript is True
+
+
+def test_omits_reasoning_and_tool_calls_from_model_output_when_turn_mixes_blocks() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "weighing options"},
+                {"type": "text", "text": "Reading the file"},
+                {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"path": "a.py"}},
+            ],
+        },
+    }]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    output = next(
+        event for event in projection.tasks[0].loops[0].events
+        if event.type == ExecutionEventType.MODEL_OUTPUT
+    )
+    assert output.content == ({"type": "text", "text": "Reading the file"},)
+
+
+def test_records_original_block_order_when_model_output_is_reduced_to_text() -> None:
+    # Arrange
+    records = [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "weighing options"},
+                {"type": "text", "text": "Reading the file"},
+                {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {}},
+            ],
+        },
+    }]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    output = next(
+        event for event in projection.tasks[0].loops[0].events
+        if event.type == ExecutionEventType.MODEL_OUTPUT
+    )
+    assert output.metadata["block_types"] == ["thinking", "text", "tool_use"]
+
+
+def _llm_span(span_id: str, started: datetime, ttft_ms: int, duration_ms: int) -> TraceSpan:
+    return TraceSpan(
+        id=span_id,
+        session_id="sess0001",
+        run_id="run-1",
+        parent_span_id=None,
+        span_type=TraceSpan.SPAN_TYPE_LLM_TURN,
+        name="llm_request",
+        status=TraceSpan.STATUS_COMPLETED,
+        agent_id=None,
+        tool_use_id=None,
+        input_preview=None,
+        output_preview=None,
+        metadata={"ttft_ms": ttft_ms, "attempt": 1},
+        started_time=started,
+        duration_ms=duration_ms,
+    )
+
+
+def _timed_turn_records(timestamp: str, output_tokens: int = 0) -> list[dict]:
+    return [{
+        "type": "assistant",
+        "uuid": "assistant-1",
+        "timestamp": timestamp,
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Done"}],
+            "usage": {"output_tokens": output_tokens},
+        },
+    }]
+
+
+def test_attaches_first_token_latency_when_an_llm_span_matches_the_step() -> None:
+    # Arrange
+    started = datetime(2026, 8, 19, 12, 0, 0)
+    records = _timed_turn_records("2026-08-19T12:00:00")
+    spans = [_llm_span("span-1", started, ttft_ms=420, duration_ms=2000)]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records, spans)
+
+    # Assert
+    assert projection.tasks[0].loops[0].timing.ttft_ms == 420
+
+
+def test_derives_decode_window_when_first_token_precedes_request_end() -> None:
+    # Arrange
+    started = datetime(2026, 8, 19, 12, 0, 0)
+    records = _timed_turn_records("2026-08-19T12:00:00")
+    spans = [_llm_span("span-1", started, ttft_ms=500, duration_ms=2000)]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records, spans)
+
+    # Assert
+    assert projection.tasks[0].loops[0].timing.decode_ms == 1500
+
+
+def test_computes_decode_throughput_when_output_tokens_and_decode_time_exist() -> None:
+    # Arrange
+    started = datetime(2026, 8, 19, 12, 0, 0)
+    records = _timed_turn_records("2026-08-19T12:00:00", output_tokens=300)
+    spans = [_llm_span("span-1", started, ttft_ms=500, duration_ms=2000)]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records, spans)
+
+    # Assert
+    assert projection.tasks[0].loops[0].output_tokens_per_second == 200.0
+
+
+def test_reports_no_throughput_when_the_run_recorded_no_llm_spans() -> None:
+    # Arrange
+    records = _timed_turn_records("2026-08-19T12:00:00", output_tokens=300)
+
+    # Act
+    projection = ExecutionTraceProjector().project(records)
+
+    # Assert
+    assert projection.tasks[0].loops[0].output_tokens_per_second is None
+
+
+def test_leaves_timing_unrecorded_when_no_span_falls_inside_the_tolerance() -> None:
+    # Arrange
+    records = _timed_turn_records("2026-08-19T12:00:00")
+    spans = [_llm_span("span-1", datetime(2026, 8, 19, 13, 0, 0), ttft_ms=420, duration_ms=2000)]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records, spans)
+
+    # Assert
+    assert projection.tasks[0].loops[0].timing.is_recorded is False
+
+
+def test_assigns_each_llm_span_once_when_steps_run_back_to_back() -> None:
+    # Arrange
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "assistant-1",
+            "timestamp": "2026-08-19T12:00:00",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "One"}]},
+        },
+        {
+            "type": "assistant",
+            "uuid": "assistant-2",
+            "timestamp": "2026-08-19T12:00:20",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Two"}]},
+        },
+    ]
+    spans = [
+        _llm_span("span-1", datetime(2026, 8, 19, 12, 0, 0), ttft_ms=100, duration_ms=900),
+        _llm_span("span-2", datetime(2026, 8, 19, 12, 0, 20), ttft_ms=200, duration_ms=900),
+    ]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records, spans)
+
+    # Assert
+    assert [loop.timing.span_id for loop in projection.tasks[0].loops] == ["span-1", "span-2"]
+
+
+def test_matches_llm_span_when_transcript_timestamp_is_offset_aware() -> None:
+    # Arrange
+    local_offset = datetime(2026, 8, 19, 12, 0, 0).astimezone().strftime("%z")
+    records = _timed_turn_records(f"2026-08-19T12:00:00{local_offset}")
+    spans = [_llm_span("span-1", datetime(2026, 8, 19, 12, 0, 0), ttft_ms=420, duration_ms=2000)]
+
+    # Act
+    projection = ExecutionTraceProjector().project(records, spans)
+
+    # Assert
+    assert projection.tasks[0].loops[0].timing.span_id == "span-1"
 
 
 def test_uses_default_model_when_transcript_omits_model() -> None:

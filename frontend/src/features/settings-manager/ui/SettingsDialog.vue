@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useSettingsManager } from '../model/useSettingsManager'
 import { useUserPreferences } from '@shared/lib/useUserPreferences'
 import { useDialogManager, useVisibleProxy, useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTimeout } from '@shared/lib/useTimeout'
+import { isChannelFormDirty, isSettingsWorkingCopyDirty } from '../lib/settingsDirty'
 import CustomSelect from '@shared/ui/CustomSelect.vue'
 import ChannelSyncButton from './ChannelSyncButton.vue'
 
@@ -88,26 +89,28 @@ const {
   setEnterBehavior,
 } = useUserPreferences()
 
-const editingProfileId = ref(null)
-const showAddForm = ref(false)
-const showJsonPreview = ref(false)
-const addForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
-const editForm = ref({ name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} })
-const settingsData = ref(null)
-const settingsDirty = computed(() => Boolean(settings.value && settingsData.value)
-  && JSON.stringify(settingsData.value) !== JSON.stringify(settings.value))
-const addFormDirty = computed(() => showAddForm.value && JSON.stringify(addForm.value) !== JSON.stringify({
+const EMPTY_CHANNEL_FORM = {
   name: '',
   host: '',
   api_key: '',
   auth_env_name: 'ANTHROPIC_API_KEY',
   model_config: {},
-}))
+}
+const editingProfileId = ref(null)
+const showAddForm = ref(false)
+const showJsonPreview = ref(false)
+const addForm = ref({ ...EMPTY_CHANNEL_FORM, model_config: {} })
+const editForm = ref({ ...EMPTY_CHANNEL_FORM, model_config: {} })
+const settingsData = ref(null)
+const settingsBaseline = ref('')
+let settingsBaselineSeq = 0
+const settingsDirty = computed(() => isSettingsWorkingCopyDirty(settingsBaseline.value, settingsData.value))
+const addFormDirty = computed(() => showAddForm.value && isChannelFormDirty(addForm.value, EMPTY_CHANNEL_FORM))
 const editFormDirty = computed(() => {
   if (!editingProfileId.value) return false
   const profile = profiles.value.find(item => item.profile_id === editingProfileId.value)
-  if (!profile) return true
-  return JSON.stringify(editForm.value) !== JSON.stringify({
+  if (!profile) return false
+  return isChannelFormDirty(editForm.value, {
     name: profile.name,
     host: profile.host || '',
     api_key: profile.api_key || '',
@@ -124,6 +127,8 @@ const defaultMode = computed({
   },
   set(val) {
     if (!settingsData.value) return
+    const stored = settingsData.value.permissions?.defaultMode || 'default'
+    if (stored === val) return
     if (!settingsData.value.permissions) {
       settingsData.value.permissions = {}
     }
@@ -137,6 +142,8 @@ const hasCompletedOnboarding = computed({
   },
   set(val) {
     if (!settingsData.value) return
+    const stored = settingsData.value.hasCompletedOnboarding !== false
+    if (stored === Boolean(val)) return
     settingsData.value.hasCompletedOnboarding = val
   },
 })
@@ -147,7 +154,10 @@ const effortLevel = computed({
   },
   set(val) {
     if (!settingsData.value) return
-    settingsData.value.effortLevel = val || undefined
+    const next = val || undefined
+    const stored = settingsData.value.effortLevel || undefined
+    if (stored === next) return
+    settingsData.value.effortLevel = next
   },
 })
 
@@ -157,6 +167,8 @@ const skipDangerousPrompt = computed({
   },
   set(val) {
     if (!settingsData.value) return
+    const stored = settingsData.value.skipDangerousModePermissionPrompt === true
+    if (stored === Boolean(val)) return
     settingsData.value.skipDangerousModePermissionPrompt = val
   },
 })
@@ -167,6 +179,8 @@ const attributionCommit = computed({
   },
   set(val) {
     if (!settingsData.value) return
+    const stored = settingsData.value.attribution?.commit ?? ''
+    if (stored === val) return
     if (!settingsData.value.attribution) settingsData.value.attribution = {}
     settingsData.value.attribution.commit = val
   },
@@ -178,6 +192,8 @@ const attributionPr = computed({
   },
   set(val) {
     if (!settingsData.value) return
+    const stored = settingsData.value.attribution?.pr ?? ''
+    if (stored === val) return
     if (!settingsData.value.attribution) settingsData.value.attribution = {}
     settingsData.value.attribution.pr = val
   },
@@ -189,9 +205,12 @@ function getEnvVar(key) {
 
 function setEnvVar(key, val) {
   if (!settingsData.value) return
+  const current = settingsData.value.env?.[key] || ''
+  const next = val || ''
+  if (current === next) return
   if (!settingsData.value.env) settingsData.value.env = {}
-  if (val) {
-    settingsData.value.env[key] = val
+  if (next) {
+    settingsData.value.env[key] = next
   } else {
     delete settingsData.value.env[key]
   }
@@ -222,22 +241,29 @@ watch(() => props.visible, (val) => {
   }
 }, { immediate: true })
 
-watch(() => settings.value, (val) => {
-  if (val) {
-    settingsData.value = JSON.parse(JSON.stringify(val))
+watch(() => settings.value, async (val) => {
+  const seq = ++settingsBaselineSeq
+  if (!val) {
+    settingsData.value = null
+    settingsBaseline.value = ''
+    return
   }
-})
+  settingsData.value = JSON.parse(JSON.stringify(val))
+  await nextTick()
+  if (seq !== settingsBaselineSeq) return
+  settingsBaseline.value = JSON.stringify(settingsData.value)
+}, { immediate: true })
 
 function cancelAdd() {
   if (addFormDirty.value && !confirm('新增渠道尚未保存，确定取消吗？')) return
   showAddForm.value = false
-  addForm.value = { name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} }
+  addForm.value = { ...EMPTY_CHANNEL_FORM, model_config: {} }
 }
 
 async function submitAdd() {
   const created = await handleCreate(addForm.value)
   if (!created) return
-  addForm.value = { name: '', host: '', api_key: '', auth_env_name: 'ANTHROPIC_API_KEY', model_config: {} }
+  addForm.value = { ...EMPTY_CHANNEL_FORM, model_config: {} }
   showAddForm.value = false
 }
 
@@ -735,14 +761,14 @@ async function copyJsonPreview() {
                   <label class="field-label">Attribution: Commit</label>
                   <span class="field-desc">Text appended to commit messages; empty to disable</span>
                 </div>
-                <input class="form-input" v-model="attributionCommit" placeholder="e.g. Co-authored-by: ..." />
+                <input class="form-input" v-model="attributionCommit" autocomplete="off" placeholder="e.g. Co-authored-by: ..." />
               </div>
               <div class="field-row field-row--stacked">
                 <div class="field-info">
                   <label class="field-label">Attribution: PR</label>
                   <span class="field-desc">Text appended to PR descriptions; empty to disable</span>
                 </div>
-                <input class="form-input" v-model="attributionPr" placeholder="e.g. Co-authored-by: ..." />
+                <input class="form-input" v-model="attributionPr" autocomplete="off" placeholder="e.g. Co-authored-by: ..." />
               </div>
             </div>
           </div>

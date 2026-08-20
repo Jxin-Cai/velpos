@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { getGitConfig, setGitConfig, listSshKeys, generateSshKey } from '../api/gitApi'
 import { useDialogManager, useVisibleProxy, useEscapeToClose } from '@shared/lib/useDialogManager'
 import { useTimeout } from '@shared/lib/useTimeout'
@@ -70,8 +70,13 @@ async function loadData() {
     if (seq !== _loadDataSeq) return
     error.value = e.message || 'Failed to load git config'
   } finally {
-    loading.value = false
+    if (seq === _loadDataSeq) loading.value = false
   }
+  if (seq !== _loadDataSeq) return
+  await nextTick()
+  if (seq !== _loadDataSeq) return
+  initialUserName.value = userName.value
+  initialUserEmail.value = userEmail.value
 }
 
 async function handleSaveConfig() {
@@ -80,8 +85,8 @@ async function handleSaveConfig() {
   configSaved.value = false
   try {
     const result = await setGitConfig(userName.value, userEmail.value)
-    userName.value = result.user_name
-    userEmail.value = result.user_email
+    userName.value = result.user_name || ''
+    userEmail.value = result.user_email || ''
     initialUserName.value = userName.value
     initialUserEmail.value = userEmail.value
     configSaved.value = true
@@ -183,6 +188,8 @@ watch(() => props.visible, (val) => {
                 v-model="userName"
                 type="text"
                 class="field-input"
+                name="git-user-name"
+                autocomplete="off"
                 placeholder="Velpos"
               />
             </div>
@@ -192,6 +199,8 @@ watch(() => props.visible, (val) => {
                 v-model="userEmail"
                 type="text"
                 class="field-input"
+                name="git-user-email"
+                autocomplete="off"
                 placeholder="velpos@local"
               />
             </div>

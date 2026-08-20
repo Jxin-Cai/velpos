@@ -11,12 +11,25 @@ from domain.session.model.execution_trace import (
     ExecutionEvent,
     ExecutionEventType,
     ExecutionTask,
+    LoopTiming,
     ProjectionCompleteness,
     ProjectionProvenance,
     SubagentPlaceholder,
     TaskDependency,
 )
 from domain.session.model.trace_span import TraceSpan
+
+
+def _as_int(value: Any) -> int:
+    """Read a numeric telemetry attribute that may arrive as text."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 @dataclass
@@ -102,7 +115,8 @@ class ExecutionTraceProjector:
                     ExecutionEvent(
                         ExecutionEventType.MODEL_OUTPUT,
                         source_uuid,
-                        tuple(blocks),
+                        self._spoken_blocks(blocks),
+                        metadata={"block_types": self._block_types(blocks)},
                         timestamp=record_timestamp,
                     ),
                 ]
@@ -279,6 +293,7 @@ class ExecutionTraceProjector:
                         records_by_uuid[record_uuid] = indexed_record
             previous_timestamp = record_timestamp or previous_timestamp
 
+        self._apply_llm_timings(loops, tasks, projection_spans)
         warnings.extend(f"missing_tool_result:{tool_id}" for tool_id in pending)
         provenance = self._provenance(warnings)
         visible_tasks = [task for task in tasks.values() if task.explicit]
@@ -292,6 +307,113 @@ class ExecutionTraceProjector:
             for t in visible_tasks
         )
         return ExecutionAgent(agent_id, projected_tasks, tuple(dependencies), tuple(subagents), provenance, request)
+
+    # Transcript records carry no span id, so a projected step and the LLM span
+    # that produced it can only be related through time. A step is anchored on
+    # its start, which is when the provider request was dispatched.
+    _TIMING_MATCH_TOLERANCE_MS = 30_000
+
+    @classmethod
+    def _apply_llm_timings(
+        cls,
+        loops: list[AgentLoop],
+        tasks: dict[str, _TaskState],
+        spans: list[TraceSpan],
+    ) -> None:
+        """Attach provider latency to each step it can be matched to."""
+        candidates = sorted(
+            (
+                span for span in spans
+                if span.span_type == TraceSpan.SPAN_TYPE_LLM_TURN
+                and span.started_time is not None
+            ),
+            key=lambda span: span.started_time,
+        )
+        if not candidates:
+            return
+        anchored = sorted(
+            (
+                (index, loop) for index, loop in enumerate(loops)
+                if loop.started_time is not None
+            ),
+            key=lambda item: item[1].started_time,
+        )
+        used: set[int] = set()
+        for index, loop in anchored:
+            best = cls._nearest_span(candidates, used, loop.started_time)
+            if best is None:
+                continue
+            used.add(best)
+            timed = replace(loops[index], timing=cls._timing(candidates[best]))
+            loops[index] = timed
+            task = tasks.get(timed.task_id)
+            if task is not None:
+                cls._replace_task_loop(task, timed)
+
+    @classmethod
+    def _nearest_span(
+        cls,
+        candidates: list[TraceSpan],
+        used: set[int],
+        anchor: datetime,
+    ) -> int | None:
+        best: int | None = None
+        best_distance = cls._TIMING_MATCH_TOLERANCE_MS
+        for index, span in enumerate(candidates):
+            if index in used:
+                continue
+            distance = cls._absolute_distance_ms(span.started_time, anchor)
+            if distance <= best_distance:
+                best_distance = distance
+                best = index
+        return best
+
+    @classmethod
+    def _absolute_distance_ms(cls, left: datetime, right: datetime) -> int:
+        """Compare timestamps that may disagree on timezone awareness.
+
+        Spans are persisted as naive local datetimes while transcript records
+        are commonly offset-aware; comparing them directly raises TypeError.
+        """
+        delta = cls._as_local_naive(left) - cls._as_local_naive(right)
+        return abs(int(delta.total_seconds() * 1000))
+
+    @staticmethod
+    def _as_local_naive(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value
+        return value.astimezone().replace(tzinfo=None)
+
+    @staticmethod
+    def _timing(span: TraceSpan) -> LoopTiming:
+        metadata = span.metadata if isinstance(span.metadata, Mapping) else {}
+        return LoopTiming(
+            span_id=span.id,
+            ttft_ms=max(_as_int(metadata.get("ttft_ms")), 0),
+            request_duration_ms=max(span.duration_ms or 0, 0),
+            attempt=max(_as_int(metadata.get("attempt")) or 1, 1),
+        )
+
+    @staticmethod
+    def _spoken_blocks(blocks: list[Any]) -> tuple[Any, ...]:
+        """Keep only what the model said in prose.
+
+        Reasoning and tool calls already become their own events, so leaving
+        them in the model output renders the same content twice: once as a
+        readable card and once inside a JSON dump.
+        """
+        return tuple(
+            block
+            for block in blocks
+            if not isinstance(block, Mapping) or block.get("type") not in {"thinking", "tool_use"}
+        )
+
+    @staticmethod
+    def _block_types(blocks: list[Any]) -> list[str]:
+        return [
+            str(block.get("type") or "unknown") if isinstance(block, Mapping) else "unknown"
+            for block in blocks
+        ]
 
     @staticmethod
     def _subagent_spans_by_tool(spans: list[TraceSpan]) -> dict[str, TraceSpan]:

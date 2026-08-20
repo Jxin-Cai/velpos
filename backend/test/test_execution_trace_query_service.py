@@ -43,7 +43,7 @@ async def test_rebuilds_cached_tree_when_run_version_changes() -> None:
     # Arrange
     _tree_cache.clear()
     trace_repository = Mock()
-    trace_repository.find_run_version = AsyncMock(side_effect=[1, 2])
+    trace_repository.find_run_version = AsyncMock(side_effect=["2:7:2", "2:7:3"])
     service = ExecutionTraceQueryService(
         session_repository=Mock(),
         project_repository=Mock(),
@@ -55,8 +55,8 @@ async def test_rebuilds_cached_tree_when_run_version_changes() -> None:
     service.get_execution_tree = AsyncMock(side_effect=[first_tree, updated_tree])
 
     # Act
-    await service._get_cached_tree("session-1", "run-1")
-    result = await service._get_cached_tree("session-1", "run-1")
+    await service.get_cached_execution_tree("session-1", "run-1")
+    result = await service.get_cached_execution_tree("session-1", "run-1")
 
     # Assert
     assert result is updated_tree
@@ -67,7 +67,7 @@ async def test_reuses_cached_tree_when_run_version_is_unchanged() -> None:
     # Arrange
     _tree_cache.clear()
     trace_repository = Mock()
-    trace_repository.find_run_version = AsyncMock(side_effect=[3, 3])
+    trace_repository.find_run_version = AsyncMock(side_effect=["3:9:3", "3:9:3"])
     service = ExecutionTraceQueryService(
         session_repository=Mock(),
         project_repository=Mock(),
@@ -78,8 +78,8 @@ async def test_reuses_cached_tree_when_run_version_is_unchanged() -> None:
     service.get_execution_tree = AsyncMock(return_value=tree)
 
     # Act
-    await service._get_cached_tree("session-1", "run-1")
-    result = await service._get_cached_tree("session-1", "run-1")
+    await service.get_cached_execution_tree("session-1", "run-1")
+    result = await service.get_cached_execution_tree("session-1", "run-1")
 
     # Assert
     assert result is tree

@@ -199,14 +199,14 @@ const formatDuration = (ms) => _formatDuration(ms, { zeroValue: '' })
     <div v-if="expanded" class="span-detail">
       <div v-if="completeInput != null || completeOutput != null || thinkingPreview || hasMetadata" class="detail-card" :class="{ 'detail-card--tool': node.span_type === 'tool_call', 'detail-card--subagent': node.span_type === 'subagent' }">
         <div class="payload-grid" :class="{ 'payload-grid--split': completeInput != null && completeOutput != null }">
-          <SpanPayloadViewer :payload="completeInput" :label="node.span_type === 'tool_call' ? 'Complete request' : node.span_type === 'subagent' ? 'Complete invocation' : 'Complete input'" start-expanded />
-          <SpanPayloadViewer :payload="completeOutput" :label="node.span_type === 'llm_turn' ? 'Complete assistant output' : node.span_type === 'subagent' ? 'Complete subagent return' : 'Complete response'" start-expanded />
+          <SpanPayloadViewer :payload="completeInput" :label="node.span_type === 'tool_call' ? 'Complete request' : node.span_type === 'subagent' ? 'Complete invocation' : 'Complete input'" />
+          <SpanPayloadViewer :payload="completeOutput" :label="node.span_type === 'llm_turn' ? 'Complete assistant output' : node.span_type === 'subagent' ? 'Complete subagent return' : 'Complete response'" />
         </div>
         <div v-if="completeInput == null || completeOutput == null" class="capture-coverage" role="note">
           <span>{{ completeInput == null ? 'Input not emitted by source' : 'Input captured' }}</span>
           <span>{{ completeOutput == null ? 'Output not emitted by source' : 'Output captured' }}</span>
         </div>
-        <SpanPayloadViewer v-if="thinkingPreview" :payload="thinkingPreview" label="Thinking" start-expanded />
+        <SpanPayloadViewer v-if="thinkingPreview" :payload="thinkingPreview" label="Thinking" />
         <details v-if="hasMetadata" class="span-meta">
           <summary>Diagnostics</summary>
           <pre class="meta-content">{{ JSON.stringify(visibleMetadata, null, 2) }}</pre>

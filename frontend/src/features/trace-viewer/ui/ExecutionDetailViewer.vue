@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { formatDuration as _formatDuration } from '@shared/lib/formatTime'
 import SpanPayloadViewer from './SpanPayloadViewer.vue'
 import InlineSubagentTree from './InlineSubagentTree.vue'
+import LlmRequestInspector from './LlmRequestInspector.vue'
 
 const props = defineProps({
   loopId: { type: String, default: null },
@@ -11,10 +12,14 @@ const props = defineProps({
   loadState: { type: String, default: 'idle' },
   provenance: { type: Object, default: null },
   agentSpanId: { type: String, default: null },
+  llmRequest: { type: Object, default: null },
+  llmRequestState: { type: Object, default: null },
+  loadLlmRequestDetail: { type: Function, default: async () => {} },
   getInlineSubagentState: { type: Function, default: () => null },
   getLoopDetail: { type: Function, default: () => null },
   getLoopLoadState: { type: Function, default: () => 'idle' },
   loadLoopDetail: { type: Function, default: async () => {} },
+  loadMoreEvents: { type: Function, default: async () => {} },
 })
 
 const emit = defineEmits(['toggle-inline-subagent'])
@@ -50,15 +55,17 @@ const modelInputSources = computed(() => new Set(
 // output in that case so the UI still presents one complete model turn.
 const modelOutputByInputIndex = computed(() => {
   const pairs = new Map()
-  events.value.forEach((event, inputIndex) => {
-    if (event.type !== 'model_input' && event.type !== 'user_message') return
-    if (event.source_uuid) return
-    const outputIndex = events.value.findIndex((candidate, candidateIndex) => (
-      candidateIndex > inputIndex
-      && (candidate.type === 'model_output' || candidate.type === 'assistant_message')
-    ))
-    if (outputIndex >= 0) pairs.set(inputIndex, outputIndex)
-  })
+  let nextOutputIndex = null
+  for (let index = events.value.length - 1; index >= 0; index -= 1) {
+    const event = events.value[index]
+    const isInput = event.type === 'model_input' || event.type === 'user_message'
+    if (isInput && !event.source_uuid && nextOutputIndex != null) {
+      pairs.set(index, nextOutputIndex)
+    }
+    if (event.type === 'model_output' || event.type === 'assistant_message') {
+      nextOutputIndex = index
+    }
+  }
   return pairs
 })
 const pairedModelOutputIndices = computed(() => new Set(modelOutputByInputIndex.value.values()))
@@ -93,6 +100,13 @@ const retrySequence = computed(() => {
 })
 
 const THINKING_KEYWORDS = ['retry', 'error', 'fallback', 'failed', 'alternative', 'workaround']
+
+// A turn that only called tools carries no spoken output, since reasoning and
+// tool calls are rendered as their own cards. Drop the empty block list so the
+// card reads as "no payload" instead of showing a bare `[]`.
+function spokenContent(content) {
+  return Array.isArray(content) && content.length === 0 ? undefined : content
+}
 
 const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
   if (event.type === 'tool_result' && pairedResultIds.value.has(event.tool_use_id)) return []
@@ -155,7 +169,7 @@ const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
       label: 'Model turn',
       title: props.loop?.model || 'Input and output',
       input: event.content,
-      output: output?.content,
+      output: spokenContent(output?.content),
       endedTime: output?.timestamp,
       inputSummary: event.metadata?.input_summary || null,
     }]
@@ -169,7 +183,7 @@ const eventItems = computed(() => events.value.flatMap((event, sourceIndex) => {
       kind: 'output',
       label: 'Model output',
       title: props.loop?.model || 'Assistant response',
-      output: event.content,
+      output: spokenContent(event.content),
     }]
   }
 
@@ -214,6 +228,21 @@ const tokenTooltip = computed(() => {
   return parts.join(' · ')
 })
 const isReconstructed = computed(() => props.provenance?.reconstructed_from_transcript)
+
+// Time to first token separates prompt processing from decoding, which is what
+// tells a slow prompt apart from a long answer. It is only present when the run
+// was recorded with native Claude Code telemetry.
+const timing = computed(() => (props.loop?.timing?.is_recorded ? props.loop.timing : null))
+const timingTooltip = computed(() => {
+  if (!timing.value) return ''
+  const parts = [`Request: ${formatDuration(timing.value.request_duration_ms)}`]
+  if (timing.value.decode_ms) parts.push(`Decode: ${formatDuration(timing.value.decode_ms)}`)
+  if (timing.value.output_tokens_per_second) {
+    parts.push(`${timing.value.output_tokens_per_second} tok/s`)
+  }
+  if (timing.value.retry_count) parts.push(`${timing.value.retry_count} provider retries`)
+  return parts.join(' · ')
+})
 
 function formatTokensK(n) {
   if (!n) return '0'
@@ -287,6 +316,15 @@ function itemDuration(item) {
         </div>
         <dl class="step-stats">
           <div><dt>Duration</dt><dd>{{ formatDuration(loop?.duration_ms) }}</dd></div>
+          <div v-if="timing">
+            <dt>First token</dt>
+            <dd :title="timingTooltip">
+              {{ timing.ttft_ms ? formatDuration(timing.ttft_ms) : '—' }}
+              <span v-if="timing.output_tokens_per_second" class="throughput-badge">
+                {{ timing.output_tokens_per_second }} tok/s
+              </span>
+            </dd>
+          </div>
           <div><dt>Events</dt><dd>{{ total }}</dd></div>
           <div><dt>Tools</dt><dd>{{ toolCallCount }}</dd></div>
           <div>
@@ -313,12 +351,19 @@ function itemDuration(item) {
         </span>
       </div>
 
+      <LlmRequestInspector
+        v-if="llmRequest"
+        :summary="llmRequest"
+        :state="llmRequestState"
+        :load-detail="loadLlmRequestDetail"
+      />
+
       <div class="event-list-heading">
         <div>
           <h4>Recorded events</h4>
           <p>Model turns and tool calls are paired with their captured input and result payloads.</p>
         </div>
-        <span v-if="hasMore" class="more-badge">More available</span>
+        <span v-if="hasMore" class="more-badge">{{ events.length }} / {{ total }} loaded</span>
       </div>
 
       <ol v-if="eventItems.length" class="recorded-event-list">
@@ -361,8 +406,8 @@ function itemDuration(item) {
             </div>
 
             <div class="event-body" :class="{ 'event-body--split': item.input != null && item.output != null }">
-              <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Complete input" start-expanded />
-              <SpanPayloadViewer v-if="item.output != null" :payload="item.output" label="Complete output" start-expanded />
+              <SpanPayloadViewer v-if="item.input != null" :payload="item.input" label="Complete input" />
+              <SpanPayloadViewer v-if="item.output != null" :payload="item.output" label="Complete output" />
               <div v-if="item.input == null && item.output == null" class="event-no-content">No payload was recorded for this event.</div>
             </div>
 
@@ -389,6 +434,7 @@ function itemDuration(item) {
                   :get-loop-detail="getLoopDetail"
                   :get-loop-load-state="getLoopLoadState"
                   :load-loop-detail="loadLoopDetail"
+                  :load-more-events="loadMoreEvents"
                 />
               </div>
             </div>
@@ -396,7 +442,19 @@ function itemDuration(item) {
         </li>
       </ol>
 
-      <div v-else-if="loadState === 'loaded'" class="detail-state">
+      <div v-if="eventItems.length && (hasMore || detail?.moreError)" class="event-load-more">
+        <button
+          type="button"
+          class="event-load-more-btn"
+          :disabled="detail?.loadingMore"
+          @click="loadMoreEvents(loopId, agentSpanId)"
+        >
+          {{ detail?.loadingMore ? 'Loading more events…' : 'Load more events' }}
+        </button>
+        <span v-if="detail?.moreError" class="event-load-more-error">{{ detail.moreError }}</span>
+      </div>
+
+      <div v-if="!eventItems.length && loadState === 'loaded'" class="detail-state">
         <p>No recorded events in this step.</p>
       </div>
     </template>
@@ -450,6 +508,7 @@ function itemDuration(item) {
 .event-retry-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, #f59e0b 12%, transparent); color: #d97706; font-size: 9px; font-weight: 600; text-transform: uppercase; }
 .event-retried-flag { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--text-accent) 10%, transparent); color: var(--text-accent); font-size: 9px; font-weight: 600; }
 .cache-hit-badge { margin-left: 4px; padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--color-success, #22c55e) 12%, transparent); color: var(--color-success, #22c55e); font-size: 9px; font-weight: 600; }
+.throughput-badge { margin-left: 4px; padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--text-accent) 12%, transparent); color: var(--text-accent); font-size: 9px; font-weight: 600; }
 .input-summary-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--text-accent) 4%, var(--bg-secondary)); }
 .summary-chip { padding: 3px 8px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
 .summary-chip strong { color: var(--text-primary); font-weight: 650; }
@@ -463,6 +522,12 @@ function itemDuration(item) {
 .event-body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--bg-secondary) 45%, var(--bg-primary)); }
 .event-body--split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .event-no-content { padding: 18px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+.event-load-more { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.event-load-more-btn { min-height: 36px; padding: 8px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; transition: border-color 150ms ease, color 150ms ease, background 150ms ease; }
+.event-load-more-btn:hover:not(:disabled) { border-color: var(--text-accent); background: var(--bg-hover); color: var(--text-primary); }
+.event-load-more-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+.event-load-more-btn:disabled { cursor: wait; opacity: .68; }
+.event-load-more-error { color: var(--color-error, #ef4444); font-size: 11px; }
 .subagent-actions { padding: 0 12px 12px; background: color-mix(in srgb, var(--bg-secondary) 45%, var(--bg-primary)); }
 .inline-expand-btn { min-height: 36px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; font-weight: 500; cursor: pointer; }
 .inline-expand-btn:hover { border-color: var(--text-accent); color: var(--text-accent); }

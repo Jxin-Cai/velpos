@@ -823,6 +823,14 @@ async def get_execution_ledger_event_repository(
     return ExecutionLedgerEventRepositoryImpl(db_session)
 
 
+async def get_llm_request_query_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> "LlmRequestQueryService":
+    from application.session.llm_request_query_service import LlmRequestQueryService
+
+    return LlmRequestQueryService(ExecutionLedgerEventRepositoryImpl(db_session))
+
+
 async def get_execution_trace_query_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> "ExecutionTraceQueryService":
