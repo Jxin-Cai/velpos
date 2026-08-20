@@ -1,11 +1,36 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from unittest.mock import AsyncMock, call
 
 import pytest
 
 from infr.client.claude_plugin_manager import ClaudePluginManager
+
+
+def test_injects_http_basic_authorization_when_marketplace_token_is_provided() -> None:
+    # Arrange
+    token = "secret-token"
+    expected = base64.b64encode(b"x-access-token:secret-token").decode("ascii")
+
+    # Act
+    env = ClaudePluginManager._git_auth_env(token)
+
+    # Assert
+    assert env == {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {expected}",
+    }
+
+
+def test_skips_git_auth_env_when_marketplace_token_is_empty() -> None:
+    # Arrange / Act
+    env = ClaudePluginManager._git_auth_env("")
+
+    # Assert
+    assert env is None
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,11 @@ from typing import Any
 
 import pytest
 
-from application.session.native_otel_config import _derive_ingest_token, build_native_otel_env
+from application.session.native_otel_config import (
+    _derive_ingest_token,
+    build_native_otel_env,
+    build_persistable_otel_destination_env,
+)
 from application.session.native_otel_ingestor import ingest_logs, ingest_metrics, ingest_traces
 from domain.session.model.execution_ledger_event import ExecutionLedgerEvent
 from domain.session.model.trace_span import TraceSpan
@@ -64,6 +68,19 @@ def test_builds_official_exporters_when_native_otel_is_enabled(monkeypatch) -> N
     assert env["OTEL_LOG_TOOL_DETAILS"] == "1"
     assert env["OTEL_LOG_TOOL_CONTENT"] == "1"
     assert env["OTEL_LOG_RAW_API_BODIES"] == "1"
+
+
+def test_omits_session_id_when_building_persistable_destination(monkeypatch) -> None:
+    # Arrange
+    monkeypatch.setenv("VELPOS_NATIVE_OTEL_ENABLED", "true")
+    monkeypatch.setenv("VELPOS_OTEL_ENDPOINT", "http://127.0.0.1:8083/api/otel")
+
+    # Act
+    env = build_persistable_otel_destination_env()
+
+    # Assert
+    assert env["OTEL_TRACES_EXPORTER"] == "otlp"
+    assert "OTEL_RESOURCE_ATTRIBUTES" not in env
 
 
 def test_preserves_explicit_audit_opt_out_when_settings_disable_content(monkeypatch) -> None:

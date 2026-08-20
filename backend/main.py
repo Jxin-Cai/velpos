@@ -226,6 +226,20 @@ async def _resume_im_listeners() -> None:
                 )
 
 
+async def _ensure_claude_code_shared_settings() -> None:
+    """Write Claude Code audit defaults and OTLP destination to ~/.claude.
+
+    Pro uses an isolated Docker volume for /home/appuser/.claude, so these
+    keys are never inherited from the host. Seeding them on startup keeps
+    settings.json aligned with the SDK subprocess environment.
+    """
+    from ohs.dependencies import get_settings_application_service
+
+    settings_svc = get_settings_application_service()
+    await settings_svc.ensure_shared_env()
+    logger.info("Ensured Claude Code shared env in settings.json.")
+
+
 async def _restore_channel_profile_settings() -> None:
     """Restore active channel profile env vars to ~/.claude/settings.json.
 
@@ -349,6 +363,11 @@ async def lifespan(app: FastAPI):
     im_delivery = get_im_delivery_coordinator()
     im_delivery.start()
     logger.info("Durable IM inbox/outbox workers started")
+
+    try:
+        await _ensure_claude_code_shared_settings()
+    except Exception:
+        logger.error("Failed to persist Claude Code shared env to settings.json", exc_info=True)
 
     # Restore active channel profile settings after rebuild
     try:

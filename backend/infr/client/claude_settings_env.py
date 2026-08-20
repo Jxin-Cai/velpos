@@ -8,9 +8,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-# These collection switches are safe, destination-agnostic Claude Code defaults.
-# Velpos adds the per-process OTLP endpoint and authentication header when it
-# launches the Agent SDK subprocess.
+# Collection switches are destination-agnostic Claude Code defaults. The
+# OTLP exporter destination is merged and persisted separately so
+# ~/.claude/settings.json matches the SDK subprocess in both dev and pro.
 CLAUDE_CODE_GENERAL_ENV_DEFAULTS: dict[str, str] = {
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",

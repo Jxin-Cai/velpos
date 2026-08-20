@@ -48,7 +48,7 @@ class PluginManager(ABC):
 
         Args:
             source: Marketplace source (GitHub repo like "owner/repo", git URL, or local path).
-            token: Optional bearer token injected into the Git subprocess environment.
+            token: Optional Git HTTP token injected into the clone subprocess environment.
 
         Returns:
             CLI output message.
@@ -66,7 +66,7 @@ class PluginManager(ABC):
 
         Args:
             name: Marketplace name to update. If None, updates all marketplaces.
-            token: Optional bearer token injected into the Git subprocess environment.
+            token: Optional Git HTTP token injected into the clone subprocess environment.
 
         Returns:
             CLI output message.

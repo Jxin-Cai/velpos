@@ -53,6 +53,21 @@ const AUDIT_ENV_OPTIONS = [
   { key: 'OTEL_LOG_RAW_API_BODIES', label: '原始 API Body', desc: '记录完整 Messages API 请求与响应 JSON' },
 ]
 
+const OTLP_ENV_OPTIONS = [
+  { key: 'OTEL_TRACES_EXPORTER', label: 'Traces 导出', desc: '将 Claude Code traces 发往 OTLP' },
+  { key: 'OTEL_METRICS_EXPORTER', label: 'Metrics 导出', desc: '将 Claude Code metrics 发往 OTLP' },
+  { key: 'OTEL_LOGS_EXPORTER', label: 'Logs 导出', desc: '将 Claude Code logs 发往 OTLP' },
+  { key: 'OTEL_EXPORTER_OTLP_PROTOCOL', label: 'OTLP 协议', desc: 'Velpos ingest 使用 http/json' },
+  { key: 'OTEL_EXPORTER_OTLP_ENDPOINT', label: 'OTLP Endpoint', desc: '写入 ~/.claude 并注入 SDK 进程' },
+  { key: 'OTEL_EXPORTER_OTLP_HEADERS', label: 'OTLP Headers', desc: 'Velpos ingest token' },
+  { key: 'BETA_TRACING_ENDPOINT', label: 'Hook Trace Endpoint', desc: '详细 Hook span 的导出地址' },
+  { key: 'OTEL_SERVICE_NAME', label: 'Service Name', desc: 'OTLP resource service.name' },
+  { key: 'OTEL_METRIC_EXPORT_INTERVAL', label: 'Metrics 间隔', desc: '毫秒' },
+  { key: 'OTEL_LOGS_EXPORT_INTERVAL', label: 'Logs 间隔', desc: '毫秒' },
+  { key: 'OTEL_TRACES_EXPORT_INTERVAL', label: 'Traces 间隔', desc: '毫秒' },
+  { key: 'CLAUDE_CODE_OTEL_DIAG_STDERR', label: 'OTel 诊断日志', desc: '将导出诊断输出到 stderr' },
+]
+
 function onModelIdChange(form, role, newValue) {
   if (!role.nameKey) return
   const currentName = form.model_config[role.nameKey] || ''
@@ -202,6 +217,10 @@ const attributionPr = computed({
 function getEnvVar(key) {
   return settingsData.value?.env?.[key] || ''
 }
+
+const visibleOtlpEnvOptions = computed(() =>
+  OTLP_ENV_OPTIONS.filter(item => Boolean(getEnvVar(item.key)))
+)
 
 function setEnvVar(key, val) {
   if (!settingsData.value) return
@@ -709,6 +728,21 @@ async function copyJsonPreview() {
                   <span class="toggle-track"><span class="toggle-thumb"></span></span>
                 </label>
               </div>
+              <div class="audit-heading">
+                <div>
+                  <span class="audit-heading__title">OTLP 导出</span>
+                  <span class="audit-heading__desc">dev 与 pro 使用同一套 Claude Code 官方导出配置，启动时写入 ~/.claude/settings.json。</span>
+                </div>
+                <span class="audit-heading__badge">OTLP</span>
+              </div>
+              <div v-for="item in visibleOtlpEnvOptions" :key="item.key" class="field-row field-row--audit">
+                <div class="field-info">
+                  <label class="field-label">{{ item.label }}</label>
+                  <span class="field-desc">{{ item.desc }}</span>
+                  <code class="env-key">{{ item.key }}</code>
+                </div>
+                <code class="env-value">{{ getEnvVar(item.key) }}</code>
+              </div>
               <div class="field-row">
                 <div class="field-info">
                   <label class="field-label">推理强度</label>
@@ -995,6 +1029,15 @@ async function copyJsonPreview() {
   margin-top: 4px;
   color: var(--text-muted);
   font-size: 9px;
+  word-break: break-all;
+}
+
+.env-value {
+  max-width: 42%;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
   word-break: break-all;
 }
 

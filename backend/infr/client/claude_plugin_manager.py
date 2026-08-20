@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime
 import json
 import logging
@@ -353,10 +354,12 @@ class ClaudePluginManager(PluginManagerPort):
     def _git_auth_env(token: str) -> dict[str, str] | None:
         if not token:
             return None
+        # GitHub/GitLab git-over-HTTPS accepts HTTP Basic, not Bearer.
+        basic = base64.b64encode(f"x-access-token:{token}".encode("ascii")).decode("ascii")
         return {
             "GIT_CONFIG_COUNT": "1",
             "GIT_CONFIG_KEY_0": "http.extraHeader",
-            "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
         }
 
     def _read_installed_plugins(self) -> dict[str, list[dict[str, Any]]]:

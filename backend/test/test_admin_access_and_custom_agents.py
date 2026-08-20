@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from datetime import datetime
 from types import SimpleNamespace
@@ -17,6 +18,11 @@ from domain.user.model.user import User, UserRole
 from infr.client.claude_plugin_manager import ClaudePluginManager
 from ohs.http.admin_plugin_router import AddMarketplaceRequest
 from ohs.ws import session_ws
+
+
+def _basic_git_auth_header(token: str) -> str:
+    encoded = base64.b64encode(f"x-access-token:{token}".encode("ascii")).decode("ascii")
+    return f"Authorization: Basic {encoded}"
 
 
 def _custom_template() -> AgentTemplate:
@@ -201,7 +207,7 @@ async def test_passes_token_through_process_environment_when_private_marketplace
     await manager.add_marketplace("https://git.example.com/team/plugins.git", "secret-token")
 
     # Assert
-    assert captured["extra_env"]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer secret-token"
+    assert captured["extra_env"]["GIT_CONFIG_VALUE_0"] == _basic_git_auth_header("secret-token")
     assert "secret-token" not in captured["args"]
 
 
@@ -252,7 +258,7 @@ async def test_passes_token_through_process_environment_when_private_marketplace
     assert captured["extra_env"] == {
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": "Authorization: Bearer refresh-token",
+        "GIT_CONFIG_VALUE_0": _basic_git_auth_header("refresh-token"),
     }
 
 
