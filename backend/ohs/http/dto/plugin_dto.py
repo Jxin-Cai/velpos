@@ -47,6 +47,15 @@ class PluginUpgradeAllRequest(BaseModel):
     )
 
 
+class PluginReloadRequest(BaseModel):
+    project_dir: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Project directory path whose active sessions should reload plugins",
+    )
+
+
 class MarketplaceUpdateRequest(BaseModel):
     name: str | None = Field(
         None,

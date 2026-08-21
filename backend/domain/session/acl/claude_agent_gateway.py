@@ -259,3 +259,11 @@ class ClaudeAgentGateway(ABC):
     async def disconnect_all(self) -> None:
         """Disconnect all active SDK clients (used during server shutdown)."""
         pass
+
+    async def reload_plugins_by_cwd(self, cwd: str) -> int:
+        """Reload plugins for connected sessions whose working directory matches *cwd*.
+
+        Returns the number of sessions that were reloaded, scheduled for reload,
+        or disconnected so the next prompt reconnects with a fresh catalog.
+        """
+        return 0

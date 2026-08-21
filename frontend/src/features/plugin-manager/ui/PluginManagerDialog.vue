@@ -32,6 +32,7 @@ const {
   handleUninstall,
   handleUpgradePlugin,
   handleUpgradeAllPlugins,
+  handleReloadPlugins,
   handleUpdateMarketplace,
   handleRemoveMarketplace,
 } = usePluginManager()
@@ -100,7 +101,7 @@ function onRemoveMarketplace(name) {
 
 function onRefresh() {
   if (activeTab.value === 'plugins') {
-    loadPlugins(props.projectDir)
+    handleReloadPlugins(props.projectDir)
   } else {
     loadMarketplaces()
   }
@@ -130,7 +131,8 @@ function handleClose() {
               class="header-btn"
               type="button"
               aria-label="Refresh"
-              title="Refresh"
+              title="Refresh and reload plugins in active sessions"
+              :disabled="!!operating"
               @click="onRefresh"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

@@ -4,6 +4,7 @@ import { useProject } from '@entities/project'
 import { useWishCards } from '@entities/wish-card'
 import { PINNED_PROJECTS_KEY, PINNED_SESSIONS_KEY, compareSessions, loadPinnedIds, savePinnedIds, splitPinnedProjects, togglePinnedId } from '@shared/lib/pinning'
 import { useTimeout } from '@shared/lib/useTimeout'
+import { groupActivityLabel, summarizeGroupSessionActivity } from '../lib/groupSessionActivity'
 import SessionListItem from './SessionListItem.vue'
 import CreateSessionDialog from './CreateSessionDialog.vue'
 import CreateTeamDialog from '@features/agent-teams/ui/CreateTeamDialog.vue'
@@ -30,6 +31,10 @@ const props = defineProps({
   isAdmin: {
     type: Boolean,
     default: false,
+  },
+  unviewedIds: {
+    type: [Set, Object],
+    default: () => new Set(),
   },
 })
 
@@ -88,6 +93,13 @@ function projectDisplayName(project) {
 
 function scheduleCount(projectId) {
   return props.scheduleCounts?.[projectId] || 0
+}
+
+function collapsedGroupTitle(group) {
+  const name = group.displayName || group.name
+  if (!isGroupCollapsed(group.id) || group.project_type === 'team') return name
+  const label = groupActivityLabel(group.activity)
+  return label ? `${name} · ${label}` : name
 }
 
 function isProjectPinned(projectId) {
@@ -311,6 +323,7 @@ const projectGroups = computed(() => {
       displayName: projectDisplayName(project),
       dir_path: project.dir_path,
       sessions: projectSessions,
+      activity: summarizeGroupSessionActivity(projectSessions, props.unviewedIds),
       pinned: isProjectPinned(project.id),
       project_type: project.project_type,
       agents: project.agents,
@@ -341,6 +354,7 @@ const projectGroups = computed(() => {
         name: 'Unassigned',
         displayName: 'Unassigned',
         sessions: unassigned,
+        activity: summarizeGroupSessionActivity(unassigned, props.unviewedIds),
       })
     }
   }
@@ -597,7 +611,7 @@ defineExpose({ scrollToSession })
           @drop="onDrop($event, group.id)"
           @dragend="onDragEnd"
         >
-          <div class="project-header" :title="group.displayName || group.name" @click="handleProjectHeaderClick(group)">
+          <div class="project-header" :title="collapsedGroupTitle(group)" @click="handleProjectHeaderClick(group)">
               <svg
                 class="collapse-arrow"
                 :class="{ collapsed: isGroupCollapsed(group.id) }"
@@ -620,6 +634,24 @@ defineExpose({ scrollToSession })
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
               </svg>
               <span class="project-name">{{ group.displayName || group.name }}</span>
+              <span
+                v-if="isGroupCollapsed(group.id) && group.project_type !== 'team' && (group.activity.hasRunning || group.activity.hasUnviewedCompleted)"
+                class="project-status-dots"
+                :aria-label="groupActivityLabel(group.activity)"
+              >
+                <span
+                  v-if="group.activity.hasRunning"
+                  class="project-status-dot is-running"
+                  title="Running"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  v-if="group.activity.hasUnviewedCompleted"
+                  class="project-status-dot is-unviewed"
+                  title="Completed, unviewed"
+                  aria-hidden="true"
+                ></span>
+              </span>
               <span class="project-count">{{ group.project_type === 'team' ? activeCardsForTeam(group.team_config?.team_id).length : group.sessions.length }}</span>
               <Transition name="confirm-swap" mode="out-in">
               <span v-if="deletingProject === group.id" key="confirm" class="project-delete-confirm" @click.stop>
@@ -748,6 +780,7 @@ defineExpose({ scrollToSession })
                 :selectable="selectionMode"
                 :selected="selectedIds.has(session.session_id)"
                 :pinned="isSessionPinned(session.session_id)"
+                :unviewed="unviewedIds.has(session.session_id)"
                 class="indented-session"
                 @select="emit('select', $event)"
                 @delete="emit('delete', $event)"
@@ -1015,6 +1048,35 @@ defineExpose({ scrollToSession })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-status-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.project-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.project-status-dot.is-running {
+  background: var(--status-warning);
+  box-shadow: 0 0 0 2px var(--status-warning-bg);
+  animation: project-status-pulse 1.8s ease-in-out infinite;
+}
+
+.project-status-dot.is-unviewed {
+  background: var(--green);
+  box-shadow: 0 0 0 2px var(--green-dim, rgba(52, 211, 153, 0.28));
+}
+
+@keyframes project-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .project-count {
@@ -1460,5 +1522,11 @@ defineExpose({ scrollToSession })
 .confirm-swap-enter-from,
 .confirm-swap-leave-to {
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-status-dot.is-running {
+    animation: none;
+  }
 }
 </style>

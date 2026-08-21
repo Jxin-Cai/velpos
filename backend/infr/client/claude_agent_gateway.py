@@ -30,9 +30,16 @@ from infr.client.claude_event_pump import (
     TurnPhase,
 )
 from infr.client.claude_settings_env import load_claude_settings_env
+from infr.client.tool_guard import merge_session_hooks
 from application.session.native_otel_config import build_native_otel_env
 
 logger = logging.getLogger(__name__)
+
+_PLUGIN_RELOAD_LOCK_TIMEOUT_SECONDS = 0.05
+
+
+class _ControlChannelBusy(Exception):
+    """Raised when a plugin reload cannot acquire the per-session control lock."""
 
 
 class ClaudeAgentGateway(ClaudeAgentGatewayPort):
@@ -89,6 +96,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         # process a mode change concurrently with a query, so keep one
         # deferred operation per session.
         self._pending_permission_tasks: dict[str, asyncio.Task] = {}
+        # Plugin reloads use the same control channel and must wait until the
+        # current query is idle, otherwise Claude reports a control timeout.
+        self._pending_plugin_reload_tasks: dict[str, asyncio.Task] = {}
         # The SDK uses one control/data channel per client.  Query writes and
         # permission-mode control requests must not race on that channel.
         self._client_operation_locks: dict[str, asyncio.Lock] = {}
@@ -228,7 +238,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             max_turns=max_turns,
             max_budget_usd=max_budget_usd,
             output_format=output_format,
-            hooks=hooks,
+            hooks=merge_session_hooks(hooks),
             enable_file_checkpointing=enable_file_checkpointing,
             extra_args=extra_args,
             env=build_native_otel_env(
@@ -582,6 +592,154 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
             logger.info("disconnect_by_cwd: 断开 %d 个连接 (cwd=%s)", len(targets), cwd)
         return len(targets)
 
+    async def reload_plugins_by_cwd(self, cwd: str) -> int:
+        """Ask connected sessions for *cwd* to activate pending plugin changes.
+
+        Uses the Claude Code ``reload_plugins`` control request (equivalent to
+        ``/reload-plugins``). Active queries keep the control channel busy, so
+        those sessions are scheduled to reload once idle. Falls back to
+        disconnecting an idle session when the control request fails so the
+        next prompt reconnects with a fresh plugin/skill catalog.
+
+        Returns the number of sessions that were reloaded, scheduled, or
+        disconnected.
+        """
+        targets = [
+            sid for sid, session_cwd in self._session_cwds.items()
+            if session_cwd == cwd and sid in self._clients
+        ]
+        if not targets:
+            return 0
+
+        touched = 0
+        for sid in targets:
+            if await self._reload_or_schedule_plugins(sid):
+                touched += 1
+
+        logger.info(
+            "reload_plugins_by_cwd: refreshed %d session(s) (cwd=%s)",
+            touched,
+            cwd,
+        )
+        return touched
+
+    def _is_query_busy(self, session_id: str) -> bool:
+        if (
+            self.is_active(session_id)
+            or self.get_state(session_id) in self._QUERY_ACTIVE_STATES
+        ):
+            return True
+        lock = self._client_operation_locks.get(session_id)
+        return lock is not None and lock.locked()
+
+    async def _reload_or_schedule_plugins(self, session_id: str) -> bool:
+        client = self._clients.get(session_id)
+        if client is None:
+            return False
+        if self._is_query_busy(session_id):
+            self._schedule_plugin_reload(session_id, client)
+            return True
+        return await self._reload_plugins_now(session_id, client)
+
+    def _schedule_plugin_reload(self, session_id: str, client: Any) -> None:
+        previous = self._pending_plugin_reload_tasks.get(session_id)
+        if previous is not None and not previous.done():
+            return
+        task = safe_create_task(
+            self._reload_plugins_when_idle(session_id, client),
+            name=f"reload_plugins_{session_id}",
+        )
+        self._pending_plugin_reload_tasks[session_id] = task
+
+    async def _reload_plugins_when_idle(self, session_id: str, client: Any) -> None:
+        try:
+            while self._clients.get(session_id) is client:
+                if self._is_query_busy(session_id):
+                    await asyncio.sleep(0.1)
+                    continue
+                try:
+                    await self._send_reload_plugins(session_id, client)
+                    return
+                except _ControlChannelBusy:
+                    await asyncio.sleep(0.1)
+                    continue
+                except Exception:
+                    if self._clients.get(session_id) is not client:
+                        return
+                    if self._is_query_busy(session_id):
+                        logger.warning(
+                            "deferred plugin reload failed during query, retrying: session=%s",
+                            session_id,
+                            exc_info=True,
+                        )
+                        await asyncio.sleep(0.1)
+                        continue
+                    logger.warning(
+                        "deferred plugin reload failed, disconnecting idle session: session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+                    await self.disconnect(session_id)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "deferred plugin reload failed: session=%s",
+                session_id,
+                exc_info=True,
+            )
+        finally:
+            current = self._pending_plugin_reload_tasks.get(session_id)
+            if current is asyncio.current_task():
+                self._pending_plugin_reload_tasks.pop(session_id, None)
+
+    async def _reload_plugins_now(self, session_id: str, client: Any) -> bool:
+        try:
+            await self._send_reload_plugins(session_id, client)
+            return True
+        except _ControlChannelBusy:
+            self._schedule_plugin_reload(session_id, client)
+            return True
+        except Exception:
+            if self._clients.get(session_id) is not client:
+                return False
+            if self._is_query_busy(session_id):
+                logger.warning(
+                    "reload_plugins failed during query, scheduling retry: session=%s",
+                    session_id,
+                    exc_info=True,
+                )
+                self._schedule_plugin_reload(session_id, client)
+                return True
+            logger.warning(
+                "reload_plugins failed, disconnecting idle session for refresh: session=%s",
+                session_id,
+                exc_info=True,
+            )
+            await self.disconnect(session_id)
+            return True
+
+    async def _send_reload_plugins(self, session_id: str, client: Any) -> dict[str, Any]:
+        lock = self._client_operation_lock(session_id)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=_PLUGIN_RELOAD_LOCK_TIMEOUT_SECONDS)
+        except TimeoutError as exc:
+            raise _ControlChannelBusy from exc
+        try:
+            if self._clients.get(session_id) is not client:
+                raise RuntimeError(f"Session connection changed: {session_id}")
+            query = getattr(client, "_query", None)
+            send_control = getattr(query, "_send_control_request", None)
+            if send_control is None:
+                raise RuntimeError("Claude SDK client does not support control requests")
+            raw = await send_control({"subtype": "reload_plugins"}, timeout=30.0)
+        finally:
+            lock.release()
+
+        self._touch(session_id)
+        return raw if isinstance(raw, dict) else {}
+
     async def _disconnect_unlocked(self, session_id: str) -> None:
         pump = self._event_pumps.pop(session_id, None)
         if pump is not None:
@@ -632,6 +790,9 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         pending_permission = self._pending_permission_tasks.pop(session_id, None)
         if pending_permission is not None and not pending_permission.done():
             pending_permission.cancel()
+        pending_reload = self._pending_plugin_reload_tasks.pop(session_id, None)
+        if pending_reload is not None and not pending_reload.done():
+            pending_reload.cancel()
         self._sdk_session_ids.pop(session_id, None)
         self._session_cwds.pop(session_id, None)
         self._session_permission_modes.pop(session_id, None)

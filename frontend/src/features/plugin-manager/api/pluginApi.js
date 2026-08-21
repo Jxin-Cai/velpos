@@ -20,6 +20,10 @@ export function upgradeAllPlugins(projectDir) {
   return post('/plugins/upgrade-all', { project_dir: projectDir })
 }
 
+export function reloadPlugins(projectDir) {
+  return post('/plugins/reload', { project_dir: projectDir }, { timeoutMs: 60000 })
+}
+
 export function listMarketplaces() {
   return get('/plugins/marketplaces')
 }

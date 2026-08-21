@@ -24,6 +24,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  unviewed: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['select', 'delete', 'rename', 'toggle-select', 'toggle-pin'])
@@ -75,6 +79,7 @@ const statusDotClass = computed(() => {
   if (props.session.status === 'running') return 'status-running'
   if (props.session.status === 'reconnecting') return 'status-reconnecting'
   if (props.session.status === 'error') return 'status-error'
+  if (props.unviewed) return 'status-unviewed'
   return 'status-idle'
 })
 
@@ -143,7 +148,7 @@ async function copySessionId() {
           v-else
           class="status-dot"
           :class="statusDotClass"
-          :aria-label="isClaudeCode ? 'claude-code' : (session.status || 'idle')"
+          :aria-label="isClaudeCode ? 'claude-code' : (unviewed ? 'completed, unviewed' : (session.status || 'idle'))"
         ></span>
         <template v-if="editing && !isClaudeCode">
           <input
@@ -302,6 +307,12 @@ async function copySessionId() {
 
 .status-idle {
   background: var(--green);
+  opacity: 0.45;
+}
+
+.status-unviewed {
+  background: var(--green);
+  box-shadow: 0 0 0 3px var(--green-dim, rgba(52, 211, 153, 0.28)), 0 0 12px var(--green-dim, rgba(52, 211, 153, 0.28));
 }
 
 .status-running {

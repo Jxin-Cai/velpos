@@ -79,7 +79,7 @@ const {
 const { fetchStatus: fetchImStatus, fetchChannels: fetchImChannels, resetState: resetImState } = useImBinding()
 
 const { addNotification } = useNotifications()
-const { markWorking, markDone, syncWorkingSessions } = useWorkingSessions()
+const { markWorking, markDone, markViewed, syncWorkingSessions, unviewedIds } = useWorkingSessions()
 const { startListening: startHotkeyHintListening, stopListening: stopHotkeyHintListening } = useHotkeyHint()
 
 const ready = ref(false)
@@ -343,7 +343,7 @@ function _handleConnected(sessionId, data, { sess, proj }) {
   if (data.session.status === 'running') {
     markWorking(sessionId, { sessionName: sess?.name || data.session.name || '', projectName: proj?.name || '' })
   } else {
-    markDone(sessionId)
+    markDone(sessionId, { isCurrent: sessionId === currentSessionId.value })
   }
   loadLatestRunSteps(sessionId)
   loadTimelineEvents(sessionId)
@@ -389,7 +389,7 @@ function _handleStatusChange(sessionId, data, { sess, proj }) {
     }
     markWorking(sessionId, { sessionName: sess?.name || '', projectName: proj?.name || '' })
   } else {
-    markDone(sessionId)
+    markDone(sessionId, { isCurrent: sessionId === currentSessionId.value })
     maybeCloseIdle(sessionId)
   }
 }
@@ -455,7 +455,7 @@ function _handleCancelRewind(sessionId, data) {
   updateSessionFor(sessionId, { waiting_for_slot: false })
   setQueuedFor(sessionId, false)
   updateSessionInList(sessionId, data.session)
-  markDone(sessionId)
+  markDone(sessionId, { isCurrent: sessionId === currentSessionId.value })
   if (data.prompt && sessionId === currentSessionId.value) {
     setRestoredPrompt(data.prompt)
   }
@@ -483,7 +483,7 @@ function _handleStatus(sessionId, data, { sess, proj }) {
       projectName: proj?.name || '',
     })
   } else {
-    markDone(sessionId)
+    markDone(sessionId, { isCurrent: sessionId === currentSessionId.value })
     maybeCloseIdle(sessionId)
   }
 }
@@ -621,7 +621,7 @@ function ensureConnection(sessionId) {
 }
 
 function restoreRunningSessions() {
-  syncWorkingSessions(sessions.value, projects.value)
+  syncWorkingSessions(sessions.value, projects.value, currentSessionId.value)
   for (const item of sessions.value) {
     if (item.status === 'running') {
       ensureConnection(item.session_id)
@@ -675,6 +675,7 @@ async function onDeleteProject(projectId) {
 watch(currentSessionId, (newId, oldId) => {
   if (newId) {
     ensureConnection(newId)
+    markViewed(newId)
   }
   if (oldId && oldId !== newId) {
     maybeCloseIdle(oldId)
@@ -990,6 +991,7 @@ useGlobalHotkeys({
           :loading="loading"
           :schedule-counts="scheduleCounts"
           :is-admin="isAdmin"
+          :unviewed-ids="unviewedIds"
           @create="handleCreate"
           @select="handleSessionSelect"
           @delete="onDeleteSession"

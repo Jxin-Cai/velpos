@@ -17,6 +17,7 @@ from ohs.http.dto.plugin_dto import (
     PluginActionResponse,
     PluginInfo,
     PluginListResponse,
+    PluginReloadRequest,
     PluginUpgradeAllRequest,
 )
 
@@ -47,8 +48,10 @@ async def list_plugins(
 async def install_plugin(
     request: PluginActionRequest,
     service: ServiceDep,
+    gateway: GatewayDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.install_plugin(request.plugin, request.project_dir)
+    await gateway.reload_plugins_by_cwd(request.project_dir)
     return ApiResponse.success(PluginActionResponse(message=message))
 
 
@@ -56,8 +59,10 @@ async def install_plugin(
 async def uninstall_plugin(
     request: PluginActionRequest,
     service: ServiceDep,
+    gateway: GatewayDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.uninstall_plugin(request.plugin, request.project_dir)
+    await gateway.reload_plugins_by_cwd(request.project_dir)
     return ApiResponse.success(PluginActionResponse(message=message))
 
 
@@ -68,7 +73,7 @@ async def upgrade_plugin(
     gateway: GatewayDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.upgrade_plugin(request.plugin, request.project_dir)
-    await gateway.disconnect_by_cwd(request.project_dir)
+    await gateway.reload_plugins_by_cwd(request.project_dir)
     return ApiResponse.success(PluginActionResponse(message=message))
 
 
@@ -79,7 +84,20 @@ async def upgrade_all_plugins(
     gateway: GatewayDep,
 ) -> ApiResponse[PluginActionResponse]:
     message = await service.upgrade_all_plugins(request.project_dir)
-    await gateway.disconnect_by_cwd(request.project_dir)
+    await gateway.reload_plugins_by_cwd(request.project_dir)
+    return ApiResponse.success(PluginActionResponse(message=message))
+
+
+@router.post("/reload", summary="Reload plugins in active project sessions")
+async def reload_plugins(
+    request: PluginReloadRequest,
+    gateway: GatewayDep,
+) -> ApiResponse[PluginActionResponse]:
+    count = await gateway.reload_plugins_by_cwd(request.project_dir)
+    if count:
+        message = f"Reloaded plugins in {count} active session(s)"
+    else:
+        message = "No active sessions to reload; plugins will load on next connect"
     return ApiResponse.success(PluginActionResponse(message=message))
 
 

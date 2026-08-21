@@ -438,9 +438,11 @@ function getModelLabel(model) {
 
 function handleModelSelect(modelValue) {
   showModelMenu.value = false
-  if (wsConnection.value) {
-    wsConnection.value.send({ action: 'set_model', model: modelValue })
-  }
+  if (!modelValue || modelValue === currentModel.value) return
+  if (!wsConnection.value) return
+  // Optimistic: chip updates immediately; WS status confirms later.
+  updateSession({ model: modelValue })
+  wsConnection.value.send({ action: 'set_model', model: modelValue })
 }
 
 // Effort level switching — persisted to settings.json

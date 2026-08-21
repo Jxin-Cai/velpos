@@ -5,6 +5,7 @@ import {
   uninstallPlugin,
   upgradePlugin,
   upgradeAllPlugins as apiUpgradeAll,
+  reloadPlugins as apiReloadPlugins,
   listMarketplaces as apiListMarketplaces,
   updateMarketplace as apiUpdateMarketplace,
   removeMarketplace as apiRemoveMarketplace,
@@ -88,6 +89,20 @@ export function usePluginManager() {
     }
   }
 
+  async function handleReloadPlugins(projectDir) {
+    if (!projectDir) return
+    operating.value = '__reload_plugins__'
+    error.value = null
+    try {
+      await apiReloadPlugins(projectDir)
+      await loadPlugins(projectDir)
+    } catch (e) {
+      error.value = e.message
+    } finally {
+      operating.value = null
+    }
+  }
+
   async function handleUpdateMarketplace(name) {
     operating.value = name || '__update_all_marketplaces__'
     error.value = null
@@ -127,6 +142,7 @@ export function usePluginManager() {
     handleUninstall,
     handleUpgradePlugin,
     handleUpgradeAllPlugins,
+    handleReloadPlugins,
     handleUpdateMarketplace,
     handleRemoveMarketplace,
   }
