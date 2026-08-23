@@ -146,6 +146,18 @@ class ChannelInit:
         self._error_message = error_message
         self._updated_at = datetime.now()
 
+    def mark_credentials_expired(self, error_message: str) -> None:
+        """凭证在运行期失效 — 从任何状态转入 ERROR, 并保留已存配置供排查.
+
+        与 :meth:`fail_init` 的区别在于它不要求处于 INITIALIZING 状态: 凭证
+        是在正常收发过程中被渠道判定失效的, 不是初始化流程失败。
+        """
+        if self._init_status == ChannelInitStatus.ERROR:
+            return
+        self._init_status = ChannelInitStatus.ERROR
+        self._error_message = error_message
+        self._updated_at = datetime.now()
+
     def reset(self) -> None:
         self._init_status = ChannelInitStatus.NOT_INITIALIZED
         self._config = {}

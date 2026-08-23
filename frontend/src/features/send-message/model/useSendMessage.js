@@ -1,4 +1,5 @@
 import { useSession } from '@entities/session'
+import { validateOutgoingAttachments } from '../lib/attachmentLimits'
 
 export function useSendMessage(wsConnection) {
   const { setError, addMessage } = useSession()
@@ -23,6 +24,15 @@ export function useSendMessage(wsConnection) {
     }
 
     if (!text && (!images || images.length === 0) && (!attachments || attachments.length === 0)) {
+      return null
+    }
+
+    const limitError = validateOutgoingAttachments([
+      ...(attachments || []),
+      ...(images || []),
+    ])
+    if (limitError) {
+      setError(limitError)
       return null
     }
 

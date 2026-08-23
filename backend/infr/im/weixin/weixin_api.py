@@ -13,12 +13,30 @@ from typing import Any
 
 import httpx
 
+from domain.im_binding.acl.channel_errors import (
+    ChannelAuthError,
+    ChannelPermanentError,
+    ChannelTransientError,
+)
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 CHANNEL_VERSION = "velpos-weixin/1.0"
 API_TIMEOUT = 15.0
 LONG_POLL_TIMEOUT = 40.0
+_CHANNEL = "weixin"
+
+#: iLink 在 HTTP 200 的响应体里回报业务结果. 只认微信约定的错误码键:
+#: ``ret`` / ``code`` 太通用, 正常响应也可能带, 误判会让轮询整体停摆.
+_ERROR_CODE_KEYS = ("errcode", "err_code")
+_ERROR_MESSAGE_KEYS = ("errmsg", "err_msg", "message", "msg")
+
+#: 判定为凭证失效的业务错误码 — 需要用户重新扫码.
+_AUTH_ERROR_CODES = frozenset({-1000, 40001, 40014, 42001})
+
+#: 限流与系统繁忙 — 退避后重试即可, 不应死信.
+_TRANSIENT_ERROR_CODES = frozenset({-1, 45009, 45011})
 
 
 def _generate_wechat_uin() -> str:
@@ -83,14 +101,17 @@ class WeixinApiClient:
         text: str,
         context_token: str = "",
         idempotency_key: str = "",
-    ) -> dict[str, Any]:
-        """POST /ilink/bot/sendmessage — send text message."""
+    ) -> str:
+        """POST /ilink/bot/sendmessage — 返回渠道侧消息标识.
+
+        拿不到 message_id 视为投递失败并抛出 :class:`ChannelError`。
+        """
         client_id = (
             f"vp-{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:48]}"
             if idempotency_key
             else f"vp-weixin-{secrets.token_hex(4)}"
         )
-        return await self._post(
+        response = await self._post(
             bot_token,
             "sendmessage",
             {
@@ -106,6 +127,18 @@ class WeixinApiClient:
                 "base_info": {"channel_version": CHANNEL_VERSION},
             },
         )
+        message_id = str(
+            response.get("message_id") or response.get("msg_id") or ""
+        )
+        if not message_id:
+            # iLink 对被拒绝的消息也会返回 HTTP 200, 只是不带 message_id.
+            # 不校验就会把静默丢弃当成投递成功。
+            raise ChannelTransientError(
+                "WeChat accepted the request without returning a message id",
+                channel_type=_CHANNEL,
+                detail=f"response_keys={sorted(response)}",
+            )
+        return message_id
 
     async def send_typing(
         self,
@@ -152,10 +185,82 @@ class WeixinApiClient:
     ) -> dict[str, Any]:
         url = f"{self._base_url}/ilink/bot/{endpoint}"
         headers = _build_headers(bot_token)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=body, headers=headers)
-            resp.raise_for_status()
-            text = resp.text.strip()
-            if not text:
-                return {}
-            return resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ChannelTransientError(
+                f"WeChat {endpoint} request failed: {exc}",
+                channel_type=_CHANNEL,
+                detail=repr(exc),
+            ) from exc
+
+        _raise_for_http_status(endpoint, resp)
+
+        text = resp.text.strip()
+        if not text:
+            return {}
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise ChannelTransientError(
+                f"WeChat {endpoint} returned a non-JSON body",
+                channel_type=_CHANNEL,
+                detail=text[:200],
+            ) from exc
+        if not isinstance(payload, dict):
+            return {}
+        _raise_for_business_error(endpoint, payload)
+        return payload
+
+
+def _raise_for_http_status(endpoint: str, resp: httpx.Response) -> None:
+    status = resp.status_code
+    if status < 400:
+        return
+    detail = resp.text[:200]
+    if status in (401, 403):
+        raise ChannelAuthError(
+            f"WeChat credentials rejected on {endpoint} (HTTP {status})",
+            channel_type=_CHANNEL,
+            detail=detail,
+        )
+    if status == 429 or status >= 500:
+        raise ChannelTransientError(
+            f"WeChat {endpoint} temporarily unavailable (HTTP {status})",
+            channel_type=_CHANNEL,
+            detail=detail,
+        )
+    raise ChannelPermanentError(
+        f"WeChat rejected {endpoint} (HTTP {status})",
+        channel_type=_CHANNEL,
+        detail=detail,
+    )
+
+
+def _raise_for_business_error(endpoint: str, payload: dict[str, Any]) -> None:
+    """iLink 用 HTTP 200 + 响应体错误码回报业务失败, 必须显式检查."""
+    code = next(
+        (
+            payload[key]
+            for key in _ERROR_CODE_KEYS
+            if isinstance(payload.get(key), int)
+        ),
+        0,
+    )
+    if code == 0:
+        return
+    message = next(
+        (
+            str(payload[key])
+            for key in _ERROR_MESSAGE_KEYS
+            if isinstance(payload.get(key), str) and payload[key]
+        ),
+        "",
+    )
+    summary = f"WeChat {endpoint} failed: code={code} message={message or 'n/a'}"
+    if code in _AUTH_ERROR_CODES:
+        raise ChannelAuthError(summary, channel_type=_CHANNEL, detail=message)
+    if code in _TRANSIENT_ERROR_CODES:
+        raise ChannelTransientError(summary, channel_type=_CHANNEL, detail=message)
+    raise ChannelPermanentError(summary, channel_type=_CHANNEL, detail=message)

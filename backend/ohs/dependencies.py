@@ -22,6 +22,7 @@ from application.claude_session.claude_session_application_service import (
 from application.command.command_application_service import CommandApplicationService
 from application.command_policy.command_policy_application_service import CommandPolicyApplicationService
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
+from application.im_binding.im_channel_facade import ImChannelFacade
 from application.message.attachment_application_service import AttachmentApplicationService
 from application.evolution.evolution_application_service import EvolutionApplicationService
 from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
@@ -133,6 +134,7 @@ _im_channel_registry.register(
 _weixin_adapter = WeixinAdapter()
 _im_channel_registry.register(WEIXIN_CHANNEL_SPEC, lambda: _weixin_adapter)
 
+_im_channel_facade = ImChannelFacade(_im_channel_registry)
 _im_delivery_coordinator = ImDeliveryCoordinator(_im_channel_registry)
 
 
@@ -527,6 +529,10 @@ def get_terminal_application_service() -> TerminalApplicationService:
 
 def get_im_channel_registry() -> ImChannelRegistry:
     return _im_channel_registry
+
+
+def get_im_channel_facade() -> ImChannelFacade:
+    return _im_channel_facade
 
 
 def get_im_delivery_coordinator() -> ImDeliveryCoordinator:

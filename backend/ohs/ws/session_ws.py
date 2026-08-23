@@ -205,6 +205,13 @@ async def _handle_send_prompt(ctx: _WsContext, data: dict) -> None:
                 saved_attachments.append(ref)
                 if mime_type.startswith("image/"):
                     image_paths.append(ref["path"])
+            except BusinessException as exc:
+                await ctx.websocket.send_json({
+                    "event": "error",
+                    "message": str(exc),
+                    "message_id": client_message_id,
+                })
+                return
             except Exception:
                 logger.error(
                     "Failed to save attachment for session=%s",

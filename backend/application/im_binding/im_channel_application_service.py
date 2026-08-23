@@ -3,25 +3,35 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
-from enum import Enum
+from collections.abc import Awaitable, Callable
 from typing import Any, AsyncContextManager
 
 from domain.shared.async_utils import safe_create_task
 
-from domain.im_binding.acl.im_channel_adapter import ImChannelAdapter, InitResult
+from application.im_binding.im_channel_facade import ImChannelFacade
+from application.im_binding.inbound_progress_reporter import (
+    InboundProgressReporter,
+    TaskOutcome,
+)
+from domain.im_binding.acl.im_channel_adapter import InitResult
 from application.session.command.run_query_command import RunQueryCommand
 from domain.session.acl.connection_manager import ConnectionManager
 from application.session.session_application_service import SessionApplicationService
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_init import ChannelInit
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
 from domain.im_binding.model.channel_registry import ImChannelRegistry
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_delivery import ImInboxEvent
+from domain.im_binding.model.im_message import (
+    InboundMessage,
+    MessageSegment,
+    OutboundMessage,
+)
 from domain.im_binding.repository.channel_init_repository import ChannelInitRepository
 from domain.im_binding.repository.im_binding_repository import ImBindingRepository
 from domain.session.model.message import Message
@@ -30,7 +40,7 @@ from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
 
-_WEIXIN_PROGRESS_ACK_DELAY_SECONDS = 8.0
+_SESSION_BUSY_REASON = "Session is busy"
 
 
 class RetryableInboundError(RuntimeError):
@@ -39,12 +49,6 @@ class RetryableInboundError(RuntimeError):
 
 class TerminalInboundError(RuntimeError):
     pass
-
-
-class _WeixinTaskStatus(str, Enum):
-    COMPLETED = "已完成"
-    FAILED = "未完成"
-    RETRYING = "执行异常，正在重试"
 
 
 class ImChannelApplicationService:
@@ -73,6 +77,7 @@ class ImChannelApplicationService:
         mode: str = "dev",
     ) -> None:
         self._registry = registry
+        self._facade = ImChannelFacade(registry)
         self._binding_repo = binding_repo
         self._init_repo = init_repo
         self._session_service_factory = session_service_factory
@@ -125,6 +130,10 @@ class ImChannelApplicationService:
                 "init_mode": s.init_mode,
                 "init_fields": list(s.init_fields),
                 "description": s.description,
+                "capabilities": sorted(c.value for c in s.capabilities),
+                "missing_capabilities": sorted(
+                    c.value for c in s.missing_capabilities
+                ),
                 "instances": instances,
             })
         return result
@@ -202,7 +211,6 @@ class ImChannelApplicationService:
 
         ct = ci.channel_type
         logger.info("[IM-init] Initializing channel_id=%s type=%s", channel_id, ct.value)
-        adapter = self._create_adapter(ct)
 
         if ci.init_status not in (
             ChannelInitStatus.NOT_INITIALIZED,
@@ -217,7 +225,7 @@ class ImChannelApplicationService:
         if ci.init_status != ChannelInitStatus.INITIALIZING:
             ci.start_init()
 
-        result: InitResult = await adapter.initialize(params)
+        result: InitResult = await self._facade.initialize(ct, params)
         logger.info(
             "[IM-init] Result: channel_id=%s status=%s error=%s",
             channel_id, result.status.value, result.error_message or "",
@@ -280,9 +288,8 @@ class ImChannelApplicationService:
 
         # 检查实例是否已初始化
         if not ci.is_ready:
-            adapter = self._create_adapter(ct)
             config = ci.config
-            if await adapter.check_init_status(config):
+            if await self._facade.check_init_status(ct, config):
                 ci.start_init()
                 ci.complete_init(config)
                 await self._init_repo.save(ci)
@@ -316,12 +323,10 @@ class ImChannelApplicationService:
             )
             await self._force_unbind(current_binding)
 
-        adapter = self._create_adapter(ct)
-
-        # 收集路由上下文
+        # 换绑时继承已有的路由上下文, 否则新绑定要等用户先发一条消息才能回复
         routing_carry_over: dict[str, str] = {}
         if ci.config:
-            for key in adapter.routing_config_keys():
+            for key in self._facade.route_config_keys(ct):
                 val = ci.config.get(key, "")
                 if val:
                     routing_carry_over[key] = val
@@ -332,7 +337,7 @@ class ImChannelApplicationService:
             binding.start_binding_process()
 
         bind_params = {**ci.config, **params}
-        result = await adapter.bind(session_id, binding, bind_params)
+        result = await self._facade.bind(session_id, binding, bind_params)
 
         if result.status == BindingStatus.BOUND:
             binding.complete_channel_binding(result.channel_address, result.config)
@@ -351,7 +356,7 @@ class ImChannelApplicationService:
         if binding.binding_status == BindingStatus.BOUND:
             logger.info("[IM-bind] Binding complete: session=%s channel_id=%s", session_id, channel_id)
             await self.start_channel_listener(binding)
-            await self._send_bind_notification(binding, adapter)
+            await self._send_bind_notification(binding)
 
         return self._binding_result_dict(binding, result.ui_data)
 
@@ -364,8 +369,7 @@ class ImChannelApplicationService:
         if binding is None or binding.channel_id != channel_id:
             raise BusinessException("No pending binding found", "IM_BINDING_NOT_FOUND")
 
-        adapter = self._create_adapter(binding.channel_type)
-        result = await adapter.complete_bind(binding, params)
+        result = await self._facade.complete_bind(binding, params)
 
         if result.status == BindingStatus.BOUND:
             binding.complete_channel_binding(result.channel_address, result.config)
@@ -373,7 +377,7 @@ class ImChannelApplicationService:
 
         if binding.binding_status == BindingStatus.BOUND:
             await self.start_channel_listener(binding)
-            await self._send_bind_notification(binding, adapter)
+            await self._send_bind_notification(binding)
 
         return self._binding_result_dict(binding, result.ui_data)
 
@@ -397,42 +401,32 @@ class ImChannelApplicationService:
         binding = await self._binding_repo.find_by_session_id(session_id)
         if binding is None or binding.binding_status != BindingStatus.BOUND:
             return
-        reply_ctx = self._build_reply_context(binding)
         await self._dispatch_outbound(
             binding,
-            content,
-            reply_context=reply_ctx,
-            attachments=attachments,
+            OutboundMessage.of_text_with_attachments(
+                content,
+                attachments,
+                route=self._facade.restore_route(binding),
+            ),
         )
 
     async def _dispatch_outbound(
-        self,
-        binding: ImBinding,
-        content: str,
-        *,
-        reply_context: dict[str, Any] | None = None,
-        attachments: list[dict[str, Any]] | None = None,
-        deduplication_key: str | None = None,
+        self, binding: ImBinding, message: OutboundMessage,
     ) -> None:
-        """Dispatch outbound message via queue (preferred) or direct adapter send."""
+        """经持久化队列投递出站消息; 未装配队列时（测试）直接调门面发送."""
         if self._enqueue_outbound is not None:
-            kwargs: dict[str, Any] = {
-                "reply_context": reply_context,
-                "binding": binding,
-            }
-            if attachments is not None:
-                kwargs["attachments"] = attachments
-            if deduplication_key is not None:
-                kwargs["deduplication_key"] = deduplication_key
-            await self._enqueue_outbound(binding.session_id, content, **kwargs)
+            await self._enqueue_outbound(
+                binding.session_id,
+                message.plain_text,
+                attachments=[
+                    segment.to_attachment() for segment in message.media_segments
+                ],
+                deduplication_key=message.idempotency_key or None,
+                route=message.route,
+                binding=binding,
+            )
             return
-        adapter = self._create_adapter(binding.channel_type)
-        send_kwargs: dict[str, Any] = {"reply_context": reply_context}
-        if attachments is not None:
-            send_kwargs["attachments"] = attachments
-        if deduplication_key is not None:
-            send_kwargs["idempotency_key"] = deduplication_key
-        await adapter.send_message(binding, content, **send_kwargs)
+        await self._facade.send(binding, message)
 
     # ── 同步会话上下文到 IM ──
 
@@ -461,7 +455,7 @@ class ImChannelApplicationService:
         if not entries:
             return {"synced": 0}
 
-        reply_ctx = self._build_reply_context(binding)
+        route = self._facade.restore_route(binding)
 
         chunk: list[str] = []
         chunk_len = 0
@@ -479,13 +473,15 @@ class ImChannelApplicationService:
             current_chunk_index = chunk_index
             chunk_index += 1
             try:
-                payload = f"[Context Sync]\n\n{text}"
                 await self._dispatch_outbound(
                     binding,
-                    payload,
-                    reply_context=reply_ctx,
-                    deduplication_key=(
-                        f"context:{session_id}:{sync_operation_id}:{current_chunk_index}"
+                    OutboundMessage.of_text(
+                        f"[Context Sync]\n\n{text}",
+                        route=route,
+                        idempotency_key=(
+                            f"context:{session_id}:{sync_operation_id}:"
+                            f"{current_chunk_index}"
+                        ),
                     ),
                 )
                 sent += len(chunk)
@@ -538,176 +534,105 @@ class ImChannelApplicationService:
     async def _process_inbound(
         self,
         binding: ImBinding,
-        message_id: str,
-        content: str,
-        sender_id: str,
-        group_id: str,
-        attachments: list[dict[str, Any]] | None = None,
+        message: InboundMessage,
+        *,
+        is_final_attempt: bool = False,
     ) -> None:
         if not self._session_service_factory:
             logger.error("[IM-process] No session_service_factory — cannot process inbound")
             return
 
-        await self._persist_reply_context(binding, sender_id, group_id)
+        route = message.route.with_reply_to(message.external_message_id)
+        await self._persist_route(binding, route)
 
-        adapter = self._create_adapter(binding.channel_type)
-        reply_ctx_base = {"msg_id": message_id, "sender_id": sender_id, "group_id": group_id}
         delivery_channel_id = binding.channel_id or binding.id
         source_digest = hashlib.sha256(
-            f"{delivery_channel_id}:{message_id}".encode("utf-8")
+            f"{delivery_channel_id}:{message.external_message_id}".encode("utf-8")
         ).hexdigest()
         source_message_id = f"im:{source_digest}"[:64]
-        task_code = source_digest[:6].upper()
-        started_at = time.monotonic()
-        progress_task: asyncio.Task[None] | None = None
 
-        async with self._inbound_reaction_scope(adapter, binding, message_id):
+        async def reply(content: str, purpose: str) -> None:
+            await self._dispatch_outbound(
+                binding,
+                OutboundMessage.of_text(
+                    content,
+                    route=route,
+                    idempotency_key=(
+                        f"inbox:{delivery_channel_id}:"
+                        f"{message.external_message_id}:{purpose}"
+                    ),
+                ),
+            )
+
+        reporter = InboundProgressReporter(
+            facade=self._facade,
+            binding=binding,
+            route=route,
+            source_message_id=message.external_message_id,
+            task_code=source_digest[:6].upper(),
+            send_text=reply,
+        )
+
+        async with reporter:
             try:
-                if binding.channel_type == ImChannelType.WEIXIN:
-                    progress_task = safe_create_task(
-                        self._send_delayed_inbound_ack(
-                            binding,
-                            reply_ctx_base,
-                            delivery_channel_id,
-                            message_id,
-                            task_code,
-                        ),
-                        name=f"weixin-progress-{task_code}",
-                    )
                 response = await self._execute_inbound(
-                    binding, content, source_message_id,
-                    delivery_channel_id, message_id, reply_ctx_base,
-                    attachments,
+                    binding, message, source_message_id, route,
                 )
                 if response:
-                    if binding.channel_type == ImChannelType.WEIXIN:
-                        response = self._format_weixin_task_result(
-                            task_code,
-                            _WeixinTaskStatus.COMPLETED,
-                            response,
-                            time.monotonic() - started_at,
-                        )
-                    await self._send_inbound_reply(
-                        binding, response, reply_ctx_base,
-                        f"inbox:{delivery_channel_id}:{message_id}:response",
+                    await reply(
+                        reporter.decorate(TaskOutcome.COMPLETED, response),
+                        "response",
                     )
             except TerminalInboundError as exc:
-                error_content = f"[Error] {str(exc)[:500]}"
-                if binding.channel_type == ImChannelType.WEIXIN:
-                    error_content = self._format_weixin_task_result(
-                        task_code,
-                        _WeixinTaskStatus.FAILED,
-                        f"原因：{str(exc)[:500]}",
-                        time.monotonic() - started_at,
+                await reply(
+                    reporter.decorate(
+                        TaskOutcome.FAILED, f"原因：{str(exc)[:500]}",
                     )
-                await self._send_inbound_reply(
-                    binding,
-                    error_content,
-                    reply_ctx_base,
-                    f"inbox:{delivery_channel_id}:{message_id}:query-error",
+                    if reporter.uses_task_framing
+                    else f"[Error] {str(exc)[:500]}",
+                    "query-error",
                 )
             except RetryableInboundError as exc:
-                if (
-                    binding.channel_type == ImChannelType.WEIXIN
-                    and str(exc) == "Session is busy"
-                ):
-                    await self._send_inbound_reply(
-                        binding,
-                        (
-                            f"任务 {task_code} · 等待中\n\n"
-                            "当前会话仍有任务在执行。这条消息已收到，系统会稍后自动重试。"
-                        ),
-                        reply_ctx_base,
-                        f"inbox:{delivery_channel_id}:{message_id}:busy",
+                if str(exc) == _SESSION_BUSY_REASON:
+                    await reporter.report_waiting(
+                        "当前会话仍有任务在执行。这条消息已收到，系统会稍后自动重试。",
                     )
                 raise
             except Exception as exc:
-                logger.error("[IM-process] Failed to process inbound: session=%s", binding.session_id, exc_info=True)
-                try:
-                    error_content = f"[Error] {str(exc)[:200]}"
-                    if binding.channel_type == ImChannelType.WEIXIN:
-                        error_content = self._format_weixin_task_result(
-                            task_code,
-                            _WeixinTaskStatus.RETRYING,
-                            f"系统会自动重试。原因：{str(exc)[:200]}",
-                            time.monotonic() - started_at,
-                        )
-                    await self._send_inbound_reply(
-                        binding,
-                        error_content,
-                        reply_ctx_base,
-                        f"inbox:{delivery_channel_id}:{message_id}:processing-error",
-                    )
-                except Exception:
-                    logger.warning("[IM-process] Failed to send error notification to IM", exc_info=True)
+                logger.error(
+                    "[IM-process] Failed to process inbound: session=%s",
+                    binding.session_id,
+                    exc_info=True,
+                )
+                # 中间几次失败保持安静, 只在不会再重试时才打扰用户.
+                if is_final_attempt:
+                    await self._notify_inbound_failure(reporter, reply, exc)
                 raise
-            finally:
-                if progress_task is not None:
-                    progress_task.cancel()
-                    await asyncio.gather(progress_task, return_exceptions=True)
-
-    async def _send_delayed_inbound_ack(
-        self,
-        binding: ImBinding,
-        reply_context: dict[str, Any],
-        delivery_channel_id: str,
-        message_id: str,
-        task_code: str,
-    ) -> None:
-        await asyncio.sleep(_WEIXIN_PROGRESS_ACK_DELAY_SECONDS)
-        await self._send_inbound_reply(
-            binding,
-            (
-                f"任务 {task_code} · 已开始\n\n"
-                "正在执行你的请求，完成后会发送结果。"
-            ),
-            reply_context,
-            f"inbox:{delivery_channel_id}:{message_id}:started",
-        )
 
     @staticmethod
-    def _format_weixin_task_result(
-        task_code: str,
-        status: _WeixinTaskStatus,
-        content: str,
-        elapsed_seconds: float,
-    ) -> str:
-        total_seconds = max(0, round(elapsed_seconds))
-        if total_seconds < 60:
-            duration = f"{total_seconds} 秒"
-        else:
-            minutes, seconds = divmod(total_seconds, 60)
-            duration = f"{minutes} 分 {seconds} 秒"
-        return f"任务 {task_code} · {status.value} · 用时 {duration}\n\n{content.strip()}"
-
-    @asynccontextmanager
-    async def _inbound_reaction_scope(
-        self, adapter: ImChannelAdapter, binding: ImBinding, message_id: str,
-    ) -> AsyncIterator[None]:
-        reaction_id = ""
-        if hasattr(adapter, "add_reaction") and message_id:
-            try:
-                reaction_id = await adapter.add_reaction(binding, message_id, "OnIt")
-            except Exception:
-                logger.debug("[IM-process] add_reaction failed, continuing", exc_info=True)
+    async def _notify_inbound_failure(
+        reporter: InboundProgressReporter,
+        reply: Callable[[str, str], Awaitable[None]],
+        exc: Exception,
+    ) -> None:
         try:
-            yield
-        finally:
-            if reaction_id and hasattr(adapter, "remove_reaction"):
-                try:
-                    await adapter.remove_reaction(binding, message_id, reaction_id)
-                except Exception:
-                    logger.debug("[IM-process] remove_reaction failed", exc_info=True)
+            await reply(
+                reporter.decorate(TaskOutcome.FAILED, f"原因：{str(exc)[:200]}")
+                if reporter.uses_task_framing
+                else f"[Error] {str(exc)[:200]}",
+                "processing-error",
+            )
+        except Exception:
+            logger.warning(
+                "[IM-process] Failed to send error notification to IM", exc_info=True,
+            )
 
     async def _execute_inbound(
         self,
         binding: ImBinding,
-        content: str,
+        message: InboundMessage,
         source_message_id: str,
-        delivery_channel_id: str,
-        message_id: str,
-        reply_ctx_base: dict[str, str],
-        attachments: list[dict[str, Any]] | None,
+        route: ChannelRoute,
     ) -> str:
         """Execute the inbound query and return the assistant response text (or empty)."""
         if self._session_service_context_factory is None:
@@ -722,20 +647,16 @@ class ImChannelApplicationService:
                 logger.warning("[IM-process] Session %s no longer exists, skipping", binding.session_id)
                 return ""
 
-            attachment_refs = list(attachments or [])
-            if attachment_refs and self._stage_inbound_attachments:
-                attachment_refs = await self._stage_inbound_attachments(session, attachment_refs)
+            content = message.plain_text
+            attachment_refs = await self._stage_attachments(binding, session, message)
 
             if session.is_running:
                 if await self._try_resolve_pending_response(binding.session_id, content):
                     logger.info("[IM-process] Resolved pending user response via IM: session=%s", binding.session_id)
                     return ""
-                raise RetryableInboundError("Session is busy")
+                raise RetryableInboundError(_SESSION_BUSY_REASON)
 
-            cached = self._try_cached_inbound_response(
-                session, source_message_id, binding, reply_ctx_base,
-                delivery_channel_id, message_id,
-            )
+            cached = self._try_cached_inbound_response(session, source_message_id)
             if cached is not None:
                 return cached
 
@@ -751,17 +672,26 @@ class ImChannelApplicationService:
 
         return await self._read_inbound_result(
             binding, source_message_id, msg_count_before,
-            delivery_channel_id, message_id, reply_ctx_base,
         )
 
+    async def _stage_attachments(
+        self, binding: ImBinding, session: Any, message: InboundMessage,
+    ) -> list[dict[str, Any]]:
+        """把渠道下载到本地的附件搬进会话工作区.
+
+        仅对声明了入站附件能力的渠道执行; 其余渠道的入站消息不会带附件。
+        """
+        if not self._facade.supports(
+            binding.channel_type, ChannelCapability.INBOUND_ATTACHMENT,
+        ):
+            return []
+        refs = message.attachments(binding.channel_type.value)
+        if not refs or self._stage_inbound_attachments is None:
+            return refs
+        return await self._stage_inbound_attachments(session, refs)
+
     def _try_cached_inbound_response(
-        self,
-        session: Any,
-        source_message_id: str,
-        binding: ImBinding,
-        reply_ctx_base: dict[str, str],
-        delivery_channel_id: str,
-        message_id: str,
+        self, session: Any, source_message_id: str,
     ) -> str | None:
         """Check if this message was already processed. Returns response/error string, or None if not cached."""
         existing_index = next(
@@ -808,9 +738,6 @@ class ImChannelApplicationService:
         binding: ImBinding,
         source_message_id: str,
         msg_count_before: int,
-        delivery_channel_id: str,
-        message_id: str,
-        reply_ctx_base: dict[str, str],
     ) -> str:
         """Read query result from a fresh DB session after execution."""
         async with self._session_service_context_factory() as session_service:
@@ -907,107 +834,91 @@ class ImChannelApplicationService:
     async def process_inbound_event(
         self,
         binding: ImBinding,
-        message_id: str,
-        content: str,
-        sender_id: str,
-        group_id: str,
-        attachments: list[dict[str, Any]] | None = None,
+        event: ImInboxEvent,
+        *,
+        is_final_attempt: bool = False,
     ) -> None:
         await self._process_inbound(
             binding,
-            message_id,
-            content,
-            sender_id,
-            group_id,
-            attachments,
+            self._to_inbound_message(binding, event),
+            is_final_attempt=is_final_attempt,
         )
 
-    async def _send_inbound_reply(
-        self,
-        binding: ImBinding,
-        content: str,
-        reply_context: dict[str, Any],
-        deduplication_key: str,
-    ) -> None:
-        adapter = self._create_adapter(binding.channel_type)
-        resolved_context = adapter.build_reply_context(binding) or {}
-        resolved_context.update(reply_context)
-        await self._dispatch_outbound(
-            binding,
-            content,
-            reply_context=resolved_context,
-            deduplication_key=deduplication_key,
+    @staticmethod
+    def _to_inbound_message(
+        binding: ImBinding, event: ImInboxEvent,
+    ) -> InboundMessage:
+        return InboundMessage(
+            channel_id=event.channel_id,
+            channel_type=event.channel_type,
+            external_message_id=event.external_message_id,
+            route=event.route,
+            segments=(
+                MessageSegment.of_text(event.content),
+                *(
+                    MessageSegment.from_attachment(item)
+                    for item in event.attachments
+                ),
+            ),
         )
 
     # ── Channel listener lifecycle ──
 
     async def start_channel_listener(self, binding: ImBinding) -> None:
-        adapter = self._create_adapter(binding.channel_type)
-        if not hasattr(adapter, "start_listening"):
-            return
-
         channel_type_val = binding.channel_type.value
         session_id = binding.session_id
 
-        async def on_message(
-            msg_id: str,
-            content: str,
-            sender_id: str,
-            group_id: str | None,
-            attachments: list[dict[str, Any]] | None = None,
-        ) -> None:
+        async def on_message(message: InboundMessage) -> None:
             logger.info(
                 "[IM-listener] Message received: channel=%s session=%s msg_id=%s",
-                channel_type_val, session_id, msg_id,
+                channel_type_val, session_id, message.external_message_id,
             )
-            if self._accept_inbound is not None:
-                for attempt in range(5):
-                    try:
-                        await self._accept_inbound(
-                            binding,
-                            msg_id,
-                            content,
-                            sender_id,
-                            group_id or "",
-                            attachments or [],
-                        )
-                        break
-                    except Exception:
-                        if attempt == 4:
-                            logger.error(
-                                "[IM-listener] Failed to persist inbound after retries: "
-                                "channel=%s message_id=%s",
-                                channel_type_val,
-                                msg_id,
-                                exc_info=True,
-                            )
-                            raise
-                        logger.warning(
-                            "[IM-listener] Inbound persistence retry: "
-                            "channel=%s message_id=%s attempt=%s",
-                            channel_type_val,
-                            msg_id,
-                            attempt + 1,
-                            exc_info=True,
-                        )
-                        await asyncio.sleep(min(8, 2 ** attempt))
-            else:
-                safe_create_task(
-                    self._process_inbound(
-                        binding,
-                        msg_id,
-                        content,
-                        sender_id,
-                        group_id or "",
-                        attachments,
-                    )
-                )
+            if self._accept_inbound is None:
+                safe_create_task(self._process_inbound(binding, message))
+                return
+            await self._persist_inbound_with_retry(binding, message)
 
         try:
-            await adapter.start_listening(binding, on_message)
-            logger.info("[IM-listener] Listener started: channel=%s session=%s", channel_type_val, session_id)
+            started = await self._facade.start_listening(binding, on_message)
         except Exception:
-            logger.error("[IM-listener] Failed to start listener: channel=%s session=%s", channel_type_val, session_id, exc_info=True)
+            logger.error(
+                "[IM-listener] Failed to start listener: channel=%s session=%s",
+                channel_type_val, session_id, exc_info=True,
+            )
+            return
+        if started:
+            logger.info(
+                "[IM-listener] Listener started: channel=%s session=%s",
+                channel_type_val, session_id,
+            )
+
+    async def _persist_inbound_with_retry(
+        self, binding: ImBinding, message: InboundMessage,
+    ) -> None:
+        """入队失败必须重试到底: 此时消息只存在于内存, 丢了就永远收不到."""
+        for attempt in range(5):
+            try:
+                await self._accept_inbound(binding, message)
+                return
+            except Exception:
+                if attempt == 4:
+                    logger.error(
+                        "[IM-listener] Failed to persist inbound after retries: "
+                        "channel=%s message_id=%s",
+                        binding.channel_type.value,
+                        message.external_message_id,
+                        exc_info=True,
+                    )
+                    raise
+                logger.warning(
+                    "[IM-listener] Inbound persistence retry: "
+                    "channel=%s message_id=%s attempt=%s",
+                    binding.channel_type.value,
+                    message.external_message_id,
+                    attempt + 1,
+                    exc_info=True,
+                )
+                await asyncio.sleep(min(8, 2 ** attempt))
 
     # ── Internal ──
 
@@ -1019,8 +930,8 @@ class ImChannelApplicationService:
         bind re-bind, unbind) delegate here so the flow is consistent.
         """
         try:
-            adapter = self._create_adapter(binding.channel_type)
-            await adapter.unbind(binding)
+            await self._facade.stop_listening(binding)
+            await self._facade.unbind(binding)
         except Exception:
             logger.warning(
                 "Adapter unbind failed for session %s", binding.session_id, exc_info=True,
@@ -1045,24 +956,22 @@ class ImChannelApplicationService:
             "ui_data": ui_data,
         }
 
-    async def _send_bind_notification(
-        self, binding: ImBinding, adapter: ImChannelAdapter,
-    ) -> None:
-        reply_ctx = adapter.build_reply_context(binding)
-        if not reply_ctx:
+    async def _send_bind_notification(self, binding: ImBinding) -> None:
+        """绑定成功通知. 与其他出站消息一样走持久化队列, 进程重启不会丢."""
+        route = self._facade.restore_route(binding)
+        if route.is_empty:
             return
         try:
-            await adapter.send_message(
+            await self._dispatch_outbound(
                 binding,
-                f"已绑定会话: {binding.session_id}",
-                reply_context=reply_ctx,
+                OutboundMessage.of_text(
+                    f"已绑定会话: {binding.session_id}",
+                    route=route,
+                    idempotency_key=f"bind:{binding.id}:{binding.channel_id}",
+                ),
             )
         except Exception:
             logger.warning("[IM-bind] Failed to send binding notification", exc_info=True)
-
-    def _build_reply_context(self, binding: ImBinding) -> dict[str, str] | None:
-        adapter = self._create_adapter(binding.channel_type)
-        return adapter.build_reply_context(binding)
 
     async def _try_resolve_pending_response(self, session_id: str, im_text: str) -> bool:
         """Try to resolve a pending AskUserQuestion/permission from IM text reply.
@@ -1124,45 +1033,40 @@ class ImChannelApplicationService:
 
         return answers
 
-    async def _persist_reply_context(
-        self, binding: ImBinding, sender_id: str, group_id: str,
-    ) -> None:
-        adapter = self._create_adapter(binding.channel_type)
-        routing_ctx = adapter.extract_routing_context(sender_id, group_id)
+    async def _persist_route(self, binding: ImBinding, route: ChannelRoute) -> None:
+        """把入站路由写回 binding 与 channel_init.
 
-        for key in adapter.routing_config_keys():
-            if key not in routing_ctx:
-                val = binding.config.get(key, "")
-                if val:
-                    routing_ctx[key] = val
-
-        if not routing_ctx:
+        出站消息通常自带路由, 这里持久化的是"最后一次已知路由", 供绑定通知、
+        Web 侧主动推送等没有入站上下文的场景兜底。
+        """
+        updates = self._facade.persist_route(binding, route)
+        if not updates:
+            return
+        if all(binding.config.get(key) == value for key, value in updates.items()):
+            # 同一个人连续发消息时路由不会变, 跳过可以省掉每条消息 2 读 2 写,
+            # 也避免多个 inbox worker 争抢同一行 binding。
             return
 
-        binding.update_config(routing_ctx)
+        binding.update_config(updates)
 
         if not self._binding_context_factory:
-            logger.warning("[IM-process] No binding_context_factory, cannot persist reply context")
+            logger.warning("[IM-process] No binding_context_factory, cannot persist route")
             return
 
         try:
             async with self._binding_context_factory() as (binding_repo, init_repo):
                 fresh = await binding_repo.find_by_session_id(binding.session_id)
                 if fresh:
-                    fresh.update_config(routing_ctx)
+                    fresh.update_config(updates)
                     await binding_repo.save(fresh)
 
                 if binding.channel_id:
                     ci = await init_repo.find_by_id(binding.channel_id)
                     if ci:
-                        ci.update_config(routing_ctx)
+                        ci.update_config(updates)
                         await init_repo.save(ci)
         except Exception:
             logger.warning(
-                "[IM-process] Failed to persist reply context for session=%s",
+                "[IM-process] Failed to persist route for session=%s",
                 binding.session_id, exc_info=True,
             )
-
-    def _create_adapter(self, channel_type: ImChannelType) -> ImChannelAdapter:
-        factory = self._registry.get_adapter_factory(channel_type)
-        return factory()

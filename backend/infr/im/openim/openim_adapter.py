@@ -2,20 +2,30 @@ from __future__ import annotations
 
 import logging
 
+from domain.im_binding.acl.channel_errors import (
+    ChannelPermanentError,
+    ChannelRoutingError,
+)
 from domain.im_binding.acl.im_channel_adapter import (
     BindResult,
     ImChannelAdapter,
     InitResult,
 )
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_spec import BindingMode, ImChannelSpec
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_message import OutboundMessage, SendReceipt
 from domain.im_binding.acl.im_gateway import ImGateway
 from domain.im_binding.acl.im_ws_gateway import ImWsGateway
 
 logger = logging.getLogger(__name__)
+
+#: OpenIM 通过 friend_user_id 定位收件人, 而不是 sender_id / group_id.
+_FRIEND_USER_KEY = "friend_user_id"
 
 OPENIM_CHANNEL_SPEC = ImChannelSpec(
     channel_type=ImChannelType.OPENIM,
@@ -26,6 +36,10 @@ OPENIM_CHANNEL_SPEC = ImChannelSpec(
     init_fields=("api_addr", "ws_addr", "admin_secret", "admin_user_id"),
     init_mode="credentials",
     description="OpenIM server for real-time messaging via WebSocket.",
+    capabilities=frozenset({
+        ChannelCapability.OUTBOUND_TEXT,
+        ChannelCapability.PROGRESS_ACK,
+    }),
 )
 
 
@@ -119,44 +133,42 @@ class OpenImAdapter(ImChannelAdapter):
                 "Failed to disconnect WS for %s", binding.im_user_id,
             )
 
-    async def send_message(
-        self,
-        binding: ImBinding,
-        content: str,
-        reply_context: dict | None = None,
-        idempotency_key: str = "",
-        attachments: list[dict] | None = None,
-    ) -> str:
-        await self._im_gateway.send_message(
-            binding.im_user_id, binding.friend_user_id, content,
+    async def send(
+        self, binding: ImBinding, message: OutboundMessage,
+    ) -> SendReceipt:
+        friend_user_id = (
+            message.route.extras.get(_FRIEND_USER_KEY) or binding.friend_user_id
         )
-        return ""
+        if not friend_user_id:
+            raise ChannelRoutingError(
+                "Cannot send OpenIM message: binding has no friend user",
+                channel_type=ImChannelType.OPENIM.value,
+            )
+        await self._im_gateway.send_message(
+            binding.im_user_id, friend_user_id, message.plain_text,
+        )
+        # OpenIM 网关不回传消息标识, 所以 spec 未声明 MESSAGE_ID_ECHO.
+        return SendReceipt.of("")
 
-    # ── Message lifecycle ──
+    # OpenIM 网关目前只能推送原始 WS 帧, 无法翻译成 InboundMessage,
+    # 因此 spec 不声明 INBOUND_LISTEN, 也不实现监听原语。WS 连接的建立与
+    # 断开由 complete_bind / unbind 负责。
 
-    async def start_listening(self, binding: ImBinding, _on_message=None) -> None:
-        try:
-            if not self._im_ws_gateway.is_connected(binding.im_user_id):
-                await self._im_ws_gateway.connect(binding.im_user_id, binding.im_token)
-        except Exception:
-            logger.warning("start_listening failed for %s", binding.im_user_id)
+    async def close(self) -> None:
+        await self._im_ws_gateway.close_all()
 
-    async def stop_listening(self, binding: ImBinding) -> None:
-        try:
-            await self._im_ws_gateway.disconnect(binding.im_user_id)
-        except Exception:
-            logger.warning("stop_listening failed for %s", binding.im_user_id)
+    # ── Routing — OpenIM 用 friend_user_id 定位收件人 ──
 
-    # ── Routing context — OpenIM uses friend_user_id, not sender/group ──
+    def route_extra_keys(self) -> tuple[str, ...]:
+        return (_FRIEND_USER_KEY,)
 
-    def extract_routing_context(self, _sender_id: str, _group_id: str) -> dict[str, str]:
-        return {}
-
-    def build_reply_context(self, binding: ImBinding) -> dict[str, str] | None:
-        return {"friend_user_id": binding.friend_user_id} if binding.friend_user_id else None
-
-    def routing_config_keys(self) -> tuple[str, ...]:
-        return ()
+    def restore_route(self, binding: ImBinding) -> ChannelRoute:
+        fallback = (
+            ChannelRoute(extras={_FRIEND_USER_KEY: binding.friend_user_id})
+            if binding.friend_user_id
+            else ChannelRoute()
+        )
+        return fallback.merge(super().restore_route(binding))
 
 
 class OpenImStubAdapter(ImChannelAdapter):
@@ -180,12 +192,10 @@ class OpenImStubAdapter(ImChannelAdapter):
     async def unbind(self, _binding: ImBinding) -> None:
         pass
 
-    async def send_message(
-        self,
-        binding: ImBinding,
-        content: str,
-        reply_context: dict | None = None,
-        idempotency_key: str = "",
-        attachments: list[dict] | None = None,
-    ) -> str:
-        raise RuntimeError("OpenIM infrastructure is not configured")
+    async def send(
+        self, _binding: ImBinding, _message: OutboundMessage,
+    ) -> SendReceipt:
+        raise ChannelPermanentError(
+            "OpenIM infrastructure is not configured",
+            channel_type=ImChannelType.OPENIM.value,
+        )

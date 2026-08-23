@@ -14,9 +14,19 @@ from application.im_binding.im_channel_application_service import (
 )
 from application.session.session_query_engine import SessionQueryEngine
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
-from infr.im.lark.lark_adapter import LarkAdapter, _WsConnection
+from domain.im_binding.model.im_message import (
+    MessageSegment,
+    OutboundMessage,
+    SegmentType,
+)
+from infr.im.lark.lark_adapter import (
+    LarkAdapter,
+    _segment_to_lark_message,
+    _WsConnection,
+)
 from infr.im.lark.lark_message import (
     LarkMessageType,
     LarkOutboundMessage,
@@ -146,18 +156,19 @@ async def test_sends_card_through_sdk_when_interactive_payload_is_provided() -> 
     )
 
     # Act
-    message_id = await adapter.send_message(
+    receipt = await adapter.send(
         _binding(),
-        {
-            "type": "card",
-            "content": {
-                "elements": [{"tag": "markdown", "content": "hello"}],
-            },
-        },
+        OutboundMessage(
+            segments=(
+                MessageSegment.of_card(
+                    {"elements": [{"tag": "markdown", "content": "hello"}]},
+                ),
+            ),
+        ),
     )
 
     # Assert
-    assert message_id == "card-message"
+    assert receipt.external_message_id == "card-message"
 
 
 @pytest.mark.asyncio
@@ -191,9 +202,15 @@ async def test_uploads_image_before_sending_when_image_payload_is_provided(
     adapter._get_sdk_client = Mock(return_value=client)
 
     # Act
-    await adapter.send_message(
+    await adapter.send(
         _binding(),
-        {"type": "image", "file_path": str(image_path)},
+        OutboundMessage(
+            segments=(
+                MessageSegment.of_media(
+                    SegmentType.IMAGE, path=str(image_path), mime_type="image/png",
+                ),
+            ),
+        ),
     )
 
     # Assert
@@ -204,19 +221,21 @@ async def test_uploads_image_before_sending_when_image_payload_is_provided(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload_type", "expected_message_type"),
+    ("segment_type", "expected_message_type"),
     [
-        ("file", "file"),
-        ("audio", "audio"),
+        (SegmentType.FILE, "file"),
+        (SegmentType.AUDIO, "audio"),
     ],
 )
 async def test_uploads_file_before_sending_when_file_payload_is_provided(
     tmp_path,
-    payload_type: str,
+    segment_type: SegmentType,
     expected_message_type: str,
 ) -> None:
     # Arrange
-    file_path = tmp_path / ("sample.opus" if payload_type == "audio" else "sample.bin")
+    file_path = tmp_path / (
+        "sample.opus" if segment_type is SegmentType.AUDIO else "sample.bin"
+    )
     file_path.write_bytes(b"media")
     upload = AsyncMock(
         return_value=SimpleNamespace(
@@ -243,9 +262,13 @@ async def test_uploads_file_before_sending_when_file_payload_is_provided(
     )
 
     # Act
-    await adapter.send_message(
+    await adapter.send(
         _binding(),
-        {"type": payload_type, "file_path": str(file_path)},
+        OutboundMessage(
+            segments=(
+                MessageSegment.of_media(segment_type, path=str(file_path)),
+            ),
+        ),
     )
 
     # Assert
@@ -293,13 +316,15 @@ async def test_sends_video_with_uploaded_cover_when_video_payload_is_provided(
     )
 
     # Act
-    await adapter.send_message(
+    await adapter._send_one(
         _binding(),
-        {
-            "type": "video",
-            "file_path": str(video_path),
-            "image_path": str(cover_path),
-        },
+        LarkOutboundMessage(
+            message_type=LarkMessageType.MEDIA,
+            file_path=str(video_path),
+            image_path=str(cover_path),
+        ),
+        ChannelRoute(),
+        "",
     )
 
     # Assert
@@ -416,7 +441,9 @@ async def test_forwards_attachment_metadata_when_media_message_is_handled() -> N
     )
 
     # Assert
-    assert callback.await_args.args[4] == [attachment]
+    assert callback.await_args.args[0].attachments("lark")[0]["path"] == (
+        attachment["path"]
+    )
 
 
 def test_adds_media_to_claude_command_when_inbound_attachment_is_present() -> None:
@@ -538,16 +565,18 @@ async def test_uploads_web_image_when_outbound_attachment_is_present(
     )
 
     # Act
-    await adapter.send_message(
+    await adapter.send(
         _binding(),
-        "",
-        attachments=[
-            {
-                "filename": "web-image.png",
-                "mime_type": "image/png",
-                "path": str(image_path),
-            }
-        ],
+        OutboundMessage.of_text_with_attachments(
+            "",
+            [
+                {
+                    "filename": "web-image.png",
+                    "mime_type": "image/png",
+                    "path": str(image_path),
+                }
+            ],
+        ),
     )
 
     # Assert
@@ -573,7 +602,7 @@ def test_maps_web_media_to_native_lark_type(
     }
 
     # Act
-    message = LarkAdapter._attachment_to_outbound_message(attachment)
+    message = _segment_to_lark_message(MessageSegment.from_attachment(attachment))
 
     # Assert
     assert message.message_type is expected_type
@@ -627,16 +656,18 @@ async def test_stages_legacy_extensionless_image_before_lark_upload(
     )
 
     # Act
-    await adapter.send_message(
+    await adapter.send(
         _binding(),
-        "",
-        attachments=[
-            {
-                "filename": "车.jpg",
-                "mime_type": "image/jpeg",
-                "path": str(image_path),
-            }
-        ],
+        OutboundMessage.of_text_with_attachments(
+            "",
+            [
+                {
+                    "filename": "车.jpg",
+                    "mime_type": "image/jpeg",
+                    "path": str(image_path),
+                }
+            ],
+        ),
     )
 
     # Assert

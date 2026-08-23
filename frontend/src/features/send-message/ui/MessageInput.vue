@@ -2,6 +2,13 @@
 import { ref, nextTick, watch, computed } from 'vue'
 import { useUserPreferences } from '@shared/lib/useUserPreferences'
 import { formatFileSize } from '@shared/lib/textParsers'
+import {
+  MAX_ATTACHMENT_LABEL,
+  attachmentByteSize,
+  decodedSizeFromBase64,
+  validateIncomingFile,
+  validateOutgoingAttachments,
+} from '../lib/attachmentLimits'
 
 const props = defineProps({
   disabled: {
@@ -26,6 +33,8 @@ const input = ref('')
 const isComposing = ref(false)
 const compositionEndedRecently = ref(false)
 const pendingAttachments = ref([])
+const attachmentError = ref('')
+const readingBytes = ref(0)
 const hasDraft = computed(() => Boolean(input.value.trim() || pendingAttachments.value.length))
 const primaryAction = computed(() => (props.running && !hasDraft.value ? 'stop' : 'send'))
 
@@ -69,9 +78,24 @@ watch(input, () => {
   nextTick(autoResize)
 })
 
+function occupiedBytes() {
+  return pendingAttachments.value.reduce((sum, item) => sum + attachmentByteSize(item), 0)
+    + readingBytes.value
+}
+
+function rejectAttachment(message) {
+  attachmentError.value = message
+}
+
 function handleSend() {
   const text = input.value.trim()
   if ((!text && pendingAttachments.value.length === 0) || props.disabled) return
+
+  const limitError = validateOutgoingAttachments(pendingAttachments.value)
+  if (limitError) {
+    rejectAttachment(limitError)
+    return
+  }
 
   if (pendingAttachments.value.length > 0) {
     emit('send', {
@@ -89,6 +113,7 @@ function handleSend() {
 
   input.value = ''
   pendingAttachments.value = []
+  attachmentError.value = ''
   nextTick(() => {
     autoResize()
     inputEl.value?.focus()
@@ -195,34 +220,69 @@ function handleFileSelect(e) {
 }
 
 function addAttachmentFile(file) {
+  const name = file.name || 'attachment'
+  const size = Number(file.size || 0)
+  if (size > 0) {
+    const incomingError = validateIncomingFile(
+      { name, size },
+      [{ size: occupiedBytes() }],
+    )
+    if (incomingError) {
+      rejectAttachment(incomingError)
+      return
+    }
+    readingBytes.value += size
+  }
+
   const reader = new FileReader()
   reader.onload = () => {
+    if (size > 0) readingBytes.value = Math.max(0, readingBytes.value - size)
     const dataUrl = reader.result
-    const base64 = dataUrl.split(',')[1]
+    const base64 = typeof dataUrl === 'string' ? dataUrl.split(',')[1] : ''
+    const actualSize = size || decodedSizeFromBase64(base64)
+    const incomingError = validateIncomingFile({ name, size: actualSize }, pendingAttachments.value)
+    if (incomingError) {
+      rejectAttachment(incomingError)
+      return
+    }
+    attachmentError.value = ''
     pendingAttachments.value.push({
-      name: file.name || 'attachment',
+      name,
       data: base64,
       mime_type: file.type || 'application/octet-stream',
-      size: file.size || 0,
+      size: actualSize,
       preview: file.type?.startsWith('image/') ? dataUrl : '',
     })
+  }
+  reader.onerror = () => {
+    if (size > 0) readingBytes.value = Math.max(0, readingBytes.value - size)
+    rejectAttachment(`Failed to read ${name}`)
   }
   reader.readAsDataURL(file)
 }
 
 function addImage(base64, mediaType) {
+  const size = decodedSizeFromBase64(base64)
+  const name = `image-${Date.now()}.png`
+  const incomingError = validateIncomingFile({ name, size }, [{ size: occupiedBytes() }])
+  if (incomingError) {
+    rejectAttachment(incomingError)
+    return
+  }
+  attachmentError.value = ''
   const preview = `data:${mediaType};base64,${base64}`
   pendingAttachments.value.push({
-    name: `image-${Date.now()}.png`,
+    name,
     data: base64,
     mime_type: mediaType,
-    size: 0,
+    size,
     preview,
   })
 }
 
 function removeAttachment(index) {
   pendingAttachments.value.splice(index, 1)
+  if (!pendingAttachments.value.length) attachmentError.value = ''
 }
 
 function formatSize(size) {
@@ -260,6 +320,8 @@ function openFilePicker() {
 
 function clearAttachments() {
   pendingAttachments.value = []
+  attachmentError.value = ''
+  readingBytes.value = 0
 }
 
 defineExpose({ setInput, addImage, appendText, clearAttachments })
@@ -286,6 +348,7 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
         </button>
       </div>
     </div>
+    <div v-if="attachmentError" class="attachment-error" role="alert">{{ attachmentError }}</div>
     <textarea
       ref="inputEl"
       v-model="input"
@@ -315,8 +378,8 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
         class="attach-btn"
         :disabled="disabled"
         data-tooltip="Attach files"
-        title="Attach files"
-        aria-label="Attach files"
+        :title="`Attach files (max ${MAX_ATTACHMENT_LABEL})`"
+        :aria-label="`Attach files, maximum ${MAX_ATTACHMENT_LABEL}`"
         @click.stop="openFilePicker"
       >
         +
@@ -462,6 +525,16 @@ defineExpose({ setInput, addImage, appendText, clearAttachments })
 .attachment-file:hover .attachment-remove,
 .attachment-remove:focus-visible {
   opacity: 1;
+}
+
+.attachment-error {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--red-dim);
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .input-field {

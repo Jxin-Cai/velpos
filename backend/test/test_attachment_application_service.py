@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from application.message.attachment_application_service import AttachmentApplicationService
-from domain.message.model.attachment import Attachment
+from domain.message.model.attachment import Attachment, MAX_ATTACHMENT_BYTES, ensure_within_attachment_limit
 from domain.shared.business_exception import BusinessException
 
 
@@ -64,3 +64,14 @@ def test_rejects_workspace_preview_when_path_escapes_session_directory(tmp_path:
             "image/png",
         )
     assert error.value.code == "INVALID_ATTACHMENT_PATH"
+
+
+def test_rejects_size_when_payload_exceeds_attachment_limit():
+    # Arrange / Act / Assert
+    with pytest.raises(ValueError, match="10MB"):
+        ensure_within_attachment_limit(MAX_ATTACHMENT_BYTES + 1)
+
+
+def test_allows_size_when_payload_is_at_attachment_limit():
+    # Arrange / Act / Assert
+    ensure_within_attachment_limit(MAX_ATTACHMENT_BYTES)

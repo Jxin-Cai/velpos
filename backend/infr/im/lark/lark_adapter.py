@@ -18,16 +18,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from domain.im_binding.acl.channel_errors import ChannelRoutingError
 from domain.im_binding.acl.im_channel_adapter import (
     BindResult,
     ImChannelAdapter,
+    InboundHandler,
     InitResult,
 )
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_spec import BindingMode, ImChannelSpec
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_message import (
+    InboundMessage,
+    MessageSegment,
+    OutboundMessage,
+    SegmentType,
+    SendReceipt,
+)
 from infr.im.lark.lark_api import LarkApiClient, LarkApiError
 from infr.im.lark.lark_message import (
     LarkInboundContent,
@@ -48,6 +59,13 @@ LARK_CHANNEL_SPEC = ImChannelSpec(
     init_fields=(),
     init_mode="qr_login",
     description="Feishu/Lark bot. Scan QR code to create or select an app.",
+    # 飞书是能力基准, 其余渠道以此对齐. 唯二不支持的是"正在输入"（平台无此
+    # 接口, 用 reaction 表达处理中）和文本进度回报（有 reaction 就不需要）。
+    capabilities=frozenset(ChannelCapability)
+    - {
+        ChannelCapability.TYPING_INDICATOR,
+        ChannelCapability.PROGRESS_ACK,
+    },
 )
 
 
@@ -282,7 +300,9 @@ class LarkAdapter(ImChannelAdapter):
 
     # ── Message listening (lark-oapi WebSocket) ─────────────────
 
-    async def start_listening(self, binding: ImBinding, on_message=None) -> None:
+    async def start_listening(
+        self, binding: ImBinding, on_message: InboundHandler | None = None,
+    ) -> None:
         """Start lark-oapi WebSocket client for this channel instance."""
         channel_id = binding.channel_id
         creds = self._get_credentials(binding)
@@ -729,11 +749,14 @@ class LarkAdapter(ImChannelAdapter):
             )
             return
         await conn.on_message(
-            message_id,
-            content,
-            sender_id,
-            chat_id,
-            attachments,
+            _inbound_message(
+                conn.channel_id,
+                message_id,
+                content,
+                sender_id,
+                chat_id,
+                attachments,
+            )
         )
 
     async def _materialize_inbound_resources(
@@ -884,7 +907,16 @@ class LarkAdapter(ImChannelAdapter):
             sender_id = getattr(operator, "open_id", "") or ""
             if conn.on_message and conn.main_loop:
                 future = asyncio.run_coroutine_threadsafe(
-                    conn.on_message(message_id, content, sender_id, chat_id, []),
+                    conn.on_message(
+                        _inbound_message(
+                            conn.channel_id,
+                            message_id,
+                            content,
+                            sender_id,
+                            chat_id,
+                            [],
+                        )
+                    ),
                     conn.main_loop,
                 )
                 future.add_done_callback(
@@ -907,31 +939,46 @@ class LarkAdapter(ImChannelAdapter):
 
     # ── Send message ────────────────────────────────────────────
 
-    async def send_message(
+    async def send(
+        self, binding: ImBinding, message: OutboundMessage,
+    ) -> SendReceipt:
+        """Send each segment as its own Lark message, newest id wins."""
+        route = message.route
+        operation_key = message.idempotency_key or uuid.uuid4().hex
+        message_ids: list[str] = []
+        for index, segment in enumerate(message.segments):
+            message_ids.append(
+                await self._send_one(
+                    binding,
+                    _segment_to_lark_message(segment),
+                    route,
+                    f"{operation_key}:{index}"
+                    if len(message.segments) > 1
+                    else operation_key,
+                )
+            )
+        return SendReceipt.of(
+            next((mid for mid in reversed(message_ids) if mid), ""),
+        )
+
+    async def _send_one(
         self,
         binding: ImBinding,
-        content: str | dict[str, Any] | LarkOutboundMessage,
-        reply_context: dict | None = None,
-        idempotency_key: str = "",
-        attachments: list[dict[str, Any]] | None = None,
+        message: LarkOutboundMessage,
+        route: ChannelRoute,
+        idempotency_key: str,
     ) -> str:
-        if attachments:
-            return await self._send_message_with_attachments(
-                binding,
-                str(content) if isinstance(content, str) else "",
-                attachments,
-                reply_context,
-                idempotency_key,
-            )
         creds = self._get_credentials(binding)
         if not creds:
-            raise RuntimeError("Lark credentials are unavailable")
+            raise ChannelRoutingError(
+                "Lark credentials are unavailable",
+                channel_type=ImChannelType.LARK.value,
+            )
         app_id, app_secret, brand = creds
 
-        ctx = reply_context or {}
-        chat_id = ctx.get("group_id", "")
-        reply_msg_id = ctx.get("msg_id", "")
-        open_id = binding.config.get("open_id", "")
+        chat_id = route.group_id
+        reply_msg_id = route.reply_to_message_id
+        open_id = route.sender_id or binding.config.get("open_id", "")
 
         # Determine send target: chat_id > open_id
         receive_id = chat_id
@@ -941,10 +988,13 @@ class LarkAdapter(ImChannelAdapter):
             receive_id_type = "open_id"
 
         if not receive_id:
-            raise RuntimeError("Lark routing target is unavailable")
+            raise ChannelRoutingError(
+                "Cannot send Lark message: no chat or user in routing context. "
+                "Send one message from Lark first to establish routing.",
+                channel_type=ImChannelType.LARK.value,
+            )
 
         client = self._get_sdk_client(app_id, app_secret, brand)
-        message = LarkOutboundMessage.from_value(content)
         encoded_content = await self._prepare_outbound_content(client, message)
         sdk_uuid = (
             str(uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
@@ -988,66 +1038,6 @@ class LarkAdapter(ImChannelAdapter):
             bool(reply_msg_id and sent),
         )
         return str(getattr(getattr(response, "data", None), "message_id", "") or "")
-
-    async def _send_message_with_attachments(
-        self,
-        binding: ImBinding,
-        content: str,
-        attachments: list[dict[str, Any]],
-        reply_context: dict | None,
-        idempotency_key: str,
-    ) -> str:
-        message_ids: list[str] = []
-        operation_key = idempotency_key or uuid.uuid4().hex
-        if content.strip():
-            message_ids.append(
-                await self.send_message(
-                    binding,
-                    content,
-                    reply_context=reply_context,
-                    idempotency_key=f"{operation_key}:text",
-                )
-            )
-        for index, attachment in enumerate(attachments):
-            payload = self._attachment_to_outbound_message(attachment)
-            message_ids.append(
-                await self.send_message(
-                    binding,
-                    payload,
-                    reply_context=reply_context,
-                    idempotency_key=f"{operation_key}:attachment:{index}",
-                )
-            )
-        return next((message_id for message_id in reversed(message_ids) if message_id), "")
-
-    @staticmethod
-    def _attachment_to_outbound_message(
-        attachment: dict[str, Any],
-    ) -> LarkOutboundMessage:
-        mime_type = str(attachment.get("mime_type") or "application/octet-stream")
-        file_path = str(attachment.get("path") or "")
-        if not file_path:
-            raise ValueError("Outbound attachment is missing its local path")
-        if mime_type.startswith("image/"):
-            message_type = LarkMessageType.IMAGE
-        elif mime_type.startswith("audio/"):
-            message_type = LarkMessageType.AUDIO
-        elif mime_type.startswith("video/"):
-            message_type = LarkMessageType.MEDIA
-        else:
-            message_type = LarkMessageType.FILE
-        return LarkOutboundMessage(
-            message_type=message_type,
-            file_path=file_path,
-            file_name=str(
-                attachment.get("filename")
-                or attachment.get("name")
-                or Path(file_path).name
-            ),
-            duration=int(attachment.get("duration") or 0),
-            image_path=str(attachment.get("image_path") or ""),
-            image_key=str(attachment.get("image_key") or ""),
-        )
 
     async def _prepare_outbound_content(
         self,
@@ -1430,3 +1420,50 @@ class LarkAdapter(ImChannelAdapter):
             logger.info("[Lark-adapter] Reaction removed: msg=%s id=%s", message_id, reaction_id)
         except Exception:
             logger.warning("[Lark-adapter] remove_reaction failed", exc_info=True)
+
+
+def _inbound_message(
+    channel_id: str,
+    message_id: str,
+    text: str,
+    sender_id: str,
+    chat_id: str,
+    attachments: list[dict[str, Any]],
+) -> InboundMessage:
+    return InboundMessage(
+        channel_id=channel_id,
+        channel_type=ImChannelType.LARK.value,
+        external_message_id=message_id,
+        route=ChannelRoute(sender_id=sender_id, group_id=chat_id),
+        segments=(
+            MessageSegment.of_text(text),
+            *(MessageSegment.from_attachment(item) for item in attachments),
+        ),
+    )
+
+
+_SEGMENT_MESSAGE_TYPE = {
+    SegmentType.IMAGE: LarkMessageType.IMAGE,
+    SegmentType.AUDIO: LarkMessageType.AUDIO,
+    SegmentType.VIDEO: LarkMessageType.MEDIA,
+    SegmentType.FILE: LarkMessageType.FILE,
+}
+
+
+def _segment_to_lark_message(segment: MessageSegment) -> LarkOutboundMessage:
+    if segment.segment_type is SegmentType.TEXT:
+        return LarkOutboundMessage(
+            message_type=LarkMessageType.TEXT, content=segment.text,
+        )
+    if segment.segment_type is SegmentType.CARD:
+        return LarkOutboundMessage(
+            message_type=LarkMessageType.INTERACTIVE, content=dict(segment.payload),
+        )
+    if not segment.path:
+        raise ValueError("Outbound attachment is missing its local path")
+    return LarkOutboundMessage(
+        message_type=_SEGMENT_MESSAGE_TYPE[segment.segment_type],
+        file_path=segment.path,
+        file_name=segment.filename or Path(segment.path).name,
+        duration=segment.duration_seconds,
+    )

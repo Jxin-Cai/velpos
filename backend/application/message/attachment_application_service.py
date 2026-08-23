@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
-from domain.message.model.attachment import Attachment
+from domain.message.model.attachment import Attachment, ensure_within_attachment_limit
 from domain.message.repository.attachment_repository import AttachmentRepository
 from domain.project.repository.project_repository import ProjectRepository
 from domain.shared.business_exception import BusinessException
@@ -50,8 +50,10 @@ class AttachmentApplicationService:
             data = base64.b64decode(data_base64, validate=True)
         except binascii.Error as exc:
             raise BusinessException("Invalid attachment data") from exc
-        if len(data) > 25 * 1024 * 1024:
-            raise BusinessException("Attachment exceeds 25MB limit")
+        try:
+            ensure_within_attachment_limit(len(data))
+        except ValueError as exc:
+            raise BusinessException(str(exc)) from exc
         if project_id and not project_dir:
             project = await self._project_repository.find_by_id(project_id)
             project_dir = project.dir_path if project else ""

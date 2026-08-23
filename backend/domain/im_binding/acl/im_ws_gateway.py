@@ -35,3 +35,8 @@ class ImWsGateway(ABC):
         or it has been disconnected.
         """
         ...
+
+    @abstractmethod
+    async def close_all(self) -> None:
+        """Drop every connection this gateway holds, for process shutdown."""
+        ...

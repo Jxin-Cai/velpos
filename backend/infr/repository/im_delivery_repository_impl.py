@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.im_delivery import (
     ImInboxEvent,
     ImInboxStatus,
@@ -24,6 +25,14 @@ from infr.repository.im_delivery_model import ImInboxEventModel, ImOutboxMessage
 
 class ImDeliveryLeaseLostError(RuntimeError):
     """Raised when a stale worker tries to complete a reclaimed delivery."""
+
+
+def _inbox_route(model: ImInboxEventModel) -> ChannelRoute:
+    """Rebuild the inbound route, tolerating rows written before route_json existed."""
+    stored = safe_json_loads(model.route_json, default={})
+    if stored:
+        return ChannelRoute.from_dict(stored)
+    return ChannelRoute(sender_id=model.sender_id, group_id=model.group_id)
 
 
 class ImInboxRepositoryImpl(ImInboxRepository):
@@ -143,8 +152,9 @@ class ImInboxRepositoryImpl(ImInboxRepository):
             session_id=event.session_id,
             external_message_id=event.external_message_id,
             content=event.content,
-            sender_id=event.sender_id,
-            group_id=event.group_id,
+            sender_id=event.route.sender_id,
+            group_id=event.route.group_id,
+            route_json=json.dumps(event.route.to_dict(), ensure_ascii=False),
             attachments_json=json.dumps(event.attachments, ensure_ascii=False),
             status=event.status.value,
             attempt_count=event.attempt_count,
@@ -174,8 +184,7 @@ class ImInboxRepositoryImpl(ImInboxRepository):
             session_id=model.session_id,
             external_message_id=model.external_message_id,
             content=model.content,
-            sender_id=model.sender_id,
-            group_id=model.group_id,
+            route=_inbox_route(model),
             attachments=safe_json_loads(model.attachments_json, default=[]),
             status=ImInboxStatus(model.status),
             attempt_count=model.attempt_count,
@@ -311,7 +320,7 @@ class ImOutboxRepositoryImpl(ImOutboxRepository):
             content=message.content,
             deduplication_key=message.deduplication_key,
             attachments_json=json.dumps(message.attachments, ensure_ascii=False),
-            reply_context_json=json.dumps(message.reply_context, ensure_ascii=False),
+            reply_context_json=json.dumps(message.route.to_dict(), ensure_ascii=False),
             status=message.status.value,
             attempt_count=message.attempt_count,
             next_attempt_at=message.next_attempt_at,
@@ -343,7 +352,9 @@ class ImOutboxRepositoryImpl(ImOutboxRepository):
             content=model.content,
             deduplication_key=model.deduplication_key,
             attachments=safe_json_loads(model.attachments_json, default=[]),
-            reply_context=safe_json_loads(model.reply_context_json, default={}),
+            route=ChannelRoute.from_dict(
+                safe_json_loads(model.reply_context_json, default={})
+            ),
             status=ImOutboxStatus(model.status),
             attempt_count=model.attempt_count,
             next_attempt_at=model.next_attempt_at,

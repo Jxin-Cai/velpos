@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -14,11 +15,17 @@ from application.im_binding.im_channel_application_service import (
     ImChannelApplicationService,
     RetryableInboundError,
 )
+from application.im_binding.im_channel_facade import ImChannelFacade
+from domain.im_binding.acl.channel_errors import (
+    ChannelAuthError,
+    ChannelPermanentError,
+)
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_registry import ImChannelRegistry
-from domain.im_binding.model.channel_type import ImChannelType
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.im_delivery import ImInboxEvent, ImOutboxMessage
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_message import InboundMessage, OutboundMessage
 from infr.config.database import async_session_factory
 from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
 from infr.repository.im_binding_repository_impl import ImBindingRepositoryImpl
@@ -46,13 +53,19 @@ class _OutboxOutcome(str, Enum):
     SENT = "sent"
     RETRY = "retry"
     CANCELLED = "cancelled"
+    DEAD = "dead"
 
 
 class ImDeliveryCoordinator:
-    """Durable, channel-neutral delivery for Lark, QQ, WeChat and OpenIM."""
+    """持久化的、与渠道无关的 IM 收发投递.
+
+    所有渠道差异都由 :class:`ImChannelFacade` 吸收, 本类只关心队列语义:
+    租约、重试退避、幂等与死信。
+    """
 
     def __init__(self, registry: ImChannelRegistry) -> None:
         self._registry = registry
+        self._facade = ImChannelFacade(registry)
         self._closing = False
         self._inbox_wakeup = asyncio.Event()
         self._outbox_wakeup = asyncio.Event()
@@ -91,15 +104,9 @@ class ImDeliveryCoordinator:
         self._tasks = []
 
     async def accept_inbound(
-        self,
-        binding: ImBinding,
-        message_id: str,
-        content: str,
-        sender_id: str,
-        group_id: str,
-        attachments: list[dict[str, Any]] | None = None,
+        self, binding: ImBinding, message: InboundMessage,
     ) -> bool:
-        if not message_id:
+        if not message.external_message_id:
             raise ValueError("IM inbound message_id must not be empty")
         event = ImInboxEvent(
             id=0,
@@ -107,11 +114,10 @@ class ImDeliveryCoordinator:
             channel_type=binding.channel_type.value,
             binding_id=binding.id,
             session_id=binding.session_id,
-            external_message_id=message_id,
-            content=content,
-            sender_id=sender_id,
-            group_id=group_id,
-            attachments=list(attachments or []),
+            external_message_id=message.external_message_id,
+            content=message.plain_text,
+            route=message.route,
+            attachments=message.attachments(binding.channel_type.value),
         )
         async with async_session_factory() as db:
             accepted = await ImInboxRepositoryImpl(db).accept(event)
@@ -120,7 +126,7 @@ class ImDeliveryCoordinator:
             logger.info(
                 "Duplicate IM inbound ignored: channel=%s message_id=%s",
                 event.channel_id,
-                message_id,
+                message.external_message_id,
             )
             return False
         self._inbox_wakeup.set()
@@ -133,7 +139,7 @@ class ImDeliveryCoordinator:
         *,
         attachments: list[dict[str, Any]] | None = None,
         deduplication_key: str | None = None,
-        reply_context: dict[str, Any] | None = None,
+        route: ChannelRoute | None = None,
         binding: ImBinding | None = None,
     ) -> int | None:
         if not content.strip() and not attachments:
@@ -154,7 +160,7 @@ class ImDeliveryCoordinator:
                 deduplication_key=self._normalize_deduplication_key(
                     deduplication_key or f"im:{session_id}:{uuid.uuid4().hex}"
                 ),
-                reply_context=reply_context or self._build_reply_context(binding),
+                route=route or self._facade.restore_route(binding),
             )
             saved = await ImOutboxRepositoryImpl(db).enqueue(message)
             await db.commit()
@@ -235,11 +241,8 @@ class ImDeliveryCoordinator:
                 )
                 await service.process_inbound_event(
                     binding,
-                    event.external_message_id,
-                    event.content,
-                    event.sender_id,
-                    event.group_id,
-                    event.attachments,
+                    event,
+                    is_final_attempt=event.attempt_count >= _MAX_ATTEMPTS,
                 )
                 await db.commit()
             await self._finish_inbox(event, _InboxOutcome.PROCESSED)
@@ -305,24 +308,24 @@ class ImDeliveryCoordinator:
                         "IM binding changed before outbound delivery",
                     )
                     return True
-                adapter = self._registry.get_adapter_factory(
-                    ImChannelType(message.channel_type)
-                )()
                 attachments = await self._resolve_outbound_attachments(
                     db,
                     message,
                 )
-                external_message_id = await adapter.send_message(
-                    binding,
+            # 渠道调用可能耗时数秒, 放在会话外避免占着连接池等网络.
+            receipt = await self._facade.send(
+                binding,
+                OutboundMessage.of_text_with_attachments(
                     message.content,
-                    reply_context=message.reply_context,
+                    attachments,
+                    route=message.route,
                     idempotency_key=message.deduplication_key,
-                    attachments=attachments,
-                )
+                ),
+            )
             await self._finish_outbox(
                 message,
                 _OutboxOutcome.SENT,
-                external_message_id=external_message_id,
+                external_message_id=receipt.external_message_id,
             )
         except ImDeliveryLeaseLostError:
             logger.info(
@@ -330,6 +333,26 @@ class ImDeliveryCoordinator:
                 message.id,
                 message.attempt_count,
             )
+        except ChannelAuthError as exc:
+            # 凭证失效 — 重试只会继续失败, 标记实例需要重新初始化后取消投递.
+            logger.error(
+                "IM outbox delivery blocked by expired credentials: "
+                "outbox_id=%s channel=%s",
+                message.id,
+                message.channel_type,
+            )
+            await self._mark_credentials_expired(message, str(exc))
+            await self._settle_outbox(
+                message, _OutboxOutcome.CANCELLED, str(exc),
+            )
+        except ChannelPermanentError as exc:
+            logger.error(
+                "IM outbox delivery rejected permanently: outbox_id=%s channel=%s",
+                message.id,
+                message.channel_type,
+                exc_info=True,
+            )
+            await self._settle_outbox(message, _OutboxOutcome.DEAD, str(exc))
         except Exception as exc:
             logger.error(
                 "IM outbox delivery failed: outbox_id=%s channel=%s attempt=%s",
@@ -379,6 +402,8 @@ class ImDeliveryCoordinator:
             message.mark_sent(external_message_id)
         elif outcome is _OutboxOutcome.CANCELLED:
             message.mark_cancelled(error_message)
+        elif outcome is _OutboxOutcome.DEAD:
+            message.mark_dead(error_message)
         elif message.attempt_count >= _MAX_ATTEMPTS:
             message.mark_dead(error_message or "Maximum retry attempts reached")
         else:
@@ -394,9 +419,41 @@ class ImDeliveryCoordinator:
         except TimeoutError:
             pass
 
-    def _build_reply_context(self, binding: ImBinding) -> dict[str, Any]:
-        adapter = self._registry.get_adapter_factory(binding.channel_type)()
-        return adapter.build_reply_context(binding) or {}
+    async def _settle_outbox(
+        self,
+        message: ImOutboxMessage,
+        outcome: _OutboxOutcome,
+        error_message: str,
+    ) -> None:
+        """写入终态, 容忍租约已被其他 worker 抢走的情况."""
+        try:
+            await self._finish_outbox(message, outcome, error_message)
+        except ImDeliveryLeaseLostError:
+            logger.info(
+                "IM outbox %s skipped after lease loss: outbox_id=%s attempt=%s",
+                outcome.value,
+                message.id,
+                message.attempt_count,
+            )
+
+    async def _mark_credentials_expired(
+        self, message: ImOutboxMessage, reason: str,
+    ) -> None:
+        try:
+            async with async_session_factory() as db:
+                init_repo = ChannelInitRepositoryImpl(db)
+                channel_init = await init_repo.find_by_id(message.channel_id)
+                if channel_init is None:
+                    return
+                channel_init.mark_credentials_expired(reason[:500])
+                await init_repo.save(channel_init)
+                await db.commit()
+        except Exception:
+            logger.warning(
+                "Failed to mark channel credentials expired: channel=%s",
+                message.channel_id,
+                exc_info=True,
+            )
 
     @staticmethod
     async def _resolve_outbound_attachments(
@@ -429,7 +486,13 @@ class ImDeliveryCoordinator:
 
     @staticmethod
     def _retry_delay(attempt_count: int) -> int:
-        return min(_MAX_BACKOFF_SECONDS, 2 ** min(max(attempt_count, 1), 8))
+        """指数退避 + 抖动.
+
+        渠道限流时同一批消息往往一起失败, 没有抖动就会在同一秒齐发重试,
+        再次触发限流。
+        """
+        backoff = min(_MAX_BACKOFF_SECONDS, 2 ** min(max(attempt_count, 1), 8))
+        return backoff + secrets.randbelow(max(1, backoff // 2) + 1)
 
     @staticmethod
     def _normalize_deduplication_key(value: str) -> str:

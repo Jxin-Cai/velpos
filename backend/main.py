@@ -427,10 +427,7 @@ async def lifespan(app: FastAPI):
 
     from ohs.dependencies import (
         get_im_api_gateway,
-        get_im_ws_client,
-        get_qq_ws_client,
-        get_weixin_adapter,
-        get_lark_adapter,
+        get_im_channel_facade,
         get_claude_agent_gateway,
         get_trace_collector,
     )
@@ -446,29 +443,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.error("Failed to flush trace spans", exc_info=True)
 
-    # Stop IM channel adapters
-    try:
-        await get_lark_adapter().close()
-    except Exception:
-        logger.error("Failed to close Lark adapter", exc_info=True)
-
-    try:
-        await get_weixin_adapter().close()
-    except Exception:
-        logger.error("Failed to close WeChat adapter", exc_info=True)
-
-    # Stop QQ WebSocket client
-    try:
-        await get_qq_ws_client().stop_all()
-    except Exception:
-        logger.error("Failed to stop QQ WS client", exc_info=True)
-
-    im_ws_client = get_im_ws_client()
-    if im_ws_client is not None:
-        try:
-            await im_ws_client.close_all()
-        except Exception:
-            logger.error("Failed to close IM WS client", exc_info=True)
+    # Stop every registered IM channel — each adapter releases its own
+    # listeners and connections, so new channels need no change here.
+    await get_im_channel_facade().close_all()
 
     im_api_gateway = get_im_api_gateway()
     if im_api_gateway is not None:

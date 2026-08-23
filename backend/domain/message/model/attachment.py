@@ -4,6 +4,14 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENT_MB = MAX_ATTACHMENT_BYTES // (1024 * 1024)
+
+
+def ensure_within_attachment_limit(size_bytes: int) -> None:
+    if size_bytes > MAX_ATTACHMENT_BYTES:
+        raise ValueError(f"Attachment exceeds {MAX_ATTACHMENT_MB}MB limit")
+
 
 @dataclass(frozen=True)
 class Attachment:

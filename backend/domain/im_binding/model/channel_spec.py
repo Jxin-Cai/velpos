@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_type import ImChannelType
 
 
@@ -22,3 +23,12 @@ class ImChannelSpec:
     init_fields: tuple[str, ...] = ()     # 初始化所需凭证字段, 如 ("app_id", "app_secret")
     init_mode: str = "credentials"         # "credentials" | "qr_login"
     description: str = ""
+    capabilities: frozenset[ChannelCapability] = field(default_factory=frozenset)
+
+    def supports(self, capability: ChannelCapability) -> bool:
+        return capability in self.capabilities
+
+    @property
+    def missing_capabilities(self) -> frozenset[ChannelCapability]:
+        """相对于能力全集（飞书）缺失的能力, 用于前端展示与契约测试."""
+        return frozenset(ChannelCapability) - self.capabilities

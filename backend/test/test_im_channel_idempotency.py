@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_message import InboundMessage, OutboundMessage
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
 from application.im_binding.im_channel_application_service import (
@@ -37,41 +39,42 @@ def _binding(channel_type: ImChannelType, config: dict) -> ImBinding:
     )
 
 
+def _lark_client(**message_methods) -> SimpleNamespace:
+    return SimpleNamespace(
+        im=SimpleNamespace(
+            v1=SimpleNamespace(message=SimpleNamespace(**message_methods)),
+        )
+    )
+
+
+def _lark_response(message_id: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        success=lambda: True,
+        data=SimpleNamespace(message_id=message_id),
+    )
+
+
 @pytest.mark.asyncio
 async def test_forwards_idempotency_key_when_lark_message_is_sent():
     # Arrange
     adapter = LarkAdapter()
-    create = AsyncMock(
-        return_value=SimpleNamespace(
-            success=lambda: True,
-            data=SimpleNamespace(message_id="lark-message"),
-        )
-    )
-    adapter._get_sdk_client = Mock(
-        return_value=SimpleNamespace(
-            im=SimpleNamespace(
-                v1=SimpleNamespace(message=SimpleNamespace(acreate=create)),
-            )
-        )
-    )
+    create = AsyncMock(return_value=_lark_response("lark-message"))
+    adapter._get_sdk_client = Mock(return_value=_lark_client(acreate=create))
     binding = _binding(
         ImChannelType.LARK,
         {"app_id": "app", "app_secret": "secret", "open_id": "user"},
     )
 
     # Act
-    message_id = await adapter.send_message(
+    receipt = await adapter.send(
         binding,
-        "hello",
-        idempotency_key="stable-key",
+        OutboundMessage.of_text("hello", idempotency_key="stable-key"),
     )
 
     # Assert
-    assert message_id == "lark-message"
+    assert receipt.external_message_id == "lark-message"
     request = create.await_args.args[0]
-    assert request.body.uuid == str(
-        uuid.uuid5(uuid.NAMESPACE_URL, "stable-key")
-    )
+    assert request.body.uuid == str(uuid.uuid5(uuid.NAMESPACE_URL, "stable-key"))
 
 
 @pytest.mark.asyncio
@@ -81,13 +84,7 @@ async def test_does_not_fallback_when_lark_reply_outcome_is_ambiguous():
     reply = AsyncMock(side_effect=TimeoutError("timed out"))
     create = AsyncMock()
     adapter._get_sdk_client = Mock(
-        return_value=SimpleNamespace(
-            im=SimpleNamespace(
-                v1=SimpleNamespace(
-                    message=SimpleNamespace(areply=reply, acreate=create),
-                )
-            )
-        )
+        return_value=_lark_client(areply=reply, acreate=create)
     )
     binding = _binding(
         ImChannelType.LARK,
@@ -96,11 +93,13 @@ async def test_does_not_fallback_when_lark_reply_outcome_is_ambiguous():
 
     # Act / Assert
     with pytest.raises(TimeoutError):
-        await adapter.send_message(
+        await adapter.send(
             binding,
-            "hello",
-            {"msg_id": "source-message"},
-            idempotency_key="stable-key",
+            OutboundMessage.of_text(
+                "hello",
+                route=ChannelRoute(reply_to_message_id="source-message"),
+                idempotency_key="stable-key",
+            ),
         )
     create.assert_not_awaited()
 
@@ -110,20 +109,9 @@ async def test_falls_back_when_lark_reply_is_explicitly_rejected():
     # Arrange
     adapter = LarkAdapter()
     reply = AsyncMock(side_effect=LarkApiError("message expired"))
-    create = AsyncMock(
-        return_value=SimpleNamespace(
-            success=lambda: True,
-            data=SimpleNamespace(message_id="fallback-message"),
-        )
-    )
+    create = AsyncMock(return_value=_lark_response("fallback-message"))
     adapter._get_sdk_client = Mock(
-        return_value=SimpleNamespace(
-            im=SimpleNamespace(
-                v1=SimpleNamespace(
-                    message=SimpleNamespace(areply=reply, acreate=create),
-                )
-            )
-        )
+        return_value=_lark_client(areply=reply, acreate=create)
     )
     binding = _binding(
         ImChannelType.LARK,
@@ -131,15 +119,17 @@ async def test_falls_back_when_lark_reply_is_explicitly_rejected():
     )
 
     # Act
-    message_id = await adapter.send_message(
+    receipt = await adapter.send(
         binding,
-        "hello",
-        {"msg_id": "source-message"},
-        idempotency_key="stable-key",
+        OutboundMessage.of_text(
+            "hello",
+            route=ChannelRoute(reply_to_message_id="source-message"),
+            idempotency_key="stable-key",
+        ),
     )
 
     # Assert
-    assert message_id == "fallback-message"
+    assert receipt.external_message_id == "fallback-message"
 
 
 @pytest.mark.asyncio
@@ -149,25 +139,16 @@ async def test_uses_stable_sequence_when_qq_message_is_retried():
         send_c2c_message=AsyncMock(return_value={"id": "qq-message"}),
     )
     adapter = QqAdapter(SimpleNamespace(), api)
-    binding = _binding(
-        ImChannelType.QQ,
-        {"app_id": "app", "app_secret": "secret"},
+    binding = _binding(ImChannelType.QQ, {"app_id": "app", "app_secret": "secret"})
+    message = OutboundMessage.of_text(
+        "hello",
+        route=ChannelRoute(sender_id="user"),
+        idempotency_key="stable-key",
     )
-    context = {"sender_id": "user"}
 
     # Act
-    await adapter.send_message(
-        binding,
-        "hello",
-        context,
-        idempotency_key="stable-key",
-    )
-    await adapter.send_message(
-        binding,
-        "hello",
-        context,
-        idempotency_key="stable-key",
-    )
+    await adapter.send(binding, message)
+    await adapter.send(binding, message)
 
     # Assert
     first_sequence = api.send_c2c_message.await_args_list[0].kwargs["msg_seq"]
@@ -180,23 +161,22 @@ async def test_forwards_idempotency_key_when_wechat_message_is_sent():
     # Arrange
     adapter = WeixinAdapter()
     adapter._api = SimpleNamespace(
-        send_text_message=AsyncMock(return_value={"message_id": "wechat-message"}),
+        send_text_message=AsyncMock(return_value="wechat-message"),
     )
-    binding = _binding(
-        ImChannelType.WEIXIN,
-        {"bot_token": "token"},
-    )
+    binding = _binding(ImChannelType.WEIXIN, {"bot_token": "token"})
 
     # Act
-    message_id = await adapter.send_message(
+    receipt = await adapter.send(
         binding,
-        "hello",
-        {"sender_id": "user"},
-        idempotency_key="stable-key",
+        OutboundMessage.of_text(
+            "hello",
+            route=ChannelRoute(sender_id="user"),
+            idempotency_key="stable-key",
+        ),
     )
 
     # Assert
-    assert message_id == "wechat-message"
+    assert receipt.external_message_id == "wechat-message"
     assert (
         adapter._api.send_text_message.await_args.kwargs["idempotency_key"]
         == "stable-key"
@@ -212,6 +192,12 @@ async def test_reports_configuration_error_when_inbound_context_factory_is_missi
         init_repo=Mock(),
     )
     binding = _binding(ImChannelType.WEIXIN, {"bot_token": "token"})
+    inbound = InboundMessage(
+        channel_id="channel1",
+        channel_type=ImChannelType.WEIXIN.value,
+        external_message_id="message1",
+        route=ChannelRoute(sender_id="user"),
+    )
 
     # Act / Assert
     with pytest.raises(
@@ -220,12 +206,9 @@ async def test_reports_configuration_error_when_inbound_context_factory_is_missi
     ):
         await service._execute_inbound(
             binding,
-            "hello",
+            inbound,
             "source-message",
-            "channel1",
-            "message1",
-            {"sender_id": "user"},
-            None,
+            inbound.route,
         )
 
 

@@ -28,6 +28,9 @@ class ImInboxEventModel(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sender_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     group_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    # 完整的渠道路由（含渠道私有字段，如微信的 context_token）。sender_id /
+    # group_id 保留为独立列仅用于排查问题时的检索。
+    route_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     attachments_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

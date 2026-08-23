@@ -5,6 +5,8 @@ import os
 import re
 from pathlib import Path
 
+from domain.message.model.attachment import ensure_within_attachment_limit
+
 
 class AttachmentStorageGateway:
     UPLOAD_ROOT = ".upload-file"
@@ -16,6 +18,7 @@ class AttachmentStorageGateway:
         filename: str,
         data: bytes,
     ) -> tuple[str, str]:
+        ensure_within_attachment_limit(len(data))
         root = self._storage_root(project_dir)
         root.mkdir(parents=True, exist_ok=True)
         safe_name = self._safe_filename(filename)
@@ -41,8 +44,7 @@ class AttachmentStorageGateway:
         if not source.is_file():
             raise FileNotFoundError(f"Attachment source file does not exist: {source}")
         size = source.stat().st_size
-        if size > 25 * 1024 * 1024:
-            raise ValueError("Attachment exceeds 25MB limit")
+        ensure_within_attachment_limit(size)
         return self.save(project_dir, session_id, filename, source.read_bytes())
 
     @staticmethod

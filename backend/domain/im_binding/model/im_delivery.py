@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
+from domain.im_binding.model.channel_route import ChannelRoute
+
 
 class ImInboxStatus(str, Enum):
     RECEIVED = "received"
@@ -32,8 +34,7 @@ class ImInboxEvent:
     session_id: str
     external_message_id: str
     content: str
-    sender_id: str = ""
-    group_id: str = ""
+    route: ChannelRoute = field(default_factory=ChannelRoute)
     attachments: list[dict[str, Any]] = field(default_factory=list)
     status: ImInboxStatus = ImInboxStatus.RECEIVED
     attempt_count: int = 0
@@ -42,6 +43,14 @@ class ImInboxEvent:
     error_message: str = ""
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+
+    @property
+    def sender_id(self) -> str:
+        return self.route.sender_id
+
+    @property
+    def group_id(self) -> str:
+        return self.route.group_id
 
     def claim(self, lease_seconds: int) -> None:
         now = datetime.now()
@@ -81,7 +90,7 @@ class ImOutboxMessage:
     content: str
     deduplication_key: str
     attachments: list[dict[str, Any]] = field(default_factory=list)
-    reply_context: dict[str, Any] = field(default_factory=dict)
+    route: ChannelRoute = field(default_factory=ChannelRoute)
     status: ImOutboxStatus = ImOutboxStatus.PENDING
     attempt_count: int = 0
     next_attempt_at: datetime = field(default_factory=datetime.now)

@@ -4,16 +4,26 @@ import hashlib
 import logging
 from typing import Any
 
+from domain.im_binding.acl.channel_errors import ChannelRoutingError
 from domain.im_binding.acl.im_channel_adapter import (
     BindResult,
     ImChannelAdapter,
+    InboundHandler,
     InitResult,
 )
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_spec import BindingMode, ImChannelSpec
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_message import (
+    InboundMessage,
+    MessageSegment,
+    OutboundMessage,
+    SendReceipt,
+)
 from infr.im.qq.qq_api import QqApiClient
 from infr.im.qq.qq_ws_client import QqWsClient
 
@@ -28,6 +38,16 @@ QQ_CHANNEL_SPEC = ImChannelSpec(
     init_fields=("app_id", "app_secret"),
     init_mode="credentials",
     description="QQ bot via WebSocket gateway. Requires QQ Open Platform app credentials.",
+    capabilities=frozenset({
+        ChannelCapability.INBOUND_LISTEN,
+        ChannelCapability.OUTBOUND_TEXT,
+        ChannelCapability.THREAD_REPLY,
+        ChannelCapability.GROUP_CHAT,
+        # msg_seq 让同一 idempotency_key 的重发被 QQ 侧去重.
+        ChannelCapability.IDEMPOTENCY,
+        ChannelCapability.MESSAGE_ID_ECHO,
+        ChannelCapability.PROGRESS_ACK,
+    }),
 )
 
 
@@ -117,7 +137,7 @@ class QqAdapter(ImChannelAdapter):
         )
 
     async def start_listening(
-        self, binding: ImBinding, on_message: Any,
+        self, binding: ImBinding, on_message: InboundHandler | None = None,
     ) -> None:
         """Start the QQ WebSocket listener for this specific channel."""
         channel_id = binding.channel_id
@@ -134,11 +154,26 @@ class QqAdapter(ImChannelAdapter):
             logger.warning("[QQ-adapter] No credentials in binding config for channel=%s!", channel_id)
             return
 
+        async def dispatch(
+            msg_id: str, content: str, sender_id: str, group_id: str,
+        ) -> None:
+            if on_message is None:
+                return
+            await on_message(
+                InboundMessage(
+                    channel_id=channel_id or binding.id,
+                    channel_type=ImChannelType.QQ.value,
+                    external_message_id=msg_id,
+                    route=ChannelRoute(sender_id=sender_id, group_id=group_id),
+                    segments=(MessageSegment.of_text(content),),
+                )
+            )
+
         # start() internally stops any existing connection for this channel
         await self._ws.start(
             channel_id=channel_id,
             session_id=binding.session_id,
-            on_message=on_message,
+            on_message=dispatch,
             app_id=app_id,
             app_secret=app_secret,
         )
@@ -163,54 +198,49 @@ class QqAdapter(ImChannelAdapter):
         logger.info("[QQ-adapter] unbind: channel=%s", channel_id)
         await self._ws.stop(channel_id)
 
-    async def send_message(
-        self, binding: ImBinding, content: str,
-        reply_context: dict | None = None,
-        idempotency_key: str = "",
-        attachments: list[dict] | None = None,
-    ) -> str:
-        ctx = reply_context or {}
-        msg_id = ctx.get("msg_id", "")
-        group_id = ctx.get("group_id", "")
-        sender_id = ctx.get("sender_id", "")
+    async def send(
+        self, binding: ImBinding, message: OutboundMessage,
+    ) -> SendReceipt:
+        route = message.route
+        content = message.plain_text
 
         # Use per-binding credentials for sending
         app_id = binding.config.get("app_id", "")
         app_secret = binding.config.get("app_secret", "")
 
         logger.info(
-            "[QQ-adapter] send_message: session=%s msg_id=%s sender=%s group=%s content=%.100s",
+            "[QQ-adapter] send: session=%s reply_to=%s sender=%s group=%s content=%.100s",
             binding.session_id,
-            msg_id, sender_id, group_id, content,
+            route.reply_to_message_id, route.sender_id, route.group_id, content,
         )
 
-        try:
-            if group_id:
-                logger.info("[QQ-adapter] Sending group message to %s", group_id)
-                result = await self._api.send_group_message(
-                    group_id, content, msg_id,
-                    app_id=app_id or None, app_secret=app_secret or None,
-                    msg_seq=self._message_sequence(idempotency_key),
-                )
-            elif sender_id:
-                logger.info("[QQ-adapter] Sending C2C message to %s", sender_id)
-                result = await self._api.send_c2c_message(
-                    sender_id, content, msg_id,
-                    app_id=app_id or None, app_secret=app_secret or None,
-                    msg_seq=self._message_sequence(idempotency_key),
-                )
-            else:
-                raise RuntimeError(
-                    "Cannot send QQ message: no group_id or sender_id in reply_context. "
-                    "Please send at least one message from QQ first to establish routing."
-                )
-        except Exception:
-            logger.error(
-                "[QQ-adapter] send_message failed",
-                exc_info=True,
+        if not (route.group_id or route.sender_id):
+            raise ChannelRoutingError(
+                "Cannot send QQ message: no group or user in routing context. "
+                "Send one message from QQ first to establish routing.",
+                channel_type=ImChannelType.QQ.value,
             )
-            raise
-        return str(result.get("id") or result.get("message_id") or "")
+
+        send = (
+            self._api.send_group_message
+            if route.group_id
+            else self._api.send_c2c_message
+        )
+        result = await send(
+            route.group_id or route.sender_id,
+            content,
+            route.reply_to_message_id,
+            app_id=app_id or None,
+            app_secret=app_secret or None,
+            msg_seq=self._message_sequence(message.idempotency_key),
+        )
+        return SendReceipt.of(
+            str(result.get("id") or result.get("message_id") or ""),
+        )
+
+    async def close(self) -> None:
+        """Shutdown adapter — drop every channel's WebSocket connection."""
+        await self._ws.stop_all()
 
     @staticmethod
     def _message_sequence(idempotency_key: str) -> int | None:

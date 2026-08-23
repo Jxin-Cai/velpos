@@ -8,16 +8,29 @@ from enum import IntEnum
 from typing import Any
 
 from domain.shared.async_utils import safe_create_task
+from domain.im_binding.acl.channel_errors import (
+    ChannelAuthError,
+    ChannelRoutingError,
+)
 from domain.im_binding.acl.im_channel_adapter import (
     BindResult,
     ImChannelAdapter,
+    InboundHandler,
     InitResult,
 )
 from domain.im_binding.model.binding_status import BindingStatus
+from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_init_status import ChannelInitStatus
+from domain.im_binding.model.channel_route import ChannelRoute
 from domain.im_binding.model.channel_spec import BindingMode, ImChannelSpec
 from domain.im_binding.model.channel_type import ImChannelType
 from domain.im_binding.model.im_binding import ImBinding
+from domain.im_binding.model.im_message import (
+    InboundMessage,
+    MessageSegment,
+    OutboundMessage,
+    SendReceipt,
+)
 from infr.im.weixin.weixin_api import WeixinApiClient, DEFAULT_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -26,6 +39,9 @@ _TYPING_TICKET_TTL_SECONDS = 600
 _TYPING_KEEPALIVE_SECONDS = 5
 _MAX_TEXT_CHUNK_LENGTH = 3800
 _TEXT_CHUNK_SEND_DELAY_SECONDS = 0.1
+_CONTEXT_TOKEN_KEY = "context_token"
+_POLL_BACKOFF_SECONDS = 3
+_MAX_POLL_BACKOFF_SECONDS = 60
 
 
 class _TypingStatus(IntEnum):
@@ -51,6 +67,15 @@ WEIXIN_CHANNEL_SPEC = ImChannelSpec(
     init_fields=(),
     init_mode="qr_login",
     description="WeChat via iLink QR login. Scan QR code with WeChat to connect.",
+    capabilities=frozenset({
+        ChannelCapability.INBOUND_LISTEN,
+        ChannelCapability.OUTBOUND_TEXT,
+        ChannelCapability.TYPING_INDICATOR,
+        # iLink 无表情回应也无线程回复, 只能用文本回报任务进度.
+        ChannelCapability.PROGRESS_ACK,
+        ChannelCapability.IDEMPOTENCY,
+        ChannelCapability.MESSAGE_ID_ECHO,
+    }),
 )
 
 
@@ -231,7 +256,9 @@ class WeixinAdapter(ImChannelAdapter):
 
     # ── Message listening (server-managed long-poll) ──
 
-    async def start_listening(self, binding: ImBinding, on_message=None) -> None:
+    async def start_listening(
+        self, binding: ImBinding, on_message: InboundHandler | None = None,
+    ) -> None:
         """Start long-polling for WeChat messages via iLink getupdates.
 
         Each channel_id gets its own independent poll loop.  If a poll
@@ -305,92 +332,98 @@ class WeixinAdapter(ImChannelAdapter):
         )
 
         stop_event = self._stop_events.get(channel_id)
+        failures = 0
         while not (stop_event and stop_event.is_set()):
             try:
                 data = await api.get_updates(bot_token, cursor)
                 new_cursor = data.get("get_updates_buf", "")
 
-                msgs = data.get("msgs", [])
-                for msg in msgs:
+                for msg in data.get("msgs", []):
                     from_user_id = msg.get("from_user_id", "")
                     context_token = msg.get("context_token", "")
                     message_id = str(msg.get("message_id", msg.get("seq", "")))
+                    text = _extract_text(msg)
 
-                    # Persist context_token into binding config for outbound use
-                    if from_user_id and context_token:
-                        self._persist_context_token(binding, from_user_id, context_token)
-
-                    # Extract text from item_list (type 1 = text)
-                    text = ""
-                    for item in msg.get("item_list", []):
-                        if item.get("type") == 1:
-                            text_item = item.get("text_item", {})
-                            if isinstance(text_item, dict):
-                                text += text_item.get("text", "")
-                            else:
-                                text += str(text_item)
-
-                    if not text.strip() or not message_id:
+                    if not text or not message_id:
                         continue
 
                     logger.info(
                         "[WeChat-adapter] Inbound message: channel=%s msg_id=%s from=%s text=%.100s",
-                        channel_id, message_id, from_user_id, text.strip(),
+                        channel_id, message_id, from_user_id, text,
                     )
 
                     on_message = self._on_messages.get(channel_id)
                     if on_message:
+                        # context_token 是回复的必要条件, 随消息一起交出去,
+                        # 由编排层持久化到 inbox 事件, 重启后仍然能回复.
                         await on_message(
-                            message_id, text.strip(), from_user_id, "",
+                            InboundMessage(
+                                channel_id=channel_id or binding.id,
+                                channel_type=ImChannelType.WEIXIN.value,
+                                external_message_id=message_id,
+                                route=ChannelRoute(
+                                    sender_id=from_user_id,
+                                    extras=(
+                                        {_CONTEXT_TOKEN_KEY: context_token}
+                                        if context_token
+                                        else {}
+                                    ),
+                                ),
+                                segments=(MessageSegment.of_text(text),),
+                            )
                         )
                 if new_cursor:
                     cursor = new_cursor
 
+                failures = 0
+
             except asyncio.CancelledError:
                 logger.info("[WeChat-adapter] Poll loop cancelled channel=%s", channel_id)
                 break
+            except ChannelAuthError:
+                # 凭证已失效, 继续轮询只会每隔几秒刷一条错误日志.
+                # 退出循环, 让渠道停在"收不到消息"而不是假装还在工作。
+                logger.error(
+                    "[WeChat-adapter] Poll stopped, credentials expired: channel=%s",
+                    channel_id,
+                    exc_info=True,
+                )
+                break
             except Exception:
-                logger.error("[WeChat-adapter] Poll error channel=%s, retrying in 3s", channel_id, exc_info=True)
-                await asyncio.sleep(3)
+                failures += 1
+                delay = min(
+                    _MAX_POLL_BACKOFF_SECONDS, _POLL_BACKOFF_SECONDS * 2 ** (failures - 1),
+                )
+                logger.error(
+                    "[WeChat-adapter] Poll error channel=%s failures=%d, retrying in %ds",
+                    channel_id, failures, delay, exc_info=True,
+                )
+                await asyncio.sleep(delay)
 
         logger.info("[WeChat-adapter] Poll loop ended: session=%s channel=%s", binding.session_id, channel_id)
 
-    @staticmethod
-    def _persist_context_token(
-        binding: ImBinding, from_user_id: str, context_token: str,
-    ) -> None:
-        """Write context_token into binding.config (in-memory).
-
-        The application service's _persist_reply_context will flush routing
-        context to DB on each inbound message.  We piggyback context_token
-        onto the same config dict.
-        """
-        binding.update_config({
-            "last_context_token": context_token,
-            "last_sender_id": from_user_id,
-        })
-
     # ── Send message ──
 
-    async def send_message(
-        self, binding: ImBinding, content: str,
-        reply_context: dict | None = None,
-        idempotency_key: str = "",
-        attachments: list[dict] | None = None,
-    ) -> str:
+    async def send(
+        self, binding: ImBinding, message: OutboundMessage,
+    ) -> SendReceipt:
         bot_token = binding.config.get("bot_token", "")
         if not bot_token:
-            raise RuntimeError("WeChat bot token is unavailable")
+            raise ChannelRoutingError(
+                "WeChat bot token is unavailable",
+                channel_type=ImChannelType.WEIXIN.value,
+            )
 
-        ctx = reply_context or {}
-        to_user_id = ctx.get("sender_id", "")
-        context_token = ctx.get("context_token", "")
-
+        to_user_id = message.route.sender_id
         if not to_user_id:
-            raise RuntimeError("WeChat routing target is unavailable")
+            raise ChannelRoutingError(
+                "Cannot send WeChat message: no recipient in routing context. "
+                "Send one message from WeChat first to establish routing.",
+                channel_type=ImChannelType.WEIXIN.value,
+            )
 
         api = self._api_for_binding(binding)
-
+        content = message.plain_text
         chunks = self._split_text(content)
         logger.info(
             "[WeChat-adapter] Sending message: to=%s length=%d chunks=%d",
@@ -398,32 +431,27 @@ class WeixinAdapter(ImChannelAdapter):
             len(content),
             len(chunks),
         )
+
         external_message_id = ""
         for index, chunk in enumerate(chunks):
             if index > 0:
                 await asyncio.sleep(_TEXT_CHUNK_SEND_DELAY_SECONDS)
-            chunk_key = idempotency_key
+            chunk_key = idempotency_key = message.idempotency_key
             if idempotency_key and len(chunks) > 1:
-                chunk_key = (
-                    f"{idempotency_key}:chunk:{index + 1}:{len(chunks)}"
-                )
-            response = await api.send_text_message(
+                chunk_key = f"{idempotency_key}:chunk:{index + 1}:{len(chunks)}"
+            external_message_id = await api.send_text_message(
                 bot_token,
                 to_user_id,
                 chunk,
-                context_token,
+                message.route.extras.get(_CONTEXT_TOKEN_KEY, ""),
                 idempotency_key=chunk_key,
             )
-            current_message_id = str(
-                response.get("message_id") or response.get("msg_id") or ""
-            )
-            if current_message_id:
-                external_message_id = current_message_id
         logger.info(
-            "[WeChat-adapter] Message sent successfully: chunks=%d",
+            "[WeChat-adapter] Message delivered: chunks=%d last_message_id=%s",
             len(chunks),
+            external_message_id,
         )
-        return external_message_id
+        return SendReceipt.of(external_message_id)
 
     @staticmethod
     def _split_text(content: str) -> list[str]:
@@ -473,47 +501,38 @@ class WeixinAdapter(ImChannelAdapter):
         await self._stop_all_typing_sessions()
         logger.info("[WeChat-adapter] Adapter closed, %d channels stopped", len(channel_ids))
 
-    # ── Routing context — WeChat needs context_token in addition to sender_id ──
+    # ── Routing — WeChat 回复必须带 context_token ──
 
-    def build_reply_context(self, binding: ImBinding) -> dict[str, str] | None:
-        ctx = super().build_reply_context(binding) or {}
-        ct = binding.config.get("last_context_token", "")
-        if ct:
-            ctx["context_token"] = ct
-        return ctx if ctx else None
+    def route_extra_keys(self) -> tuple[str, ...]:
+        return (_CONTEXT_TOKEN_KEY,)
 
-    def routing_config_keys(self) -> tuple[str, ...]:
-        return ("last_sender_id", "last_group_id", "last_context_token")
+    # ── Typing indicator ──
 
-    # ── Reactions (typing indicator) ──
-
-    async def add_reaction(
-        self, binding: ImBinding, message_id: str, _reaction: str,
-    ) -> str:
+    async def start_typing(self, binding: ImBinding, route: ChannelRoute) -> str:
         bot_token = binding.config.get("bot_token", "")
-        user_id = binding.config.get("last_sender_id", "")
+        user_id = route.sender_id or self.restore_route(binding).sender_id
         if not bot_token or not user_id:
             return ""
 
         api = self._api_for_binding(binding)
-        ticket = await self._get_typing_ticket(api, binding, user_id)
+        context_token = route.extras.get(
+            _CONTEXT_TOKEN_KEY,
+        ) or self.restore_route(binding).extras.get(_CONTEXT_TOKEN_KEY, "")
+        ticket = await self._get_typing_ticket(
+            api, binding, user_id, context_token,
+        )
         if not ticket:
             return ""
 
-        reaction_id = f"{binding.channel_id or binding.id}:{message_id}"
-        await api.send_typing(
-            bot_token,
-            user_id,
-            ticket,
-            _TypingStatus.TYPING,
-        )
+        session_key = f"{binding.channel_id or binding.id}:{user_id}"
+        await api.send_typing(bot_token, user_id, ticket, _TypingStatus.TYPING)
         keepalive = safe_create_task(
             self._run_typing_keepalive(api, bot_token, user_id, ticket),
             name=f"weixin-typing-{binding.channel_id or binding.id}",
         )
         async with self._typing_lock:
-            previous = self._typing_sessions.pop(reaction_id, None)
-            self._typing_sessions[reaction_id] = _TypingSession(
+            previous = self._typing_sessions.pop(session_key, None)
+            self._typing_sessions[session_key] = _TypingSession(
                 task=keepalive,
                 api=api,
                 bot_token=bot_token,
@@ -523,14 +542,11 @@ class WeixinAdapter(ImChannelAdapter):
         if previous is not None:
             previous.task.cancel()
             await asyncio.gather(previous.task, return_exceptions=True)
-        return reaction_id
+        return session_key
 
-    async def remove_reaction(
-        self, binding: ImBinding, message_id: str, reaction: str,
-    ) -> None:
-        reaction_id = reaction or f"{binding.channel_id or binding.id}:{message_id}"
+    async def stop_typing(self, binding: ImBinding, ticket: str) -> None:
         async with self._typing_lock:
-            session = self._typing_sessions.pop(reaction_id, None)
+            session = self._typing_sessions.pop(ticket, None)
         if session is None:
             return
 
@@ -552,6 +568,7 @@ class WeixinAdapter(ImChannelAdapter):
         api: WeixinApiClient,
         binding: ImBinding,
         user_id: str,
+        context_token: str,
     ) -> str:
         now = time.monotonic()
         cache_key = f"{binding.channel_id or binding.id}:{user_id}"
@@ -563,7 +580,7 @@ class WeixinAdapter(ImChannelAdapter):
             response = await api.get_config(
                 binding.config.get("bot_token", ""),
                 user_id,
-                binding.config.get("last_context_token", ""),
+                context_token,
             )
             ticket = str(response.get("typing_ticket") or "").strip()
             if not ticket:
@@ -606,3 +623,18 @@ class WeixinAdapter(ImChannelAdapter):
                 *(session.task for session in sessions),
                 return_exceptions=True,
             )
+
+
+def _extract_text(msg: dict[str, Any]) -> str:
+    """Concatenate the text items (``type == 1``) of an iLink message."""
+    parts: list[str] = []
+    for item in msg.get("item_list", []):
+        if item.get("type") != 1:
+            continue
+        text_item = item.get("text_item", {})
+        parts.append(
+            text_item.get("text", "")
+            if isinstance(text_item, dict)
+            else str(text_item)
+        )
+    return "".join(parts).strip()

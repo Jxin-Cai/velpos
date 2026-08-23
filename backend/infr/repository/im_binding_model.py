@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, UniqueConstraint
+from sqlalchemy import DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infr.config.base import Base
@@ -31,7 +31,7 @@ class ImBindingModel(Base):
         String(256), nullable=False, default="",
     )
     config_json: Mapped[str] = mapped_column(
-        String(2048), nullable=False, default="{}",
+        Text, nullable=False, default="{}",
     )
     im_user_id: Mapped[str] = mapped_column(
         String(64), nullable=False,

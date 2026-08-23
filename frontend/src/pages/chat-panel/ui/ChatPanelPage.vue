@@ -40,7 +40,7 @@ const emit = defineEmits(['locate-session', 'return-team', 'open-file'])
 
 const {
   session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
-  queryHistory, setCurrentSessionId, updateSession, setError, setCanceling, addSession,
+  queryHistory, error, setCurrentSessionId, updateSession, setError, setCanceling, addSession,
   restoredPrompt, setRestoredPrompt, setQueuedCommand, steeringQueued, setSteeringQueued,
   messageWindow, userMessageMarkers, prependMessagesFor,
 } = useSession()
@@ -1627,6 +1627,7 @@ function formatMaxTokens(n) {
         @edit="editQueuedMessage"
         @remove="removeQueuedMessage"
       />
+      <div v-if="error" class="send-error" role="alert">{{ error }}</div>
       <div class="input-row">
         <MessageInput
           ref="messageInputRef"
@@ -3107,6 +3108,16 @@ function formatMaxTokens(n) {
   width: 100%;
   margin: 0;
   padding: 8px clamp(18px, 2.4vw, 32px) 0;
+}
+
+.send-error {
+  margin: 0 clamp(18px, 2.4vw, 32px) 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--red-dim);
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 /* History panel — fixed position to escape stacking context */
