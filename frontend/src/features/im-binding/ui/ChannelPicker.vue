@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
+import { ImAction } from '../model/useImBinding'
 
 const props = defineProps({
   channels: {
@@ -10,11 +11,32 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  /** Channel type to open directly, skipping the type grid. */
+  initialType: {
+    type: String,
+    default: '',
+  },
+  busy: {
+    type: Boolean,
+    default: false,
+  },
+  pendingChannelId: {
+    type: String,
+    default: '',
+  },
+  pendingAction: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits(['select', 'create', 'delete', 'rename', 'navigate-session'])
 
-const selectedType = ref(null)
+const selectedType = ref(props.initialType || null)
+
+watch(() => props.initialType, (type) => {
+  if (type) selectedType.value = type
+})
 const confirmingDelete = ref(null)
 const editingId = ref(null)
 const editingName = ref('')
@@ -66,8 +88,14 @@ function isChannelDisabled(ch) {
   return DISABLED_CHANNELS.has(ch.channel_type)
 }
 
+function isPendingInstance(inst) {
+  return props.busy && props.pendingChannelId === inst.id
+}
+
+const isCreating = computed(() => props.busy && props.pendingAction === ImAction.CREATE)
+
 function selectType(ch) {
-  if (isChannelDisabled(ch)) return
+  if (props.busy || isChannelDisabled(ch)) return
   selectedType.value = ch.channel_type
   if ((ch.instances || []).length === 0) {
     emit('create', ch.channel_type, ch.display_name)
@@ -75,12 +103,14 @@ function selectType(ch) {
 }
 
 function backToTypes() {
+  if (props.busy) return
   selectedType.value = null
   confirmingDelete.value = null
   editingId.value = null
 }
 
 function selectInstance(inst) {
+  if (props.busy) return
   if (isBoundToCurrentSession(inst)) return
   if (editingId.value === inst.id) return
   const ch = currentChannel.value
@@ -88,11 +118,12 @@ function selectInstance(inst) {
 }
 
 function createInstance() {
-  if (!currentChannel.value) return
+  if (props.busy || !currentChannel.value) return
   emit('create', currentChannel.value.channel_type, '')
 }
 
 function requestDelete(inst) {
+  if (props.busy) return
   confirmingDelete.value = inst
 }
 
@@ -139,7 +170,7 @@ function cancelRename() {
           :key="ch.channel_type"
           class="channel-card"
           :class="{ 'channel-card--disabled': isChannelDisabled(ch) }"
-          :disabled="isChannelDisabled(ch)"
+          :disabled="isChannelDisabled(ch) || busy"
           @click="selectType(ch)"
         >
           <svg
@@ -195,6 +226,8 @@ function cancelRename() {
           :class="{
             'inst-row--bound': isBoundToCurrentSession(inst),
             'inst-row--other': inst.bound_session_id && !isBoundToCurrentSession(inst),
+            'inst-row--pending': isPendingInstance(inst),
+            'inst-row--muted': busy && !isPendingInstance(inst),
           }"
           @click="selectInstance(inst)"
         >
@@ -236,8 +269,12 @@ function cancelRename() {
           </span>
 
           <span class="inst-col inst-col--session">
+            <span v-if="isPendingInstance(inst)" class="inst-pending">
+              <span class="spinner-tiny"></span>
+              {{ pendingAction === ImAction.DELETE ? 'Removing' : 'Connecting' }}
+            </span>
             <a
-              v-if="inst.bound_session_id"
+              v-else-if="inst.bound_session_id"
               class="session-link"
               :class="{ 'session-link--current': isBoundToCurrentSession(inst) }"
               href="#"
@@ -250,6 +287,7 @@ function cancelRename() {
           <span class="inst-col inst-col--actions">
             <button
               class="action-btn action-btn--delete"
+              :disabled="busy"
               @click.stop="requestDelete(inst)"
               title="Delete"
             >
@@ -264,11 +302,17 @@ function cancelRename() {
       </div>
 
       <!-- Add button -->
-      <button class="add-btn" @click="createInstance">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        New Instance
+      <button class="add-btn" :disabled="busy" @click="createInstance">
+        <template v-if="isCreating">
+          <span class="spinner-tiny"></span>
+          Creating...
+        </template>
+        <template v-else>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          New Instance
+        </template>
       </button>
 
       <p v-if="instances.length === 0" class="picker-empty">
@@ -455,6 +499,39 @@ function cancelRename() {
   background: var(--yellow-dim, rgba(245, 158, 11, 0.04));
 }
 
+.inst-row--pending {
+  background: var(--accent-dim);
+  cursor: progress;
+}
+
+/* Keep the row being acted on legible while the rest recedes. */
+.inst-row--muted {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.inst-row--muted:hover {
+  background: transparent;
+}
+
+.inst-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.spinner-tiny {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: spin 0.6s linear infinite;
+}
+
 .inst-col {
   font-size: 12px;
   color: var(--text-primary);
@@ -587,9 +664,14 @@ function cancelRename() {
   transition: color 0.15s, background 0.15s;
 }
 
-.action-btn--delete:hover {
+.action-btn--delete:hover:not(:disabled) {
   color: var(--red);
   background: var(--red-dim);
+}
+
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* (init-badge styles removed — status shown via session link) */
@@ -611,10 +693,15 @@ function cancelRename() {
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
-.add-btn:hover {
+.add-btn:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-dim);
+}
+
+.add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .picker-empty {
@@ -736,6 +823,7 @@ function cancelRename() {
     transition: border-color 0.15s, background 0.15s;
   }
   .channel-card:hover { transform: none; }
+  .spinner-tiny { animation-duration: 0.01ms; }
   .confirm-fade-enter-active,
   .confirm-fade-leave-active,
   .confirm-fade-enter-active .confirm-card,

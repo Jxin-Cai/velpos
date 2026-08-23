@@ -13,15 +13,42 @@ import {
   syncContext,
 } from '../api/imApi'
 
+/** Mutations that own the dialog's busy state, one at a time. */
+export const ImAction = Object.freeze({
+  CREATE: 'create',
+  DELETE: 'delete',
+  RENAME: 'rename',
+  BIND: 'bind',
+  COMPLETE: 'complete',
+  UNBIND: 'unbind',
+  SWITCH: 'switch',
+  INITIALIZE: 'initialize',
+  RESET: 'reset',
+  SYNC: 'sync',
+})
+
 const bindingState = ref(null)
-const loading = ref(false)
 const error = ref(null)
 const availableChannels = ref([])
 const initRequired = ref(null)
 const syncResult = ref(null)
 
+const statusLoading = ref(false)
+const pendingAction = ref(null)
+const pendingChannelId = ref('')
+
 const _activeSessionId = ref('')
 let _fetchChannelsPromise = null
+
+// Bumped whenever the binding state is deliberately changed. A status read that
+// started before the bump is stale by the time it resolves and must be dropped,
+// otherwise it resurrects the binding the user just removed.
+let _stateVersion = 0
+
+function _nextStateVersion() {
+  _stateVersion += 1
+  return _stateVersion
+}
 
 export function useImBinding() {
   const isBound = computed(() => bindingState.value?.binding_status === 'bound')
@@ -44,9 +71,30 @@ export function useImBinding() {
   const boundChannelType = computed(() => boundInstanceForSession.value?.channel_type || currentChannelType.value)
   const boundInstanceName = computed(() => boundInstanceForSession.value?.name || '')
 
-  async function fetchChannels() {
-    // Deduplicate concurrent calls — reuse in-flight request
-    if (_fetchChannelsPromise) return _fetchChannelsPromise
+  function isPending(action) {
+    return pendingAction.value === action
+  }
+
+  function beginAction(action, channelId = '') {
+    pendingAction.value = action
+    pendingChannelId.value = channelId
+  }
+
+  function endAction(action) {
+    if (pendingAction.value !== action) return
+    pendingAction.value = null
+    pendingChannelId.value = ''
+  }
+
+  /**
+   * @param {boolean} force Skip the in-flight reuse. A read that started before
+   *   the mutation we just made would report the pre-mutation channel list.
+   */
+  async function fetchChannels(force = false) {
+    if (_fetchChannelsPromise) {
+      if (!force) return _fetchChannelsPromise
+      await _fetchChannelsPromise
+    }
     _fetchChannelsPromise = (async () => {
       try {
         const data = await getChannels()
@@ -69,64 +117,75 @@ export function useImBinding() {
       syncResult.value = null
     }
     _activeSessionId.value = sessionId
-    loading.value = true
+    const version = _nextStateVersion()
+    statusLoading.value = true
     error.value = null
     try {
       const data = await getBindingStatus(sessionId)
-      if (sessionId === _activeSessionId.value) {
+      if (version === _stateVersion && sessionId === _activeSessionId.value) {
         bindingState.value = data || null
       }
     } catch {
-      if (sessionId === _activeSessionId.value) {
+      if (version === _stateVersion && sessionId === _activeSessionId.value) {
         bindingState.value = null
         error.value = null
       }
     } finally {
       if (sessionId === _activeSessionId.value) {
-        loading.value = false
+        statusLoading.value = false
       }
     }
   }
 
   async function handleCreateChannel(channelType, name = '') {
-    loading.value = true
+    beginAction(ImAction.CREATE)
     error.value = null
     try {
       const data = await createChannel(channelType, name)
-      await fetchChannels()
+      await fetchChannels(true)
       return data
     } catch (e) {
       error.value = e.message
       return null
     } finally {
-      loading.value = false
+      endAction(ImAction.CREATE)
     }
   }
 
   async function handleDeleteChannel(channelId) {
+    beginAction(ImAction.DELETE, channelId)
     error.value = null
     try {
       await deleteChannel(channelId)
-      await fetchChannels()
+      if (bindingState.value?.channel_id === channelId) {
+        _nextStateVersion()
+        bindingState.value = null
+      }
+      await fetchChannels(true)
     } catch (e) {
       error.value = e.message
+    } finally {
+      endAction(ImAction.DELETE)
     }
   }
 
   async function handleRenameChannel(channelId, name) {
+    beginAction(ImAction.RENAME, channelId)
     error.value = null
     try {
       await renameChannel(channelId, name)
-      await fetchChannels()
+      await fetchChannels(true)
     } catch (e) {
       error.value = e.message
+    } finally {
+      endAction(ImAction.RENAME)
     }
   }
 
   async function handleBind(sessionId, channelId, params = {}) {
     if (!sessionId || !channelId) return null
     _activeSessionId.value = sessionId
-    loading.value = true
+    beginAction(ImAction.BIND, channelId)
     error.value = null
     try {
       const data = await bindIm(sessionId, channelId, params)
@@ -138,9 +197,10 @@ export function useImBinding() {
       if (data?.ui_data?.mode === 'prompt' && data?.binding_status === 'binding') {
         return data
       }
+      _nextStateVersion()
       bindingState.value = data
       initRequired.value = null
-      await fetchChannels()
+      await fetchChannels(true)
       return data
     } catch (e) {
       if (sessionId === _activeSessionId.value) {
@@ -148,22 +208,21 @@ export function useImBinding() {
       }
       return null
     } finally {
-      if (sessionId === _activeSessionId.value) {
-        loading.value = false
-      }
+      endAction(ImAction.BIND)
     }
   }
 
   async function handleComplete(sessionId, channelId, params = {}) {
     if (!sessionId || !channelId) return null
-    loading.value = true
+    beginAction(ImAction.COMPLETE, channelId)
     error.value = null
     try {
       const data = await completeBinding(sessionId, channelId, params)
       if (sessionId === _activeSessionId.value) {
+        _nextStateVersion()
         bindingState.value = data
       }
-      await fetchChannels()
+      await fetchChannels(true)
       return data
     } catch (e) {
       if (sessionId === _activeSessionId.value) {
@@ -171,67 +230,90 @@ export function useImBinding() {
       }
       return null
     } finally {
-      if (sessionId === _activeSessionId.value) {
-        loading.value = false
-      }
+      endAction(ImAction.COMPLETE)
     }
   }
 
-  async function handleUnbind(sessionId) {
-    if (!sessionId) return
-    loading.value = true
+  /**
+   * @param {string} action Distinguishes a plain unbind from the unbind half of
+   *   a channel switch, so only the button the user pressed shows a spinner.
+   */
+  async function handleUnbind(sessionId, action = ImAction.UNBIND) {
+    if (!sessionId) return false
+    beginAction(action, bindingState.value?.channel_id || '')
     error.value = null
     try {
       await unbindIm(sessionId)
       if (sessionId === _activeSessionId.value) {
+        _nextStateVersion()
         bindingState.value = null
+        syncResult.value = null
       }
-      await fetchChannels()
+      await fetchChannels(true)
+      return true
     } catch (e) {
       if (sessionId === _activeSessionId.value) {
         error.value = e.message
       }
+      return false
     } finally {
-      if (sessionId === _activeSessionId.value) {
-        loading.value = false
-      }
+      endAction(action)
     }
   }
 
+  /**
+   * Apply an ``im_unbound`` broadcast. The event itself is the whole truth, so
+   * there is nothing to re-read for the binding — only the channel list, whose
+   * instance rows carry the now-cleared session link.
+   */
+  async function handleRemoteUnbind(sessionId) {
+    if (isPending(ImAction.UNBIND) || isPending(ImAction.SWITCH) || isPending(ImAction.BIND)) {
+      return
+    }
+    if (sessionId === _activeSessionId.value) {
+      _nextStateVersion()
+      bindingState.value = null
+      error.value = null
+      initRequired.value = null
+      syncResult.value = null
+    }
+    await fetchChannels(true)
+  }
+
   async function handleInitialize(channelId, params = {}) {
-    loading.value = true
+    beginAction(ImAction.INITIALIZE, channelId)
     error.value = null
     try {
       const data = await initializeChannel(channelId, params)
       if (data?.init_status === 'error' && data?.error_message) {
         error.value = data.error_message
       }
-      await fetchChannels()
+      await fetchChannels(true)
       return data
     } catch (e) {
       error.value = e.message
       return null
     } finally {
-      loading.value = false
+      endAction(ImAction.INITIALIZE)
     }
   }
 
   async function handleResetChannel(channelId) {
-    loading.value = true
+    beginAction(ImAction.RESET, channelId)
     error.value = null
     try {
       await resetChannel(channelId)
-      await fetchChannels()
+      await fetchChannels(true)
     } catch (e) {
       error.value = e.message
     } finally {
-      loading.value = false
+      endAction(ImAction.RESET)
     }
   }
 
   async function handleSyncContext(sessionId) {
     if (!sessionId) return null
-    loading.value = true
+    beginAction(ImAction.SYNC)
     error.value = null
     syncResult.value = null
     try {
@@ -243,7 +325,7 @@ export function useImBinding() {
       syncResult.value = { error: e.message }
       return null
     } finally {
-      loading.value = false
+      endAction(ImAction.SYNC)
     }
   }
 
@@ -256,6 +338,7 @@ export function useImBinding() {
   }
 
   function resetState() {
+    _nextStateVersion()
     bindingState.value = null
     error.value = null
     initRequired.value = null
@@ -264,7 +347,10 @@ export function useImBinding() {
 
   return {
     bindingState,
-    loading,
+    statusLoading,
+    pendingAction,
+    pendingChannelId,
+    isPending,
     error,
     availableChannels,
     initRequired,
@@ -284,6 +370,7 @@ export function useImBinding() {
     handleBind,
     handleComplete,
     handleUnbind,
+    handleRemoteUnbind,
     handleInitialize,
     handleResetChannel,
     handleSyncContext,

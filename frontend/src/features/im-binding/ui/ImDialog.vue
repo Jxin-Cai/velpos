@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, nextTick, computed, onBeforeUnmount } from 'vue'
 import QRCode from 'qrcode'
-import { useImBinding } from '../model/useImBinding'
+import { useImBinding, ImAction } from '../model/useImBinding'
 import ChannelPicker from './ChannelPicker.vue'
 import ChannelInitDialog from './ChannelInitDialog.vue'
 import PromptBinder from './PromptBinder.vue'
@@ -37,7 +37,10 @@ function scheduleClose() {
 
 const {
   bindingState,
-  loading,
+  statusLoading,
+  pendingAction,
+  pendingChannelId,
+  isPending,
   error,
   availableChannels,
   initRequired,
@@ -65,6 +68,11 @@ const qrCanvas = ref(null)
 const friendUserIdInput = ref('')
 const selectedInstance = ref(null) // { id, name, channel_type, display_name, ... }
 const bindUiData = ref(null)
+// Land back on the instance list of the channel we just left, so switching
+// costs one click instead of re-walking the type grid.
+const preferredType = ref('')
+
+const busy = computed(() => pendingAction.value !== null)
 
 const stage = computed(() => {
   if (bindUiData.value) return 'prompt-confirm'
@@ -80,6 +88,7 @@ watch(() => props.visible, (val) => {
     selectedInstance.value = null
     bindUiData.value = null
     friendUserIdInput.value = ''
+    preferredType.value = ''
     if (props.sessionId) fetchStatus(props.sessionId)
     fetchChannels()
   }
@@ -205,10 +214,11 @@ function onQrComplete() {
   handleComplete(props.sessionId, channelId, { friend_user_id: fid })
 }
 
-function onUnbind() {
-  handleUnbind(props.sessionId)
+async function onUnbind() {
+  await handleUnbind(props.sessionId, ImAction.UNBIND)
   selectedInstance.value = null
   bindUiData.value = null
+  preferredType.value = ''
 }
 
 async function onSyncContext() {
@@ -220,7 +230,10 @@ async function onSyncContext() {
 }
 
 async function onSwitchChannel() {
-  await handleUnbind(props.sessionId)
+  const previousType = bindingState.value?.channel_type || ''
+  const unbound = await handleUnbind(props.sessionId, ImAction.SWITCH)
+  if (!unbound) return
+  preferredType.value = previousType
   selectedInstance.value = null
   bindUiData.value = null
 }
@@ -263,17 +276,21 @@ onBeforeUnmount(() => {
             <div v-if="error" :key="error" class="error-banner">{{ error }}</div>
           </Transition>
 
-          <div v-if="loading && stage === 'pick'" class="loading-state">
-            <div class="spinner"></div>
+          <div v-if="statusLoading && stage === 'pick'" class="loading-state">
+            <div class="spinner-small"></div>
             <span>Loading...</span>
           </div>
 
           <Transition name="stage-fade" mode="out-in">
             <!-- Stage: Pick channel (two-level: type → instances) -->
-            <div v-if="!loading && stage === 'pick'" key="pick" class="dialog-body">
+            <div v-if="stage === 'pick' && !statusLoading" key="pick" class="dialog-body">
               <ChannelPicker
                 :channels="availableChannels"
                 :current-session-id="sessionId"
+                :initial-type="preferredType"
+                :busy="busy"
+                :pending-channel-id="pendingChannelId"
+                :pending-action="pendingAction"
                 @select="onInstanceSelect"
                 @create="onChannelCreate"
                 @delete="onChannelDelete"
@@ -292,7 +309,7 @@ onBeforeUnmount(() => {
                 :description="initRequired?.description || ''"
                 :init-status="initRequired?.init_status || 'not_initialized'"
                 :ui-data="initRequired?.ui_data || {}"
-                :disabled="loading"
+                :disabled="busy"
                 @submit="onInitSubmit"
                 @back="onInitBack"
               />
@@ -304,7 +321,7 @@ onBeforeUnmount(() => {
                 :channel-name="selectedInstance?.display_name || selectedInstance?.name || ''"
                 :description="bindUiData?.description || ''"
                 :prompt="bindUiData?.prompt || ''"
-                :disabled="loading"
+                :disabled="busy"
                 @start="onPromptStart"
                 @back="onBack"
               />
@@ -341,9 +358,13 @@ onBeforeUnmount(() => {
                     <button
                       class="btn-primary btn-sm"
                       @click="onQrComplete"
-                      :disabled="loading || !friendUserIdInput.trim()"
+                      :disabled="busy || !friendUserIdInput.trim()"
                     >
-                      Complete
+                      <template v-if="isPending(ImAction.COMPLETE)">
+                        <div class="spinner-small"></div>
+                        Completing...
+                      </template>
+                      <template v-else>Complete</template>
                     </button>
                   </div>
                 </div>
@@ -377,8 +398,8 @@ onBeforeUnmount(() => {
                   <span class="info-value">{{ bindingState.channel_address }}</span>
                 </div>
                 <div class="bound-actions">
-                  <button class="btn-sync" @click="onSyncContext" :disabled="loading">
-                    <template v-if="loading && syncResult == null">
+                  <button class="btn-sync" @click="onSyncContext" :disabled="busy">
+                    <template v-if="isPending(ImAction.SYNC)">
                       <div class="spinner-small"></div>
                       Syncing...
                     </template>
@@ -390,11 +411,19 @@ onBeforeUnmount(() => {
                     </template>
                     <template v-else>Sync Context</template>
                   </button>
-                  <button class="btn-switch" @click="onSwitchChannel" :disabled="loading">
-                    Switch Channel
+                  <button class="btn-switch" @click="onSwitchChannel" :disabled="busy">
+                    <template v-if="isPending(ImAction.SWITCH)">
+                      <div class="spinner-small"></div>
+                      Switching...
+                    </template>
+                    <template v-else>Switch Channel</template>
                   </button>
-                  <button class="btn-danger" @click="onUnbind" :disabled="loading">
-                    Unbind
+                  <button class="btn-danger" @click="onUnbind" :disabled="busy">
+                    <template v-if="isPending(ImAction.UNBIND)">
+                      <div class="spinner-small"></div>
+                      Unbinding...
+                    </template>
+                    <template v-else>Unbind</template>
                   </button>
                 </div>
                 <p v-if="syncResult?.error" class="sync-error">{{ syncResult.error }}</p>
@@ -639,6 +668,10 @@ onBeforeUnmount(() => {
 }
 
 .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 8px 20px;
   border: none;
   border-radius: var(--radius-sm);
@@ -669,6 +702,10 @@ onBeforeUnmount(() => {
 }
 
 .btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 8px 20px;
   border: 1px solid var(--red);
   border-radius: var(--radius-sm);
@@ -695,11 +732,23 @@ onBeforeUnmount(() => {
 
 .bound-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 10px;
   margin-top: 4px;
 }
 
+/* Reserve room for the longest label so swapping in "Switching..." or
+   "Unbinding..." does not resize the row mid-click. */
+.bound-actions > button {
+  min-width: 124px;
+}
+
 .btn-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 8px 20px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
@@ -772,18 +821,16 @@ onBeforeUnmount(() => {
   color: var(--text-muted);
 }
 
-.spinner {
-  width: 20px;
-  height: 20px;
-  animation: spin 0.6s linear infinite;
-}
-
+/* Inherits the host's text colour so it reads correctly on the accent, danger
+   and success buttons alike. */
 .spinner-small {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
+  border: 2px solid currentColor;
+  border-top-color: transparent;
   border-radius: 50%;
+  opacity: 0.85;
+  flex-shrink: 0;
   animation: spin 0.6s linear infinite;
 }
 
@@ -804,7 +851,6 @@ onBeforeUnmount(() => {
     transition-duration: 0.01ms;
   }
   .bound-dot,
-  .spinner,
   .spinner-small {
     animation-duration: 0.01ms;
   }

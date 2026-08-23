@@ -351,6 +351,8 @@ class LarkAdapter(ImChannelAdapter):
         if conn:
             await self._stop_connection(conn)
 
+    _DISCONNECT_TIMEOUT_SECONDS = 5
+
     async def _stop_connection(self, conn: _WsConnection) -> None:
         """Stop a single WS connection.
 
@@ -367,7 +369,18 @@ class LarkAdapter(ImChannelAdapter):
             try:
                 setattr(client, "_velpos_expected_close", True)
                 future = asyncio.run_coroutine_threadsafe(client._disconnect(), ws_loop)
-                future.result(timeout=5)
+                # The WS runs on its own loop, so the handshake must be awaited
+                # rather than waited on synchronously: future.result() would
+                # freeze the caller's event loop, and with it every other
+                # request, for the whole timeout window.
+                await asyncio.wait_for(
+                    asyncio.wrap_future(future), self._DISCONNECT_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "[Lark-adapter] WS disconnect timed out after %ss for channel=%s",
+                    self._DISCONNECT_TIMEOUT_SECONDS, conn.channel_id,
+                )
             except Exception:
                 logger.debug("[Lark-adapter] WS disconnect error for channel=%s", conn.channel_id, exc_info=True)
             try:
@@ -376,8 +389,46 @@ class LarkAdapter(ImChannelAdapter):
                 pass
 
         conn.client = None
-        conn.ws_loop = None
         conn.thread = None
+        # Leave conn.ws_loop for the WS thread to drain pending tasks
+        # (ExpiringCache cron) before close.  Nulling it here races GC.
+
+    @staticmethod
+    def _shutdown_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+        """Cancel pending tasks, then close *loop*.
+
+        lark-oapi's ``ExpiringCache`` schedules a never-ending
+        ``_start_clear_cron`` task on whatever loop is current when the WS
+        client is constructed, and cancels that task in ``__del__``.  Closing
+        the loop while the task is still pending produces both
+        ``RuntimeError: Event loop is closed`` during GC and asyncio's
+        ``Task was destroyed but it is pending!`` log.
+        """
+        if loop.is_closed():
+            return
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            logger.warning(
+                "[Lark-adapter] Error draining WS event loop",
+                exc_info=True,
+            )
+        finally:
+            try:
+                if not loop.is_closed():
+                    loop.close()
+            except Exception:
+                logger.warning(
+                    "[Lark-adapter] Error closing WS event loop",
+                    exc_info=True,
+                )
 
     _RECONNECT_DELAYS = (5, 10, 30, 60)  # back-off for catastrophic failures only
 
@@ -598,12 +649,7 @@ class LarkAdapter(ImChannelAdapter):
                         )
 
                 conn.client = None
-
-                if not thread_loop.is_closed():
-                    try:
-                        thread_loop.close()
-                    except Exception:
-                        pass
+                self._shutdown_event_loop(thread_loop)
 
                 if conn.stop:
                     break
@@ -624,11 +670,8 @@ class LarkAdapter(ImChannelAdapter):
                 logger.error("[Lark-adapter] WS thread fatal channel=%s", conn.channel_id, exc_info=True)
         finally:
             conn.client = None
-            if conn.ws_loop is not None and not conn.ws_loop.is_closed():
-                try:
-                    conn.ws_loop.close()
-                except Exception:
-                    pass
+            if conn.ws_loop is not None:
+                self._shutdown_event_loop(conn.ws_loop)
             conn.ws_loop = None
             logger.info("[Lark-adapter] WS thread exited channel=%s", conn.channel_id)
 

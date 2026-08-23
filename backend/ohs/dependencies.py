@@ -376,6 +376,7 @@ async def _im_bind_for_session(session_id: str, channel_id: str) -> dict:
             accept_inbound_fn=_im_delivery_coordinator.accept_inbound,
             enqueue_outbound_fn=_im_delivery_coordinator.enqueue_outbound,
             stage_inbound_attachments_fn=_stage_inbound_attachments,
+            commit_unit_of_work=db_session.commit,
         )
         result = await svc.bind(session_id, channel_id, {})
         await db_session.commit()
@@ -392,6 +393,7 @@ async def _im_unbind_for_session(session_id: str) -> None:
                 registry=_im_channel_registry,
                 binding_repo=ImBindingRepositoryImpl(db_session),
                 init_repo=ChannelInitRepositoryImpl(db_session),
+                commit_unit_of_work=db_session.commit,
             )
             await svc.unbind(session_id)
             await db_session.commit()
@@ -585,6 +587,7 @@ async def get_im_channel_application_service(
         stage_inbound_attachments_fn=_stage_inbound_attachments,
         session_service_context_factory=_session_service_context,
         binding_context_factory=_binding_repos_context,
+        commit_unit_of_work=db_session.commit,
     )
 
 

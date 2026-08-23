@@ -74,6 +74,9 @@ class ImChannelApplicationService:
         # infr implementations directly.
         session_service_context_factory: Callable[[], AsyncContextManager[SessionApplicationService]] | None = None,
         binding_context_factory: Callable[[], AsyncContextManager[tuple[ImBindingRepository, ChannelInitRepository]]] | None = None,
+        # Commits the caller's unit of work. Required to make state visible to
+        # other DB connections before a broadcast invites clients to re-read it.
+        commit_unit_of_work: Callable[[], Awaitable[None]] | None = None,
         mode: str = "dev",
     ) -> None:
         self._registry = registry
@@ -89,6 +92,7 @@ class ImChannelApplicationService:
         self._stage_inbound_attachments = stage_inbound_attachments_fn
         self._session_service_context_factory = session_service_context_factory
         self._binding_context_factory = binding_context_factory
+        self._commit_unit_of_work = commit_unit_of_work
         self._mode = mode
 
     # ── 渠道发现 ──
@@ -164,12 +168,18 @@ class ImChannelApplicationService:
         if ci is None:
             return
 
-        # If bound, unbind first
+        # If bound, unbind first — but announce it only once the instance row
+        # is gone too, so clients reload against the final state.
         binding = await self._binding_repo.find_by_channel_id(channel_id)
-        if binding and binding.binding_status != BindingStatus.UNBOUND:
-            await self._force_unbind(binding)
+        if binding is not None and binding.binding_status == BindingStatus.UNBOUND:
+            binding = None
+        if binding is not None:
+            await self._force_unbind(binding, notify=False)
 
         await self._init_repo.remove(channel_id)
+
+        if binding is not None:
+            await self._notify_unbound(binding)
 
     async def rename_channel_instance(self, channel_id: str, name: str) -> dict[str, Any]:
         """重命名渠道实例."""
@@ -321,7 +331,9 @@ class ImChannelApplicationService:
                 "[IM-bind] Session %s already bound to channel_id=%s, unbinding first",
                 session_id, current_binding.channel_id,
             )
-            await self._force_unbind(current_binding)
+            # No im_unbound broadcast: the session is being rebound, not
+            # unbound, and this response already carries the resulting state.
+            await self._force_unbind(current_binding, notify=False)
 
         # 换绑时继承已有的路由上下文, 否则新绑定要等用户先发一条消息才能回复
         routing_carry_over: dict[str, str] = {}
@@ -928,6 +940,9 @@ class ImChannelApplicationService:
         Single Point of Truth for the complete unbind operation: adapter call,
         repo removal, and WebSocket broadcast. All three call-sites (delete_channel_instance,
         bind re-bind, unbind) delegate here so the flow is consistent.
+
+        Callers that still have more work to persist pass ``notify=False`` and
+        invoke :meth:`_notify_unbound` once their unit of work is complete.
         """
         try:
             await self._facade.stop_listening(binding)
@@ -937,11 +952,25 @@ class ImChannelApplicationService:
                 "Adapter unbind failed for session %s", binding.session_id, exc_info=True,
             )
         await self._binding_repo.remove(binding.session_id)
-        if notify and self._connection_manager:
-            await self._connection_manager.broadcast(
-                binding.session_id,
-                {"event": "im_unbound", "channel_type": binding.channel_type.value},
-            )
+        if notify:
+            await self._notify_unbound(binding)
+
+    async def _notify_unbound(self, binding: ImBinding) -> None:
+        """Announce that *binding* is gone, once the removal is durable.
+
+        Clients react to ``im_unbound`` by re-reading the binding state on a
+        different DB connection. Broadcasting while the delete is still
+        uncommitted hands them the row we just removed, and that stale read
+        overwrites the fresh state they already applied.
+        """
+        if self._connection_manager is None:
+            return
+        if self._commit_unit_of_work is not None:
+            await self._commit_unit_of_work()
+        await self._connection_manager.broadcast(
+            binding.session_id,
+            {"event": "im_unbound", "channel_type": binding.channel_type.value},
+        )
 
     @staticmethod
     def _binding_result_dict(binding: ImBinding, ui_data: Any) -> dict[str, Any]:

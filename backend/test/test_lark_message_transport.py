@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import json
+import sys
+import threading
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -672,3 +676,38 @@ async def test_stages_legacy_extensionless_image_before_lark_upload(
 
     # Assert
     assert Path(upload.await_args.args[0].body.image.name).suffix == ".jpg"
+
+
+def test_does_not_raise_on_cache_destructor_when_ws_loop_shuts_down() -> None:
+    from lark_oapi.core.cache.expiring_cache import ExpiringCache
+
+    errors: list[object] = []
+
+    def run_ws_thread() -> None:
+        previous_hook = sys.unraisablehook
+        sys.unraisablehook = lambda args: errors.append(args)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        cache: ExpiringCache | None = None
+        try:
+            cache = ExpiringCache(clear_interval=30)
+            loop.call_soon(loop.stop)
+            loop.run_forever()
+            LarkAdapter._shutdown_event_loop(loop)
+            cache = None
+            gc.collect()
+            if not loop.is_closed():
+                errors.append("loop_not_closed")
+        finally:
+            sys.unraisablehook = previous_hook
+            cache = None
+            if not loop.is_closed():
+                LarkAdapter._shutdown_event_loop(loop)
+            asyncio.set_event_loop(None)
+
+    thread = threading.Thread(target=run_ws_thread)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
