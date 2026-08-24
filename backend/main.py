@@ -426,7 +426,6 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to stop scheduler runner", exc_info=True)
 
     from ohs.dependencies import (
-        get_im_api_gateway,
         get_im_channel_facade,
         get_claude_agent_gateway,
         get_trace_collector,
@@ -444,15 +443,8 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to flush trace spans", exc_info=True)
 
     # Stop every registered IM channel — each adapter releases its own
-    # listeners and connections, so new channels need no change here.
+    # listeners, connections and gateways, so new channels need no change here.
     await get_im_channel_facade().close_all()
-
-    im_api_gateway = get_im_api_gateway()
-    if im_api_gateway is not None:
-        try:
-            await im_api_gateway.close()
-        except Exception:
-            logger.error("Failed to close IM API gateway", exc_info=True)
 
 
 from infr.config.app_config import app_config as _app_config
