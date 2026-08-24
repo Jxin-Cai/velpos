@@ -5,9 +5,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 
 from application.im_binding.im_channel_application_service import ImChannelApplicationService
+from domain.im_binding.model.im_delivery import ImDeliveryKind
 from domain.user.model.user import User
 from ohs.auth_dependency import get_current_user
-from ohs.dependencies import get_im_channel_application_service
+from ohs.dependencies import (
+    get_im_channel_application_service,
+    get_im_delivery_monitor,
+)
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.im_dto import (
     BindImRequest,
@@ -16,15 +20,19 @@ from ohs.http.dto.im_dto import (
     ChannelInstanceInfo,
     CompleteBindingRequest,
     CreateChannelRequest,
+    ImDeliveryOverviewResponse,
     ImStatusResponse,
     InitChannelRequest,
     InitChannelResponse,
     RenameChannelRequest,
+    RetryDeliveryResponse,
 )
+from ohs.im_delivery_monitor import ImDeliveryMonitor
 
 router = APIRouter(prefix="/api/im", tags=["IM"])
 
 ChannelServiceDep = Annotated[ImChannelApplicationService, Depends(get_im_channel_application_service)]
+DeliveryMonitorDep = Annotated[ImDeliveryMonitor, Depends(get_im_delivery_monitor)]
 
 
 # ── Channel discovery ──
@@ -169,3 +177,31 @@ async def sync_context(
 ) -> ApiResponse[dict[str, Any]]:
     result = await channel_service.sync_session_context(session_id)
     return ApiResponse.success(result)
+
+
+# ── Delivery observability ──
+
+@router.get(
+    "/bindings/{session_id}/deliveries",
+    summary="Get IM delivery queue status for session",
+)
+async def get_delivery_overview(
+    session_id: str,
+    delivery_monitor: DeliveryMonitorDep,
+) -> ApiResponse[ImDeliveryOverviewResponse]:
+    overview = await delivery_monitor.overview(session_id)
+    return ApiResponse.success(ImDeliveryOverviewResponse(**overview))
+
+
+@router.post(
+    "/bindings/{session_id}/deliveries/{kind}/{delivery_id}/retry",
+    summary="Requeue a permanently failed IM delivery",
+)
+async def retry_delivery(
+    session_id: str,
+    kind: ImDeliveryKind,
+    delivery_id: int,
+    delivery_monitor: DeliveryMonitorDep,
+) -> ApiResponse[RetryDeliveryResponse]:
+    requeued = await delivery_monitor.retry(session_id, kind, delivery_id)
+    return ApiResponse.success(RetryDeliveryResponse(requeued=requeued))

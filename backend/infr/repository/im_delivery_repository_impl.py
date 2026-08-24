@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import datetime
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -142,6 +143,50 @@ class ImInboxRepositoryImpl(ImInboxRepository):
                 )
             )
         )
+
+    async def find_recent_by_session(
+        self,
+        session_id: str,
+        limit: int,
+        statuses: Iterable[ImInboxStatus] | None = None,
+    ) -> list[ImInboxEvent]:
+        query = (
+            select(ImInboxEventModel)
+            .where(ImInboxEventModel.session_id == session_id)
+            .order_by(ImInboxEventModel.id.desc())
+            .limit(limit)
+        )
+        if statuses is not None:
+            query = query.where(
+                ImInboxEventModel.status.in_([s.value for s in statuses])
+            )
+        models = await self._session.scalars(query)
+        return [self._to_domain(model) for model in models]
+
+    async def count_by_status(self, session_id: str) -> dict[ImInboxStatus, int]:
+        rows = await self._session.execute(
+            select(ImInboxEventModel.status, func.count())
+            .where(ImInboxEventModel.session_id == session_id)
+            .group_by(ImInboxEventModel.status)
+        )
+        return {ImInboxStatus(status): count for status, count in rows.all()}
+
+    async def requeue(self, event_id: int, session_id: str) -> ImInboxEvent | None:
+        model = await self._session.scalar(
+            select(ImInboxEventModel)
+            .where(
+                ImInboxEventModel.id == event_id,
+                ImInboxEventModel.session_id == session_id,
+            )
+            .with_for_update()
+        )
+        if model is None or model.status != ImInboxStatus.DEAD.value:
+            return None
+        event = self._to_domain(model)
+        event.requeue()
+        self._apply(model, event)
+        await self._session.flush()
+        return event
 
     @staticmethod
     def _to_model(event: ImInboxEvent) -> ImInboxEventModel:
@@ -309,6 +354,53 @@ class ImOutboxRepositoryImpl(ImOutboxRepository):
                 )
             )
         )
+
+    async def find_recent_by_session(
+        self,
+        session_id: str,
+        limit: int,
+        statuses: Iterable[ImOutboxStatus] | None = None,
+    ) -> list[ImOutboxMessage]:
+        query = (
+            select(ImOutboxMessageModel)
+            .where(ImOutboxMessageModel.session_id == session_id)
+            .order_by(ImOutboxMessageModel.id.desc())
+            .limit(limit)
+        )
+        if statuses is not None:
+            query = query.where(
+                ImOutboxMessageModel.status.in_([s.value for s in statuses])
+            )
+        models = await self._session.scalars(query)
+        return [self._to_domain(model) for model in models]
+
+    async def count_by_status(self, session_id: str) -> dict[ImOutboxStatus, int]:
+        rows = await self._session.execute(
+            select(ImOutboxMessageModel.status, func.count())
+            .where(ImOutboxMessageModel.session_id == session_id)
+            .group_by(ImOutboxMessageModel.status)
+        )
+        return {ImOutboxStatus(status): count for status, count in rows.all()}
+
+    async def requeue(
+        self, message_id: int, session_id: str,
+    ) -> ImOutboxMessage | None:
+        model = await self._session.scalar(
+            select(ImOutboxMessageModel)
+            .where(
+                ImOutboxMessageModel.id == message_id,
+                ImOutboxMessageModel.session_id == session_id,
+            )
+            .with_for_update()
+        )
+        requeueable = (ImOutboxStatus.DEAD.value, ImOutboxStatus.CANCELLED.value)
+        if model is None or model.status not in requeueable:
+            return None
+        message = self._to_domain(model)
+        message.requeue()
+        self._apply(model, message)
+        await self._session.flush()
+        return message
 
     @staticmethod
     def _to_model(message: ImOutboxMessage) -> ImOutboxMessageModel:

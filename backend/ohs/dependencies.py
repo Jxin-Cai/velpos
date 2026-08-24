@@ -46,18 +46,12 @@ from infr.client.claude_command_gateway import ClaudeCommandGateway
 from infr.client.claude_plugin_manager import ClaudePluginManager
 from infr.client.claude_session_manager import ClaudeSessionManagerImpl
 from infr.client.connection_manager import ConnectionManager
-from infr.client.im_api_gateway import ImApiGateway
-from infr.client.im_ws_client import ImWsClient
 from infr.client.settings_file_service import SettingsFileService
 from infr.client.terminal_executor import TerminalExecutor
 from infr.config.database import get_async_session
 from infr.config.im_config import ImConfig
-from infr.im.lark.lark_adapter import LARK_CHANNEL_SPEC, LarkAdapter
-from infr.im.openim.openim_adapter import OPENIM_CHANNEL_SPEC, OpenImAdapter, OpenImStubAdapter
-from infr.im.qq.qq_adapter import QQ_CHANNEL_SPEC, QqAdapter
-from infr.im.qq.qq_api import QqApiClient
-from infr.im.qq.qq_ws_client import QqWsClient
-from infr.im.weixin.weixin_adapter import WEIXIN_CHANNEL_SPEC, WeixinAdapter
+from infr.im.builtin_channels import register_builtin_channels
+from infr.im.channel_provider import ChannelBuildContext
 from infr.repository.attachment_repository_impl import AttachmentRepositoryImpl
 from infr.repository.card_execution_repository_impl import CardExecutionRepositoryImpl
 from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
@@ -86,6 +80,7 @@ from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.team.model.status import ExecutionFailureCategory, ExecutionFailurePhase
 from ohs.session_event_coordinator import SessionEventCoordinator
 from ohs.im_delivery_coordinator import ImDeliveryCoordinator
+from ohs.im_delivery_monitor import ImDeliveryMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -99,43 +94,25 @@ _settings_file_service = SettingsFileService()
 _terminal_executor = TerminalExecutor()
 
 _im_config = ImConfig()
-_im_api_gateway: ImApiGateway | None = (
-    ImApiGateway(config=_im_config) if _im_config.enabled else None
-)
-_im_ws_client: ImWsClient | None = (
-    ImWsClient(config=_im_config) if _im_config.enabled else None
-)
 
 # ── IM Channel Registry ──
+# 渠道装配细节全部封装在各渠道包的 provider 中; 新增渠道只需要在
+# infr/im/builtin_channels.py 的清单里追加一行, 组合根保持不变。
 _im_channel_registry = ImChannelRegistry()
-
-# Register OpenIM adapter (real adapter when config enabled, stub otherwise)
-if _im_config.enabled and _im_api_gateway is not None and _im_ws_client is not None:
-    _im_channel_registry.register(
-        OPENIM_CHANNEL_SPEC,
-        lambda: OpenImAdapter(im_gateway=_im_api_gateway, im_ws_gateway=_im_ws_client),
-    )
-else:
-    _im_channel_registry.register(OPENIM_CHANNEL_SPEC, OpenImStubAdapter)
-
-# Register Lark IM adapter (singleton — WS listener lives on this instance)
-_lark_adapter = LarkAdapter()
-_im_channel_registry.register(LARK_CHANNEL_SPEC, lambda: _lark_adapter)
-
-# Register QQ adapter (server-managed with shared WS + API clients)
-_qq_api_client = QqApiClient()
-_qq_ws_client = QqWsClient(api_client=_qq_api_client)
-_im_channel_registry.register(
-    QQ_CHANNEL_SPEC,
-    lambda: QqAdapter(ws_client=_qq_ws_client, api_client=_qq_api_client),
+register_builtin_channels(
+    _im_channel_registry,
+    ChannelBuildContext(im_config=_im_config),
 )
 
-# Register WeChat adapter (singleton — manages per-channel poll loops internally)
-_weixin_adapter = WeixinAdapter()
-_im_channel_registry.register(WEIXIN_CHANNEL_SPEC, lambda: _weixin_adapter)
-
 _im_channel_facade = ImChannelFacade(_im_channel_registry)
-_im_delivery_coordinator = ImDeliveryCoordinator(_im_channel_registry)
+_im_delivery_coordinator = ImDeliveryCoordinator(
+    _im_channel_registry,
+    broadcast_fn=_connection_manager.broadcast,
+)
+_im_delivery_monitor = ImDeliveryMonitor(
+    wake_inbox=_im_delivery_coordinator.wake_inbox,
+    wake_outbox=_im_delivery_coordinator.wake_outbox,
+)
 
 
 async def _stage_inbound_attachments(
@@ -541,28 +518,12 @@ def get_im_delivery_coordinator() -> ImDeliveryCoordinator:
     return _im_delivery_coordinator
 
 
+def get_im_delivery_monitor() -> ImDeliveryMonitor:
+    return _im_delivery_monitor
+
+
 def get_session_event_coordinator() -> SessionEventCoordinator:
     return _session_coordinator
-
-
-def get_lark_adapter() -> LarkAdapter:
-    return _lark_adapter
-
-
-def get_weixin_adapter() -> WeixinAdapter:
-    return _weixin_adapter
-
-
-def get_qq_ws_client() -> QqWsClient:
-    return _qq_ws_client
-
-
-def get_im_api_gateway() -> ImApiGateway | None:
-    return _im_api_gateway
-
-
-def get_im_ws_client() -> ImWsClient | None:
-    return _im_ws_client
 
 
 def get_create_session_service_factory():

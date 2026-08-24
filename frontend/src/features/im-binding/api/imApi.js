@@ -53,3 +53,19 @@ export function resetChannel(channelId) {
 export function syncContext(sessionId) {
   return post(`/im/bindings/${encodeURIComponent(sessionId)}/sync-context`, {})
 }
+
+// ── Delivery observability ──
+
+export function getDeliveries(sessionId) {
+  return get(`/im/bindings/${encodeURIComponent(sessionId)}/deliveries`)
+}
+
+/**
+ * @param {'inbox'|'outbox'} kind Queue direction of the failed delivery.
+ */
+export function retryDelivery(sessionId, kind, deliveryId) {
+  return post(
+    `/im/bindings/${encodeURIComponent(sessionId)}/deliveries/${encodeURIComponent(kind)}/${encodeURIComponent(deliveryId)}/retry`,
+    {},
+  )
+}

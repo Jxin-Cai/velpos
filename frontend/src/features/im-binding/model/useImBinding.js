@@ -11,6 +11,8 @@ import {
   initializeChannel,
   resetChannel,
   syncContext,
+  getDeliveries,
+  retryDelivery,
 } from '../api/imApi'
 
 /** Mutations that own the dialog's busy state, one at a time. */
@@ -25,6 +27,7 @@ export const ImAction = Object.freeze({
   INITIALIZE: 'initialize',
   RESET: 'reset',
   SYNC: 'sync',
+  RETRY_DELIVERY: 'retry_delivery',
 })
 
 const bindingState = ref(null)
@@ -32,6 +35,7 @@ const error = ref(null)
 const availableChannels = ref([])
 const initRequired = ref(null)
 const syncResult = ref(null)
+const deliveryOverview = ref(null)
 
 const statusLoading = ref(false)
 const pendingAction = ref(null)
@@ -115,6 +119,7 @@ export function useImBinding() {
       error.value = null
       initRequired.value = null
       syncResult.value = null
+      deliveryOverview.value = null
     }
     _activeSessionId.value = sessionId
     const version = _nextStateVersion()
@@ -248,6 +253,7 @@ export function useImBinding() {
         _nextStateVersion()
         bindingState.value = null
         syncResult.value = null
+        deliveryOverview.value = null
       }
       await fetchChannels(true)
       return true
@@ -276,6 +282,7 @@ export function useImBinding() {
       error.value = null
       initRequired.value = null
       syncResult.value = null
+      deliveryOverview.value = null
     }
     await fetchChannels(true)
   }
@@ -329,6 +336,47 @@ export function useImBinding() {
     }
   }
 
+  async function fetchDeliveries(sessionId) {
+    if (!sessionId) return null
+    try {
+      const data = await getDeliveries(sessionId)
+      if (sessionId === _activeSessionId.value) {
+        deliveryOverview.value = data || null
+      }
+      return data
+    } catch {
+      // Delivery health is auxiliary — a failed read must not break the dialog.
+      if (sessionId === _activeSessionId.value) {
+        deliveryOverview.value = null
+      }
+      return null
+    }
+  }
+
+  async function handleRetryDelivery(sessionId, kind, deliveryId) {
+    if (!sessionId || !deliveryId) return false
+    beginAction(ImAction.RETRY_DELIVERY, String(deliveryId))
+    error.value = null
+    try {
+      const data = await retryDelivery(sessionId, kind, deliveryId)
+      await fetchDeliveries(sessionId)
+      return !!data?.requeued
+    } catch (e) {
+      if (sessionId === _activeSessionId.value) {
+        error.value = e.message
+      }
+      return false
+    } finally {
+      endAction(ImAction.RETRY_DELIVERY)
+    }
+  }
+
+  /** Apply an ``im_delivery_update`` broadcast: refresh the delivery view. */
+  async function handleRemoteDeliveryUpdate(sessionId) {
+    if (sessionId !== _activeSessionId.value) return
+    await fetchDeliveries(sessionId)
+  }
+
   function clearInitRequired() {
     initRequired.value = null
   }
@@ -343,6 +391,7 @@ export function useImBinding() {
     error.value = null
     initRequired.value = null
     syncResult.value = null
+    deliveryOverview.value = null
   }
 
   return {
@@ -355,6 +404,7 @@ export function useImBinding() {
     availableChannels,
     initRequired,
     syncResult,
+    deliveryOverview,
     isBound,
     isBinding,
     hasChannels,
@@ -374,6 +424,9 @@ export function useImBinding() {
     handleInitialize,
     handleResetChannel,
     handleSyncContext,
+    fetchDeliveries,
+    handleRetryDelivery,
+    handleRemoteDeliveryUpdate,
     clearInitRequired,
     clearSyncResult,
     resetState,

@@ -70,3 +70,10 @@ class ImGateway(ABC):
         Returns the add-friend link URL string.
         """
         ...
+
+    async def close(self) -> None:
+        """Release long-lived resources (HTTP connection pools etc.).
+
+        Default is a no-op so implementations without persistent resources
+        need not override it.
+        """

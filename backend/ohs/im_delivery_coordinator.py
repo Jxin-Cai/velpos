@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import secrets
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -23,10 +23,17 @@ from domain.im_binding.acl.channel_errors import (
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.im_binding.model.channel_route import ChannelRoute
-from domain.im_binding.model.im_delivery import ImInboxEvent, ImOutboxMessage
+from domain.im_binding.model.im_delivery import (
+    ImDeliveryKind,
+    ImInboxEvent,
+    ImInboxStatus,
+    ImOutboxMessage,
+    ImOutboxStatus,
+)
 from domain.im_binding.model.im_binding import ImBinding
 from domain.im_binding.model.im_message import InboundMessage, OutboundMessage
 from infr.config.database import async_session_factory
+from infr.config.im_delivery_config import ImDeliveryPolicy
 from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
 from infr.repository.im_binding_repository_impl import ImBindingRepositoryImpl
 from infr.repository.im_delivery_repository_impl import (
@@ -38,9 +45,11 @@ from infr.repository.session_repository_impl import SessionRepositoryImpl
 
 logger = logging.getLogger(__name__)
 
-_LEASE_SECONDS = 120
-_MAX_ATTEMPTS = 8
-_MAX_BACKOFF_SECONDS = 300
+#: WebSocket 事件名 — 队列条目进入终态失败时通知 Web 客户端刷新投递视图.
+IM_DELIVERY_UPDATE_EVENT = "im_delivery_update"
+
+#: 广播回调签名: (session_id, payload) -> None.
+BroadcastFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class _InboxOutcome(str, Enum):
@@ -60,12 +69,21 @@ class ImDeliveryCoordinator:
     """持久化的、与渠道无关的 IM 收发投递.
 
     所有渠道差异都由 :class:`ImChannelFacade` 吸收, 本类只关心队列语义:
-    租约、重试退避、幂等与死信。
+    租约、重试退避、幂等与死信。队列参数由 :class:`ImDeliveryPolicy`
+    提供, 可经环境变量调优。
     """
 
-    def __init__(self, registry: ImChannelRegistry) -> None:
+    def __init__(
+        self,
+        registry: ImChannelRegistry,
+        *,
+        policy: ImDeliveryPolicy | None = None,
+        broadcast_fn: BroadcastFn | None = None,
+    ) -> None:
         self._registry = registry
         self._facade = ImChannelFacade(registry)
+        self._policy = policy or ImDeliveryPolicy.from_env()
+        self._broadcast = broadcast_fn
         self._closing = False
         self._inbox_wakeup = asyncio.Event()
         self._outbox_wakeup = asyncio.Event()
@@ -77,24 +95,30 @@ class ImDeliveryCoordinator:
         self._closing = False
         self._inbox_wakeup = asyncio.Event()
         self._outbox_wakeup = asyncio.Event()
-        inbox_workers = self._configured_workers("IM_INBOX_WORKERS", 4)
-        outbox_workers = self._configured_workers("IM_OUTBOX_WORKERS", 4)
         self._tasks = [
             *[
                 asyncio.create_task(
                     self._run_inbox(),
                     name=f"im-inbox-worker-{index}",
                 )
-                for index in range(inbox_workers)
+                for index in range(self._policy.inbox_workers)
             ],
             *[
                 asyncio.create_task(
                     self._run_outbox(),
                     name=f"im-outbox-worker-{index}",
                 )
-                for index in range(outbox_workers)
+                for index in range(self._policy.outbox_workers)
             ],
         ]
+
+    def wake_inbox(self) -> None:
+        """唤醒入站 worker — 有新事件入队或死信被重投时调用."""
+        self._inbox_wakeup.set()
+
+    def wake_outbox(self) -> None:
+        """唤醒出站 worker — 有新消息入队或死信被重投时调用."""
+        self._outbox_wakeup.set()
 
     async def close(self) -> None:
         self._closing = True
@@ -129,7 +153,7 @@ class ImDeliveryCoordinator:
                 message.external_message_id,
             )
             return False
-        self._inbox_wakeup.set()
+        self.wake_inbox()
         return True
 
     async def enqueue_outbound(
@@ -164,7 +188,7 @@ class ImDeliveryCoordinator:
             )
             saved = await ImOutboxRepositoryImpl(db).enqueue(message)
             await db.commit()
-        self._outbox_wakeup.set()
+        self.wake_outbox()
         return saved.id
 
     async def _run_inbox(self) -> None:
@@ -194,7 +218,7 @@ class ImDeliveryCoordinator:
     async def _process_one_inbox(self) -> bool:
         async with async_session_factory() as db:
             repo = ImInboxRepositoryImpl(db)
-            event = await repo.claim_next(datetime.now(), _LEASE_SECONDS)
+            event = await repo.claim_next(datetime.now(), self._policy.lease_seconds)
             if event is None:
                 await db.commit()
                 return False
@@ -242,7 +266,7 @@ class ImDeliveryCoordinator:
                 await service.process_inbound_event(
                     binding,
                     event,
-                    is_final_attempt=event.attempt_count >= _MAX_ATTEMPTS,
+                    is_final_attempt=event.attempt_count >= self._policy.max_attempts,
                 )
                 await db.commit()
             await self._finish_inbox(event, _InboxOutcome.PROCESSED)
@@ -287,7 +311,9 @@ class ImDeliveryCoordinator:
     async def _process_one_outbox(self) -> bool:
         async with async_session_factory() as db:
             repo = ImOutboxRepositoryImpl(db)
-            message = await repo.claim_next(datetime.now(), _LEASE_SECONDS)
+            message = await repo.claim_next(
+                datetime.now(), self._policy.lease_seconds,
+            )
             if message is None:
                 await db.commit()
                 return False
@@ -383,13 +409,24 @@ class ImDeliveryCoordinator:
     ) -> None:
         if outcome is _InboxOutcome.PROCESSED:
             event.mark_processed()
-        elif outcome is _InboxOutcome.DEAD or event.attempt_count >= _MAX_ATTEMPTS:
+        elif (
+            outcome is _InboxOutcome.DEAD
+            or event.attempt_count >= self._policy.max_attempts
+        ):
             event.mark_dead(error_message or "Maximum retry attempts reached")
         else:
             event.mark_retry(error_message, self._retry_delay(event.attempt_count))
         async with async_session_factory() as db:
             await ImInboxRepositoryImpl(db).save(event)
             await db.commit()
+        if event.status is ImInboxStatus.DEAD:
+            await self._notify_terminal_failure(
+                event.session_id,
+                ImDeliveryKind.INBOX,
+                delivery_id=event.id,
+                status=event.status.value,
+                error_message=event.error_message,
+            )
 
     async def _finish_outbox(
         self,
@@ -404,13 +441,56 @@ class ImDeliveryCoordinator:
             message.mark_cancelled(error_message)
         elif outcome is _OutboxOutcome.DEAD:
             message.mark_dead(error_message)
-        elif message.attempt_count >= _MAX_ATTEMPTS:
+        elif message.attempt_count >= self._policy.max_attempts:
             message.mark_dead(error_message or "Maximum retry attempts reached")
         else:
             message.mark_retry(error_message, self._retry_delay(message.attempt_count))
         async with async_session_factory() as db:
             await ImOutboxRepositoryImpl(db).save(message)
             await db.commit()
+        if message.status in (ImOutboxStatus.DEAD, ImOutboxStatus.CANCELLED):
+            await self._notify_terminal_failure(
+                message.session_id,
+                ImDeliveryKind.OUTBOX,
+                delivery_id=message.id,
+                status=message.status.value,
+                error_message=message.error_message,
+            )
+
+    async def _notify_terminal_failure(
+        self,
+        session_id: str,
+        kind: ImDeliveryKind,
+        *,
+        delivery_id: int,
+        status: str,
+        error_message: str,
+    ) -> None:
+        """终态失败要主动告诉 Web 客户端, 而不是等用户自己发现消息没送到."""
+        if self._broadcast is None:
+            return
+        try:
+            await self._broadcast(
+                session_id,
+                {
+                    "event": IM_DELIVERY_UPDATE_EVENT,
+                    "data": {
+                        "kind": kind.value,
+                        "delivery_id": delivery_id,
+                        "status": status,
+                        "error_message": error_message,
+                    },
+                },
+            )
+        except Exception:
+            # 广播失败只影响提示的及时性, 不能反过来破坏队列终态写入.
+            logger.error(
+                "Failed to broadcast IM delivery failure: session=%s kind=%s id=%s",
+                session_id,
+                kind.value,
+                delivery_id,
+                exc_info=True,
+            )
 
     async def _wait_for_work(self, wakeup: asyncio.Event) -> None:
         wakeup.clear()
@@ -484,14 +564,16 @@ class ImDeliveryCoordinator:
             resolved.append(item)
         return resolved
 
-    @staticmethod
-    def _retry_delay(attempt_count: int) -> int:
+    def _retry_delay(self, attempt_count: int) -> int:
         """指数退避 + 抖动.
 
         渠道限流时同一批消息往往一起失败, 没有抖动就会在同一秒齐发重试,
         再次触发限流。
         """
-        backoff = min(_MAX_BACKOFF_SECONDS, 2 ** min(max(attempt_count, 1), 8))
+        backoff = min(
+            self._policy.max_backoff_seconds,
+            2 ** min(max(attempt_count, 1), 8),
+        )
         return backoff + secrets.randbelow(max(1, backoff // 2) + 1)
 
     @staticmethod
@@ -500,17 +582,3 @@ class ImDeliveryCoordinator:
             return value
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         return f"sha256:{digest}"
-
-    @staticmethod
-    def _configured_workers(env_name: str, default: int) -> int:
-        raw_value = os.getenv(env_name, str(default))
-        try:
-            return min(16, max(1, int(raw_value)))
-        except ValueError:
-            logger.warning(
-                "Invalid %s=%r; using %s",
-                env_name,
-                raw_value,
-                default,
-            )
-            return default

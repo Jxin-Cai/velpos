@@ -156,6 +156,7 @@ class OpenImAdapter(ImChannelAdapter):
 
     async def close(self) -> None:
         await self._im_ws_gateway.close_all()
+        await self._im_gateway.close()
 
     # ── Routing — OpenIM 用 friend_user_id 定位收件人 ──
 
