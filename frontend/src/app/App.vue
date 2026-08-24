@@ -76,7 +76,10 @@ const {
   restoreLastSession,
 } = useSessionList()
 
-const { handleRemoteUnbind: applyImUnbound } = useImBinding()
+const {
+  handleRemoteUnbind: applyImUnbound,
+  handleRemoteDeliveryUpdate: applyImDeliveryUpdate,
+} = useImBinding()
 
 const { addNotification } = useNotifications()
 const { markWorking, markDone, markViewed, syncWorkingSessions, unviewedIds } = useWorkingSessions()
@@ -585,6 +588,9 @@ const _wsEventHandlers = {
   permission_request: _handleInteractiveRequest,
   im_unbound(sessionId, _data, { isCurrent }) {
     if (isCurrent) applyImUnbound(sessionId)
+  },
+  im_delivery_update(sessionId, _data, { isCurrent }) {
+    if (isCurrent) applyImDeliveryUpdate(sessionId)
   },
   vb_started(sessionId, _data, { isCurrent }) {
     if (isCurrent) { vbRunning.value = true; vbMessage.value = 'Codex is applying review comments…' }

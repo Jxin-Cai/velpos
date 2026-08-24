@@ -45,6 +45,7 @@ const {
   availableChannels,
   initRequired,
   syncResult,
+  deliveryOverview,
   isBound,
   isBinding,
   bindingMode,
@@ -59,6 +60,8 @@ const {
   handleInitialize,
   handleResetChannel,
   handleSyncContext,
+  fetchDeliveries,
+  handleRetryDelivery,
   clearInitRequired,
   clearSyncResult,
   resetState,
@@ -81,6 +84,38 @@ const stage = computed(() => {
   if (isBinding.value) return bindingMode.value === 'prompt' ? 'prompt-binding' : 'qr-binding'
   return 'pick'
 })
+
+// ── Delivery health (visible on the bound stage) ──
+
+const RETRYABLE_STATUSES = ['dead', 'cancelled']
+
+const failedDeliveries = computed(() => {
+  const overview = deliveryOverview.value
+  if (!overview) return []
+  return [...(overview.outbox?.unsettled || []), ...(overview.inbox?.unsettled || [])]
+    .filter((item) => RETRYABLE_STATUSES.includes(item.status))
+})
+
+const pendingDeliveryCount = computed(() => {
+  const overview = deliveryOverview.value
+  if (!overview) return 0
+  const inFlight = ['pending', 'sending', 'retry', 'received', 'processing']
+  let total = 0
+  for (const queue of [overview.outbox, overview.inbox]) {
+    for (const status of inFlight) {
+      total += queue?.counts?.[status] || 0
+    }
+  }
+  return total
+})
+
+watch(stage, (value) => {
+  if (value === 'bound' && props.sessionId) fetchDeliveries(props.sessionId)
+})
+
+async function onRetryDelivery(item) {
+  await handleRetryDelivery(props.sessionId, item.kind, item.id)
+}
 
 watch(() => props.visible, (val) => {
   if (val) {
@@ -427,6 +462,37 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
                 <p v-if="syncResult?.error" class="sync-error">{{ syncResult.error }}</p>
+
+                <div v-if="pendingDeliveryCount > 0" class="state-info">
+                  <span class="info-label">Delivering:</span>
+                  <span class="info-value">{{ pendingDeliveryCount }} message(s) in flight</span>
+                </div>
+
+                <div v-if="failedDeliveries.length" class="delivery-failures">
+                  <p class="delivery-failures-title">
+                    Failed deliveries ({{ failedDeliveries.length }})
+                  </p>
+                  <div
+                    v-for="item in failedDeliveries"
+                    :key="`${item.kind}-${item.id}`"
+                    class="delivery-failure-row"
+                  >
+                    <div class="delivery-failure-main">
+                      <span class="delivery-failure-preview">{{ item.content_preview || '(no text)' }}</span>
+                      <span class="delivery-failure-error">{{ item.error_message || item.status }}</span>
+                    </div>
+                    <button
+                      class="btn-retry-delivery"
+                      :disabled="busy"
+                      @click="onRetryDelivery(item)"
+                    >
+                      <template v-if="isPending(ImAction.RETRY_DELIVERY) && pendingChannelId === String(item.id)">
+                        <div class="spinner-small"></div>
+                      </template>
+                      <template v-else>Retry</template>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </Transition>
@@ -808,6 +874,84 @@ onBeforeUnmount(() => {
   color: var(--red);
   text-align: center;
   margin: 0;
+}
+
+/* ── Delivery health ── */
+
+.delivery-failures {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.delivery-failures-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--red);
+  margin: 0;
+}
+
+.delivery-failure-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--red-dim);
+  border-radius: var(--radius-sm);
+}
+
+.delivery-failure-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.delivery-failure-preview {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delivery-failure-error {
+  font-size: 11px;
+  color: var(--red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-retry-delivery {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 52px;
+  padding: 4px 10px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.btn-retry-delivery:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+
+.btn-retry-delivery:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .dialog-footer {
