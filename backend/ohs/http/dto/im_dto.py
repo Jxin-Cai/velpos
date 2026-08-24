@@ -86,6 +86,37 @@ class BindImResponse(BaseModel):
         return cls(**data)
 
 
+class ImDeliveryItem(BaseModel):
+    """一条未结清的投递条目 — 前端据此展示失败原因并发起重投."""
+
+    id: int
+    kind: str = Field(description="Queue direction: inbox | outbox")
+    status: str
+    content_preview: str = ""
+    attempt_count: int = 0
+    next_attempt_at: str = ""
+    error_message: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ImDeliveryQueueStatus(BaseModel):
+    counts: dict[str, int] = Field(default_factory=dict)
+    unsettled: list[ImDeliveryItem] = Field(default_factory=list)
+
+
+class ImDeliveryOverviewResponse(BaseModel):
+    session_id: str
+    inbox: ImDeliveryQueueStatus
+    outbox: ImDeliveryQueueStatus
+
+
+class RetryDeliveryResponse(BaseModel):
+    requeued: bool = Field(
+        description="Whether the delivery was actually put back on the queue",
+    )
+
+
 class ImStatusResponse(BaseModel):
     session_id: str
     channel_type: str = ""

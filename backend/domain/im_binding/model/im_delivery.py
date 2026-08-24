@@ -25,6 +25,35 @@ class ImOutboxStatus(str, Enum):
     DEAD = "dead"
 
 
+class ImDeliveryKind(str, Enum):
+    """投递方向 — 监控与重投 API 用它区分两条队列."""
+
+    INBOX = "inbox"
+    OUTBOX = "outbox"
+
+
+#: 入站队列中"尚未成功"的状态 — 监控视图关注的对象.
+INBOX_UNSETTLED_STATUSES: frozenset[ImInboxStatus] = frozenset(
+    {
+        ImInboxStatus.RECEIVED,
+        ImInboxStatus.PROCESSING,
+        ImInboxStatus.RETRY,
+        ImInboxStatus.DEAD,
+    }
+)
+
+#: 出站队列中"尚未成功"的状态 — 监控视图关注的对象.
+OUTBOX_UNSETTLED_STATUSES: frozenset[ImOutboxStatus] = frozenset(
+    {
+        ImOutboxStatus.PENDING,
+        ImOutboxStatus.SENDING,
+        ImOutboxStatus.RETRY,
+        ImOutboxStatus.CANCELLED,
+        ImOutboxStatus.DEAD,
+    }
+)
+
+
 @dataclass
 class ImInboxEvent:
     id: int
@@ -78,6 +107,24 @@ class ImInboxEvent:
         self.lease_until = None
         self.error_message = error_message[:1000]
         self.updated_at = datetime.now()
+
+    def requeue(self) -> None:
+        """把死信重新放回队列, 尝试计数归零.
+
+        只允许从 DEAD 状态发起: 其他状态要么还在队列里, 要么已成功,
+        重投都会造成重复处理。
+        """
+        if self.status is not ImInboxStatus.DEAD:
+            raise ValueError(
+                f"Only dead inbox events can be requeued, "
+                f"current status: {self.status.value}"
+            )
+        now = datetime.now()
+        self.status = ImInboxStatus.RETRY
+        self.attempt_count = 0
+        self.next_attempt_at = now
+        self.lease_until = None
+        self.updated_at = now
 
 
 @dataclass
@@ -133,3 +180,22 @@ class ImOutboxMessage:
         self.lease_until = None
         self.error_message = error_message[:1000]
         self.updated_at = datetime.now()
+
+    def requeue(self) -> None:
+        """把最终失败的消息重新放回队列, 尝试计数归零.
+
+        DEAD 与 CANCELLED 均可重投: CANCELLED 多因凭证失效或换绑而取消,
+        用户修复渠道后重投是合理动作; 队列 worker 会重新校验绑定,
+        条件仍不满足时消息会被再次取消, 不会误发。
+        """
+        if self.status not in (ImOutboxStatus.DEAD, ImOutboxStatus.CANCELLED):
+            raise ValueError(
+                f"Only dead or cancelled outbox messages can be requeued, "
+                f"current status: {self.status.value}"
+            )
+        now = datetime.now()
+        self.status = ImOutboxStatus.RETRY
+        self.attempt_count = 0
+        self.next_attempt_at = now
+        self.lease_until = None
+        self.updated_at = now
