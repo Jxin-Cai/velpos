@@ -79,19 +79,26 @@ class MessageConversionService:
         assistant message or no text blocks are found.
         """
         for msg in reversed(messages):
-            if msg.message_type == MessageType.ASSISTANT:
-                content = msg.content
-                if isinstance(content, dict):
-                    blocks = content.get("blocks", [])
-                    texts = [
-                        b.get("text", "")
-                        for b in blocks
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    ]
-                    text = "".join(texts).strip()
-                    if text:
-                        return text
+            text = MessageConversionService.assistant_text_of(msg)
+            if text:
+                return text
         return ""
+
+    @staticmethod
+    def assistant_text_of(message: Message) -> str:
+        """返回单条 assistant 消息的文本内容, 非 assistant 或无文本时为空."""
+        if message.message_type != MessageType.ASSISTANT:
+            return ""
+        content = message.content
+        if not isinstance(content, dict):
+            return ""
+        blocks = content.get("blocks", [])
+        texts = [
+            b.get("text", "")
+            for b in blocks
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        return "".join(texts).strip()
 
     @staticmethod
     def summarise_content(content: dict[str, Any]) -> str:

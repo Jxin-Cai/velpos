@@ -150,6 +150,7 @@ function addMessageTo(sessionId, msg) {
   }
   msg = restoreInteractiveAnswerState(sessionId, msg)
   if (!msg.timestamp) msg.timestamp = Date.now()
+  if (!msg.created_at) msg.created_at = new Date(msg.timestamp).toISOString()
   _assignIdFor(state, msg)
   state.messages.push(msg)
   state.messageWindow.end_index = Math.max(state.messageWindow.end_index, msg._index + 1)

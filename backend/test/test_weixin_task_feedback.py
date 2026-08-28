@@ -8,7 +8,7 @@ import pytest
 
 from application.im_binding.im_channel_application_service import (
     ImChannelApplicationService,
-    RetryableInboundError,
+    SessionBusyError,
     TerminalInboundError,
 )
 from application.im_binding.im_channel_facade import ImChannelFacade
@@ -205,27 +205,43 @@ async def test_refreshes_typing_status_when_keepalive_interval_elapses(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_stops_polling_when_wechat_credentials_expire():
+async def test_keeps_polling_with_long_backoff_when_wechat_credentials_rejected(
+    monkeypatch,
+):
     # Arrange
     adapter = WeixinAdapter()
     adapter._api = Mock(
         get_updates=AsyncMock(side_effect=ChannelAuthError("token expired")),
+        notify_start=AsyncMock(side_effect=ChannelAuthError("token expired")),
     )
     binding = _binding()
-    adapter._stop_events[binding.channel_id] = asyncio.Event()
+    stop_event = asyncio.Event()
+    adapter._stop_events[binding.channel_id] = stop_event
+    delays: list[float] = []
+
+    async def record_delay(seconds: float) -> None:
+        delays.append(seconds)
+        stop_event.set()
+
+    monkeypatch.setattr(
+        "infr.im.weixin.weixin_adapter.asyncio.sleep", record_delay,
+    )
 
     # Act
     await adapter._run_poll_loop(binding)
 
-    # Assert — 循环退出而不是无限重试.
-    adapter._api.get_updates.assert_awaited_once()
+    # Assert — 会话重建也失败时不退出循环, 以长退避继续重试.
+    assert delays == [300]
 
 
 @pytest.mark.asyncio
 async def test_backs_off_progressively_when_wechat_polling_keeps_failing(monkeypatch):
     # Arrange
     adapter = WeixinAdapter()
-    adapter._api = Mock(get_updates=AsyncMock(side_effect=RuntimeError("network")))
+    adapter._api = Mock(
+        get_updates=AsyncMock(side_effect=RuntimeError("network")),
+        notify_start=AsyncMock(),
+    )
     binding = _binding()
     stop_event = asyncio.Event()
     adapter._stop_events[binding.channel_id] = stop_event
@@ -325,7 +341,9 @@ async def test_uses_distinct_idempotency_keys_when_wechat_result_is_chunked(
 async def test_formats_completed_feedback_when_wechat_task_succeeds():
     # Arrange
     service = _weixin_service(_stub_adapter())
-    service._execute_inbound = AsyncMock(return_value="已修改两个文件，测试通过。")
+    service._execute_inbound = AsyncMock(
+        return_value="已修改两个文件，测试通过。",
+    )
 
     # Act
     await service._process_inbound(_binding(), _inbound())
@@ -335,16 +353,20 @@ async def test_formats_completed_feedback_when_wechat_task_succeeds():
 
 
 @pytest.mark.asyncio
-async def test_appends_assistant_answer_when_wechat_task_succeeds():
+async def test_delivers_assistant_answer_when_wechat_task_succeeds():
     # Arrange
     service = _weixin_service(_stub_adapter())
-    service._execute_inbound = AsyncMock(return_value="已修改两个文件，测试通过。")
+    service._execute_inbound = AsyncMock(
+        return_value="已修改两个文件，测试通过。",
+    )
 
     # Act
     await service._process_inbound(_binding(), _inbound())
 
-    # Assert
-    assert _sent_text(service).endswith("已修改两个文件，测试通过。")
+    # Assert — 正文与任务完成标记合并为一条消息投递.
+    message: OutboundMessage = service._dispatch_outbound.await_args.args[1]
+    assert "已修改两个文件，测试通过。" in message.plain_text
+    assert message.idempotency_key == "inbox:channel1:message1:response"
 
 
 @pytest.mark.asyncio
@@ -399,10 +421,10 @@ async def test_sends_waiting_feedback_when_wechat_session_is_busy():
     # Arrange
     service = _weixin_service(_stub_adapter())
     service._execute_inbound = AsyncMock(
-        side_effect=RetryableInboundError("Session is busy"),
+        side_effect=SessionBusyError("Session is busy"),
     )
 
     # Act / Assert
-    with pytest.raises(RetryableInboundError, match="Session is busy"):
+    with pytest.raises(SessionBusyError, match="Session is busy"):
         await service._process_inbound(_binding(), _inbound("继续处理"))
     assert TaskOutcome.WAITING.value in _sent_text(service)

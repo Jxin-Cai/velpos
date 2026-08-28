@@ -42,6 +42,8 @@ _TEXT_CHUNK_SEND_DELAY_SECONDS = 0.1
 _CONTEXT_TOKEN_KEY = "context_token"
 _POLL_BACKOFF_SECONDS = 3
 _MAX_POLL_BACKOFF_SECONDS = 60
+_AUTH_RETRY_BACKOFF_SECONDS = 300
+_AUTH_RECOVERY_RETRY_SECONDS = 5
 
 
 class _TypingStatus(IntEnum):
@@ -314,6 +316,40 @@ class WeixinAdapter(ImChannelAdapter):
 
             self._on_messages.pop(channel_id, None)
 
+        # 通知 iLink 服务端该账号下线 (对齐官方插件 stopAccount 行为);
+        # 失败不影响停止流程.
+        bot_token = binding.config.get("bot_token", "")
+        base_url = binding.config.get("base_url", "")
+        if bot_token:
+            api = WeixinApiClient(base_url) if base_url else self._api
+            try:
+                await api.notify_stop(bot_token)
+            except Exception:
+                logger.warning(
+                    "[WeChat-adapter] notifystop failed channel=%s",
+                    channel_id,
+                    exc_info=True,
+                )
+
+    @staticmethod
+    async def _notify_session_start(
+        api: WeixinApiClient, bot_token: str, channel_id: str,
+    ) -> bool:
+        """上报客户端上线, 让 iLink 重建/续活服务端会话. 返回是否成功."""
+        try:
+            await api.notify_start(bot_token)
+            logger.info(
+                "[WeChat-adapter] notifystart ok channel=%s", channel_id,
+            )
+            return True
+        except Exception:
+            logger.warning(
+                "[WeChat-adapter] notifystart failed channel=%s",
+                channel_id,
+                exc_info=True,
+            )
+            return False
+
     async def _run_poll_loop(self, binding: ImBinding) -> None:
         """Long-poll iLink getupdates and dispatch messages for one channel."""
         channel_id = binding.channel_id
@@ -325,6 +361,10 @@ class WeixinAdapter(ImChannelAdapter):
 
         api = WeixinApiClient(base_url) if base_url else self._api
         cursor = ""
+
+        # 官方 openclaw-weixin 插件在每次渠道启动时先 notifystart, 让
+        # iLink 服务端同步在线状态; 长时间不上报会被判为 stale session.
+        await self._notify_session_start(api, bot_token, channel_id)
 
         logger.info(
             "[WeChat-adapter] Poll loop started: session=%s channel=%s base_url=%s",
@@ -381,14 +421,28 @@ class WeixinAdapter(ImChannelAdapter):
                 logger.info("[WeChat-adapter] Poll loop cancelled channel=%s", channel_id)
                 break
             except ChannelAuthError:
-                # 凭证已失效, 继续轮询只会每隔几秒刷一条错误日志.
-                # 退出循环, 让渠道停在"收不到消息"而不是假装还在工作。
+                # iLink 长时间闲置后把会话判为 stale (-14/401), 直接退出会让
+                # 渠道永久静默. 先用 notifystart 重建服务端会话 (无需重新
+                # 扫码), 成功则快速恢复轮询; 失败再长退避, 日志持续提示用户
+                # 重新扫码 — 重新绑定会重启本循环.
+                recovered = await self._notify_session_start(
+                    api, bot_token, channel_id,
+                )
+                delay = (
+                    _AUTH_RECOVERY_RETRY_SECONDS
+                    if recovered
+                    else _AUTH_RETRY_BACKOFF_SECONDS
+                )
                 logger.error(
-                    "[WeChat-adapter] Poll stopped, credentials expired: channel=%s",
+                    "[WeChat-adapter] Poll credentials rejected, "
+                    "session rebuild %s, retrying in %ds: channel=%s "
+                    "(若持续出现, 请重新扫码绑定微信)",
+                    "succeeded" if recovered else "failed",
+                    delay,
                     channel_id,
                     exc_info=True,
                 )
-                break
+                await asyncio.sleep(delay)
             except Exception:
                 failures += 1
                 delay = min(

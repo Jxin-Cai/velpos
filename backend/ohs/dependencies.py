@@ -573,6 +573,7 @@ async def _create_session_service(
         claude_session_manager=_claude_session_manager,
         on_assistant_response=_session_coordinator.on_assistant_response,
         on_user_message=_session_coordinator.on_user_message,
+        on_query_finished=_im_delivery_coordinator.release_deferred_inbox,
         project_repository=ProjectRepositoryImpl(db_session),
         im_unbind_fn=_im_unbind_for_session,
         audit_event_repository=SessionAuditEventRepositoryImpl(db_session),

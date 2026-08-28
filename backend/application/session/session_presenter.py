@@ -73,7 +73,13 @@ class SessionPresenter:
 
     @staticmethod
     def message_to_dict(message: Message, index: int | None = None) -> dict[str, Any]:
-        payload = {"type": message.message_type.value, "content": message.content}
+        payload = {
+            "type": message.message_type.value,
+            "content": message.content,
+            "created_at": (
+                message.created_at.isoformat() if message.created_at else None
+            ),
+        }
         if index is not None:
             payload["_index"] = index
         return payload

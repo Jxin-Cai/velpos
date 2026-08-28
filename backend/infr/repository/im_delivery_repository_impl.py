@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterable
 from datetime import datetime
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -105,6 +105,34 @@ class ImInboxRepositoryImpl(ImInboxRepository):
         return event
 
     async def save(self, event: ImInboxEvent) -> None:
+        model = await self._locked_owned_model(event)
+        self._apply(model, event)
+        await self._session.flush()
+
+    async def renew_lease(self, event: ImInboxEvent) -> None:
+        model = await self._locked_owned_model(event)
+        model.lease_until = event.lease_until
+        model.updated_at = event.updated_at
+        await self._session.flush()
+
+    async def release_pending_retries(self, session_id: str, now: datetime) -> int:
+        result = await self._session.execute(
+            update(ImInboxEventModel)
+            .where(
+                ImInboxEventModel.session_id == session_id,
+                ImInboxEventModel.status == ImInboxStatus.RETRY.value,
+                ImInboxEventModel.next_attempt_at > now,
+            )
+            .values(next_attempt_at=now, updated_at=now)
+        )
+        return int(result.rowcount or 0)
+
+    async def _locked_owned_model(self, event: ImInboxEvent) -> ImInboxEventModel:
+        """锁定事件行并校验租约仍归当前 worker 所有.
+
+        用 claim 时的尝试次数快照校验, 而非当前 attempt_count:
+        defer 会归还尝试计数, 直接比较会把合法回写误判成租约丢失。
+        """
         model = await self._session.scalar(
             select(ImInboxEventModel)
             .where(ImInboxEventModel.id == event.id)
@@ -112,15 +140,15 @@ class ImInboxRepositoryImpl(ImInboxRepository):
         )
         if model is None:
             raise ValueError(f"IM inbox event not found: {event.id}")
+        expected_attempt = event.lease_attempt_count or event.attempt_count
         if (
             model.status != ImInboxStatus.PROCESSING.value
-            or model.attempt_count != event.attempt_count
+            or model.attempt_count != expected_attempt
         ):
             raise ImDeliveryLeaseLostError(
-                f"IM inbox lease lost: id={event.id} attempt={event.attempt_count}"
+                f"IM inbox lease lost: id={event.id} attempt={expected_attempt}"
             )
-        self._apply(model, event)
-        await self._session.flush()
+        return model
 
     async def has_processable(self, now: datetime) -> bool:
         return bool(

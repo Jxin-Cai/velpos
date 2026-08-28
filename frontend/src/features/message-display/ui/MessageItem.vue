@@ -1,5 +1,5 @@
 <script setup>
-import { ref, shallowRef, watch, onMounted, nextTick, inject } from 'vue'
+import { ref, shallowRef, computed, watch, onMounted, nextTick, inject } from 'vue'
 import { cachedParse } from '../lib/markdownConfig'
 import { buildSystemMessageBlock } from '../lib/systemMessageBlock'
 import { visibleUserText } from '../lib/userMessageText'
@@ -32,6 +32,21 @@ const props = defineProps({
 const emit = defineEmits(['open-trace', 'open-file', 'interactive-answered'])
 
 const wsConnection = inject('wsConnection')
+
+// Send/finish time shown under user messages and on result messages
+function formatMessageTime(iso) {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const now = new Date()
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+  return sameDay ? hm : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hm}`
+}
+const messageTime = computed(() => formatMessageTime(props.message?.created_at))
 
 const interactiveError = ref('')
 
@@ -284,6 +299,7 @@ function handleDelegatedClick(e) {
           >
             {{ isUserMsgExpanded ? 'Show less' : 'Show more' }}
           </button>
+          <div v-if="messageTime" class="msg-sent-time">{{ messageTime }}</div>
         </div>
       </div>
       <AssistantBlock
@@ -333,6 +349,13 @@ function handleDelegatedClick(e) {
         @respond="handleInteractiveResponse"
       />
     </template>
+    <div
+      v-if="message.type === 'result' && messageTime"
+      class="msg-result-time"
+      :title="'完成时间'"
+    >
+      {{ messageTime }}
+    </div>
     <p v-if="interactiveError" class="interactive-error" role="alert">
       {{ interactiveError }}
     </p>
@@ -471,6 +494,21 @@ function handleDelegatedClick(e) {
 
 .user-expand-btn:hover {
   text-decoration: underline;
+}
+
+.msg-sent-time {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.msg-result-time {
+  align-self: flex-end;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
 }
 
 .interactive-error {

@@ -18,6 +18,7 @@ from domain.im_binding.acl.im_channel_adapter import InitResult
 from application.session.command.run_query_command import RunQueryCommand
 from domain.session.acl.connection_manager import ConnectionManager
 from application.session.session_application_service import SessionApplicationService
+from application.session.session_presenter import SessionPresenter
 from domain.im_binding.model.binding_status import BindingStatus
 from domain.im_binding.model.channel_capability import ChannelCapability
 from domain.im_binding.model.channel_init import ChannelInit
@@ -36,6 +37,7 @@ from domain.im_binding.repository.channel_init_repository import ChannelInitRepo
 from domain.im_binding.repository.im_binding_repository import ImBindingRepository
 from domain.session.model.message import Message
 from domain.session.model.message_type import MessageType
+from domain.session.service.message_conversion_service import MessageConversionService
 from domain.shared.business_exception import BusinessException
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,10 @@ _SESSION_BUSY_REASON = "Session is busy"
 
 class RetryableInboundError(RuntimeError):
     pass
+
+
+class SessionBusyError(RetryableInboundError):
+    """会话正在执行其他任务 — 延后重试即可, 不是本事件的失败."""
 
 
 class TerminalInboundError(RuntimeError):
@@ -604,11 +610,12 @@ class ImChannelApplicationService:
                     else f"[Error] {str(exc)[:500]}",
                     "query-error",
                 )
-            except RetryableInboundError as exc:
-                if str(exc) == _SESSION_BUSY_REASON:
-                    await reporter.report_waiting(
-                        "当前会话仍有任务在执行。这条消息已收到，系统会稍后自动重试。",
-                    )
+            except SessionBusyError:
+                await reporter.report_waiting(
+                    "当前会话仍有任务在执行。这条消息已收到，系统会稍后自动重试。",
+                )
+                raise
+            except RetryableInboundError:
                 raise
             except Exception as exc:
                 logger.error(
@@ -646,12 +653,13 @@ class ImChannelApplicationService:
         source_message_id: str,
         route: ChannelRoute,
     ) -> str:
-        """Execute the inbound query and return the assistant response text (or empty)."""
+        """Execute the inbound query and return the assistant response text."""
         if self._session_service_context_factory is None:
             raise RuntimeError(
                 "IM inbound processing requires a session service context factory"
             )
         async with self._session_service_context_factory() as session_service:
+            # 结果由入站编排层统一回投, 抑制引擎侧回调避免双发
             session_service.suppress_outbound_callbacks()
             try:
                 session = await session_service.get_session(binding.session_id)
@@ -666,7 +674,7 @@ class ImChannelApplicationService:
                 if await self._try_resolve_pending_response(binding.session_id, content):
                     logger.info("[IM-process] Resolved pending user response via IM: session=%s", binding.session_id)
                     return ""
-                raise RetryableInboundError(_SESSION_BUSY_REASON)
+                raise SessionBusyError(_SESSION_BUSY_REASON)
 
             cached = self._try_cached_inbound_response(session, source_message_id)
             if cached is not None:
@@ -705,7 +713,7 @@ class ImChannelApplicationService:
     def _try_cached_inbound_response(
         self, session: Any, source_message_id: str,
     ) -> str | None:
-        """Check if this message was already processed. Returns response/error string, or None if not cached."""
+        """Check if this message was already processed. Returns the response, or None if not cached."""
         existing_index = next(
             (
                 index
@@ -742,7 +750,7 @@ class ImChannelApplicationService:
         )
         await self._connection_manager.broadcast(
             binding.session_id,
-            {"event": "message", "data": {"type": user_msg.message_type.value, "content": user_msg.content}},
+            {"event": "message", "data": SessionPresenter.message_to_dict(user_msg)},
         )
 
     async def _read_inbound_result(
@@ -815,6 +823,7 @@ class ImChannelApplicationService:
 
     @staticmethod
     def _extract_response_after(session: Any, message_index: int) -> str:
+        """返回该用户消息之后的最终回复文本; 未完成或失败时返回空串."""
         response = ""
         completed = False
         failed = False
@@ -822,13 +831,15 @@ class ImChannelApplicationService:
             if message.message_type == MessageType.USER:
                 break
             if message.message_type == MessageType.ASSISTANT:
-                text = ImChannelApplicationService._extract_text_from_content(message.content)
+                text = MessageConversionService.assistant_text_of(message)
                 if text:
                     response = text
             elif message.message_type == MessageType.RESULT:
                 completed = True
                 failed = message.content.get("is_error") is True
-        return response if completed and not failed else ""
+        if completed and not failed:
+            return response
+        return ""
 
     @staticmethod
     def _extract_result_error_after(session: Any, message_index: int) -> str:

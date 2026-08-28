@@ -72,6 +72,9 @@ class ImInboxEvent:
     error_message: str = ""
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    #: claim 时的尝试次数快照, 仓储据此校验租约归属; 不持久化.
+    #: defer 会归还尝试计数, 若直接拿 attempt_count 校验会误判租约丢失。
+    lease_attempt_count: int = 0
 
     @property
     def sender_id(self) -> str:
@@ -85,7 +88,28 @@ class ImInboxEvent:
         now = datetime.now()
         self.status = ImInboxStatus.PROCESSING
         self.attempt_count += 1
+        self.lease_attempt_count = self.attempt_count
         self.lease_until = now + timedelta(seconds=lease_seconds)
+        self.updated_at = now
+
+    def renew_lease(self, lease_seconds: int) -> None:
+        """处理耗时超过单个租约时续租, 防止事件被其他 worker 重复认领."""
+        now = datetime.now()
+        self.lease_until = now + timedelta(seconds=lease_seconds)
+        self.updated_at = now
+
+    def defer(self, reason: str, delay_seconds: int) -> None:
+        """会话忙时延后处理, 并归还本次尝试计数.
+
+        会话忙不是本事件的失败: 若计入 attempt_count, 长任务期间到达的
+        消息会被固定间隔的重试推进死信。
+        """
+        now = datetime.now()
+        self.status = ImInboxStatus.RETRY
+        self.attempt_count = max(0, self.attempt_count - 1)
+        self.lease_until = None
+        self.next_attempt_at = now + timedelta(seconds=delay_seconds)
+        self.error_message = reason[:1000]
         self.updated_at = now
 
     def mark_processed(self) -> None:

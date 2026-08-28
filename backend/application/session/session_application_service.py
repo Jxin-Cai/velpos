@@ -51,6 +51,7 @@ class SessionApplicationService:
         claude_session_manager: ClaudeSessionManager | None = None,
         on_assistant_response: Callable[..., Awaitable[None]] | None = None,
         on_user_message: Callable[..., Awaitable[None]] | None = None,
+        on_query_finished: Callable[[str], Awaitable[None]] | None = None,
         project_repository: ProjectRepository | None = None,
         im_unbind_fn: Callable[[str], Awaitable[None]] | None = None,
         audit_event_repository: SessionAuditEventRepository | None = None,
@@ -105,6 +106,7 @@ class SessionApplicationService:
             refresh_context_usage_fn=self._refresh_context_usage,
             on_assistant_response=on_assistant_response,
             on_user_message=on_user_message,
+            on_query_finished=on_query_finished,
             session_service_factory=session_service_factory,
             execution_lock_factory=execution_lock_factory,
             sync_card_execution_fn=sync_card_execution_fn,
@@ -144,6 +146,12 @@ class SessionApplicationService:
         return await self._query_engine.steer_queued_message(session_id)
 
     def suppress_outbound_callbacks(self) -> None:
+        """IM 入站触发的查询由入站编排层负责回投结果.
+
+        抑制引擎侧的用户回显与 assistant 结果回调, 避免与编排层的
+        任务完成投递重复。需要用户回答的内容仍经 user_choice_request
+        通知路径转发到 IM。
+        """
         self._query_engine._on_assistant_response = None
         self._query_engine._on_user_message = None
 

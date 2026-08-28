@@ -5,6 +5,7 @@ import enum
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 
 from application.im_binding.im_channel_facade import ImChannelFacade
 from domain.im_binding.model.channel_capability import ChannelCapability
@@ -102,15 +103,19 @@ class InboundProgressReporter:
             "stop_typing",
         )
 
+    def outcome_line(self, outcome: TaskOutcome) -> str:
+        """任务结果标记行 — 带耗时与完成时刻, 便于用户感知操作时间."""
+        return (
+            f"任务 {self._task_code} · {outcome.value} · "
+            f"用时 {_humanize(time.monotonic() - self._started_at)} · "
+            f"{datetime.now():%m-%d %H:%M}"
+        )
+
     def decorate(self, outcome: TaskOutcome, content: str) -> str:
         """给结果文本加上任务编号与耗时, 仅对使用文本进度的渠道生效."""
         if not self.uses_task_framing:
             return content
-        return (
-            f"任务 {self._task_code} · {outcome.value} · "
-            f"用时 {_humanize(time.monotonic() - self._started_at)}\n\n"
-            f"{content.strip()}"
-        )
+        return f"{self.outcome_line(outcome)}\n\n{content.strip()}"
 
     async def report_waiting(self, reason: str) -> None:
         """任务无法立即执行时告知用户, 避免渠道侧看起来像没反应."""

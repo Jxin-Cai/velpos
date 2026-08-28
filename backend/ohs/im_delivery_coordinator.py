@@ -14,6 +14,7 @@ from typing import Any
 from application.im_binding.im_channel_application_service import (
     ImChannelApplicationService,
     RetryableInboundError,
+    SessionBusyError,
 )
 from application.im_binding.im_channel_facade import ImChannelFacade
 from domain.im_binding.acl.channel_errors import (
@@ -32,6 +33,7 @@ from domain.im_binding.model.im_delivery import (
 )
 from domain.im_binding.model.im_binding import ImBinding
 from domain.im_binding.model.im_message import InboundMessage, OutboundMessage
+from domain.shared.async_utils import safe_create_task
 from infr.config.database import async_session_factory
 from infr.config.im_delivery_config import ImDeliveryPolicy
 from infr.repository.channel_init_repository_impl import ChannelInitRepositoryImpl
@@ -55,6 +57,7 @@ BroadcastFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 class _InboxOutcome(str, Enum):
     PROCESSED = "processed"
     RETRY = "retry"
+    DEFERRED = "deferred"
     DEAD = "dead"
 
 
@@ -224,6 +227,37 @@ class ImDeliveryCoordinator:
                 return False
             await db.commit()
 
+        # 处理可能同步等待整个 Claude run, 远超单个租约时长;
+        # 心跳续租防止其他 worker 把处理中的事件误判为超时重认领。
+        heartbeat = safe_create_task(
+            self._keep_inbox_lease_alive(event),
+            name=f"im-inbox-lease-{event.id}",
+        )
+        try:
+            outcome, error_message = await self._execute_claimed_inbox(event)
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+        if outcome is not None:
+            try:
+                await self._finish_inbox(event, outcome, error_message)
+            except ImDeliveryLeaseLostError:
+                logger.info(
+                    "IM inbox %s skipped after lease loss: inbox_id=%s attempt=%s",
+                    outcome.value,
+                    event.id,
+                    event.attempt_count,
+                )
+        return True
+
+    async def _execute_claimed_inbox(
+        self, event: ImInboxEvent,
+    ) -> tuple[_InboxOutcome | None, str]:
+        """处理已认领的入站事件, 返回队列终态与错误信息.
+
+        返回 (None, "") 表示租约已被其他 worker 抢走, 不写任何终态。
+        """
         try:
             async with async_session_factory() as db:
                 binding = await ImBindingRepositoryImpl(db).find_by_session_id(event.session_id)
@@ -233,12 +267,10 @@ class ImDeliveryCoordinator:
                     or binding.channel_type.value != event.channel_type
                     or binding.binding_status != BindingStatus.BOUND
                 ):
-                    await self._finish_inbox(
-                        event,
+                    return (
                         _InboxOutcome.DEAD,
                         "IM binding changed before inbound processing",
                     )
-                    return True
 
                 from ohs.dependencies import (
                     _binding_repos_context,
@@ -269,13 +301,21 @@ class ImDeliveryCoordinator:
                     is_final_attempt=event.attempt_count >= self._policy.max_attempts,
                 )
                 await db.commit()
-            await self._finish_inbox(event, _InboxOutcome.PROCESSED)
+            return _InboxOutcome.PROCESSED, ""
         except ImDeliveryLeaseLostError:
             logger.info(
                 "IM inbox completion skipped after lease loss: inbox_id=%s attempt=%s",
                 event.id,
                 event.attempt_count,
             )
+            return None, ""
+        except SessionBusyError as exc:
+            logger.info(
+                "IM inbox deferred while session busy: inbox_id=%s session=%s",
+                event.id,
+                event.session_id,
+            )
+            return _InboxOutcome.DEFERRED, str(exc)
         except RetryableInboundError as exc:
             logger.info(
                 "IM inbox deferred: inbox_id=%s attempt=%s reason=%s",
@@ -283,14 +323,7 @@ class ImDeliveryCoordinator:
                 event.attempt_count,
                 exc,
             )
-            try:
-                await self._finish_inbox(event, _InboxOutcome.RETRY, str(exc))
-            except ImDeliveryLeaseLostError:
-                logger.info(
-                    "IM inbox retry skipped after lease loss: inbox_id=%s attempt=%s",
-                    event.id,
-                    event.attempt_count,
-                )
+            return _InboxOutcome.RETRY, str(exc)
         except Exception as exc:
             logger.error(
                 "IM inbox processing failed: inbox_id=%s attempt=%s",
@@ -298,15 +331,55 @@ class ImDeliveryCoordinator:
                 event.attempt_count,
                 exc_info=True,
             )
+            return _InboxOutcome.RETRY, str(exc)
+
+    async def _keep_inbox_lease_alive(self, event: ImInboxEvent) -> None:
+        interval = max(5, self._policy.lease_seconds // 3)
+        while True:
+            await asyncio.sleep(interval)
             try:
-                await self._finish_inbox(event, _InboxOutcome.RETRY, str(exc))
+                event.renew_lease(self._policy.lease_seconds)
+                async with async_session_factory() as db:
+                    await ImInboxRepositoryImpl(db).renew_lease(event)
+                    await db.commit()
+            except asyncio.CancelledError:
+                raise
             except ImDeliveryLeaseLostError:
-                logger.info(
-                    "IM inbox retry skipped after lease loss: inbox_id=%s attempt=%s",
+                logger.warning(
+                    "IM inbox lease lost during renewal: inbox_id=%s attempt=%s",
                     event.id,
                     event.attempt_count,
                 )
-        return True
+                return
+            except Exception:
+                # 数据库抖动不终止续租, 下个周期再试
+                logger.warning(
+                    "IM inbox lease renewal failed, will retry: inbox_id=%s",
+                    event.id,
+                    exc_info=True,
+                )
+
+    async def release_deferred_inbox(self, session_id: str) -> None:
+        """会话空闲后立即释放该会话所有等待退避的入站事件.
+
+        没有这一步, 会话忙期间到达的消息只能干等 next_attempt_at 到期,
+        即使会话早已空闲。
+        """
+        try:
+            async with async_session_factory() as db:
+                released = await ImInboxRepositoryImpl(db).release_pending_retries(
+                    session_id, datetime.now(),
+                )
+                await db.commit()
+        except Exception:
+            logger.warning(
+                "Failed to release deferred IM inbox events: session=%s",
+                session_id,
+                exc_info=True,
+            )
+            return
+        if released:
+            self.wake_inbox()
 
     async def _process_one_outbox(self) -> bool:
         async with async_session_factory() as db:
@@ -409,6 +482,10 @@ class ImDeliveryCoordinator:
     ) -> None:
         if outcome is _InboxOutcome.PROCESSED:
             event.mark_processed()
+        elif outcome is _InboxOutcome.DEFERRED:
+            # 会话忙不是失败: 固定短间隔延后且不计尝试次数,
+            # 否则长任务期间到达的消息会被指数退避拖慢甚至推进死信。
+            event.defer(error_message, self._policy.busy_retry_seconds)
         elif (
             outcome is _InboxOutcome.DEAD
             or event.attempt_count >= self._policy.max_attempts

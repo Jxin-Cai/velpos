@@ -207,7 +207,7 @@ class SessionStreamConsumer:
 
                 await self._connection_manager.broadcast(
                     session.session_id,
-                    {"event": "message", "data": {"type": message.message_type.value, "content": message.content}},
+                    {"event": "message", "data": SessionPresenter.message_to_dict(message)},
                 )
                 for event_type, title, payload in self._recorder.timeline_events_for_message(
                     msg_type_str,

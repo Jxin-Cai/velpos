@@ -103,6 +103,7 @@ class SessionQueryEngine:
         refresh_context_usage_fn: Callable[..., Awaitable[bool]],
         on_assistant_response: Callable[..., Awaitable[None]] | None = None,
         on_user_message: Callable[..., Awaitable[None]] | None = None,
+        on_query_finished: Callable[[str], Awaitable[None]] | None = None,
         session_service_factory: Callable | None = None,
         execution_lock_factory: Callable[[str], AsyncContextManager[None]] | None = None,
         sync_card_execution_fn: Callable[..., Awaitable[None]] | None = None,
@@ -119,6 +120,7 @@ class SessionQueryEngine:
         self._refresh_context_usage = refresh_context_usage_fn
         self._on_assistant_response = on_assistant_response
         self._on_user_message = on_user_message
+        self._on_query_finished = on_query_finished
         self._session_service_factory = session_service_factory
         self._execution_lock_factory = execution_lock_factory
         self._sync_card_execution_fn = sync_card_execution_fn
@@ -673,7 +675,7 @@ class SessionQueryEngine:
         session.add_message(synthetic_result)
         await self._connection_manager.broadcast(
             session.session_id,
-            {"event": "message", "data": {"type": "result", "content": synthetic_result.content}},
+            {"event": "message", "data": SessionPresenter.message_to_dict(synthetic_result)},
         )
 
     async def _retry_transient_result(
@@ -839,6 +841,8 @@ class SessionQueryEngine:
         session.complete_query()
         ctx.card_sync_succeeded = True
 
+        # 只把最终结果同步到 IM; run 过程中的 assistant 文本不外发,
+        # 需要用户回答的内容另经 user_choice_request 通知转发。
         if self._on_assistant_response:
             text = MessageConversionService.extract_assistant_text(session.messages)
             if text:
@@ -943,6 +947,7 @@ class SessionQueryEngine:
         if command.session_id in _shared_state.cancelled_sessions:
             async with _shared_state.queue_guard:
                 _shared_state.cancelled_sessions.discard(command.session_id)
+            await self._notify_query_finished(command.session_id)
             return
         final_save_succeeded = False
         try:
@@ -1032,6 +1037,20 @@ class SessionQueryEngine:
                 safe_create_task(_run_queued_message(queued))
             else:
                 safe_create_task(self.submit_query(queued))
+        await self._notify_query_finished(command.session_id)
+
+    async def _notify_query_finished(self, session_id: str) -> None:
+        """会话空闲通知 — IM 投递协调器据此立即释放因会话忙而延后的入站事件."""
+        if self._on_query_finished is None:
+            return
+        try:
+            await self._on_query_finished(session_id)
+        except Exception:
+            logger.warning(
+                "[session=%s] query finished callback failed",
+                session_id,
+                exc_info=True,
+            )
 
     async def _fire_outbound(
         self,

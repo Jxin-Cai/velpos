@@ -253,3 +253,133 @@ def test_moves_outbound_to_retry_when_delivery_fails():
     assert message.status == ImOutboxStatus.RETRY
     assert message.lease_until is None
     assert message.next_attempt_at > datetime.now()
+
+
+@pytest.mark.asyncio
+async def test_keeps_lease_ownership_when_lease_is_renewed_before_expiry():
+    # Arrange
+    engine, session_factory = await _database()
+
+    try:
+        async with session_factory() as session:
+            repository = ImInboxRepositoryImpl(session)
+            await repository.accept(_inbox("external-renew"))
+            await session.commit()
+            event = await repository.claim_next(datetime.now(), lease_seconds=60)
+            assert event is not None
+            await session.commit()
+
+            # Act
+            event.renew_lease(lease_seconds=600)
+            await repository.renew_lease(event)
+            await session.commit()
+
+            # Assert — 原租约已过期的时间点上, 事件不可被重认领
+            reclaimed = await repository.claim_next(
+                datetime.now() + timedelta(seconds=120), lease_seconds=60,
+            )
+            assert reclaimed is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rejects_lease_renewal_when_event_was_reclaimed():
+    # Arrange
+    engine, session_factory = await _database()
+
+    try:
+        async with session_factory() as session:
+            repository = ImInboxRepositoryImpl(session)
+            await repository.accept(_inbox("external-stale-renew"))
+            await session.commit()
+            stale_event = await repository.claim_next(datetime.now(), lease_seconds=60)
+            assert stale_event is not None
+            await session.commit()
+
+            model = await session.get(ImInboxEventModel, stale_event.id)
+            assert model is not None
+            model.attempt_count += 1
+            await session.commit()
+            stale_event.renew_lease(lease_seconds=60)
+
+            # Act / Assert
+            with pytest.raises(ImDeliveryLeaseLostError):
+                await repository.renew_lease(stale_event)
+    finally:
+        await engine.dispose()
+
+
+def test_returns_attempt_budget_when_busy_event_is_deferred():
+    # Arrange
+    event = _inbox("external-busy")
+    event.claim(lease_seconds=60)
+
+    # Act
+    event.defer("Session is busy", delay_seconds=15)
+
+    # Assert
+    assert event.status == ImInboxStatus.RETRY
+    assert event.attempt_count == 0
+    assert event.lease_until is None
+    assert event.next_attempt_at > datetime.now()
+
+
+@pytest.mark.asyncio
+async def test_accepts_deferred_writeback_when_attempt_budget_was_returned():
+    # Arrange
+    engine, session_factory = await _database()
+
+    try:
+        async with session_factory() as session:
+            repository = ImInboxRepositoryImpl(session)
+            await repository.accept(_inbox("external-defer-save"))
+            await session.commit()
+            event = await repository.claim_next(datetime.now(), lease_seconds=60)
+            assert event is not None
+            await session.commit()
+
+            # Act — defer 归还尝试计数后回写不应被误判为租约丢失
+            event.defer("Session is busy", delay_seconds=15)
+            await repository.save(event)
+            await session.commit()
+
+            # Assert
+            model = await session.get(ImInboxEventModel, event.id)
+            assert model is not None
+            assert model.status == ImInboxStatus.RETRY.value
+            assert model.attempt_count == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_releases_deferred_event_when_session_becomes_idle():
+    # Arrange
+    engine, session_factory = await _database()
+
+    try:
+        async with session_factory() as session:
+            repository = ImInboxRepositoryImpl(session)
+            await repository.accept(_inbox("external-release"))
+            await session.commit()
+            event = await repository.claim_next(datetime.now(), lease_seconds=60)
+            assert event is not None
+            await session.commit()
+            event.defer("Session is busy", delay_seconds=300)
+            await repository.save(event)
+            await session.commit()
+            assert await repository.claim_next(datetime.now(), lease_seconds=60) is None
+
+            # Act
+            released = await repository.release_pending_retries(
+                "session1", datetime.now(),
+            )
+            await session.commit()
+
+            # Assert
+            assert released == 1
+            reclaimed = await repository.claim_next(datetime.now(), lease_seconds=60)
+            assert reclaimed is not None and reclaimed.id == event.id
+    finally:
+        await engine.dispose()

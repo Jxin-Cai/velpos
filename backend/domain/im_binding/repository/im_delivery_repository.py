@@ -23,6 +23,22 @@ class ImInboxRepository(ABC):
     async def save(self, event: ImInboxEvent) -> None: ...
 
     @abstractmethod
+    async def renew_lease(self, event: ImInboxEvent) -> None:
+        """把事件的最新租约写回存储.
+
+        事件已被其他 worker 重新认领时抛出租约丢失异常。
+        """
+        ...
+
+    @abstractmethod
+    async def release_pending_retries(self, session_id: str, now: datetime) -> int:
+        """把会话所有等待退避的重试事件立即置为可认领, 返回释放数量.
+
+        会话空闲时调用, 避免"会话忙"延后的消息干等退避到期。
+        """
+        ...
+
+    @abstractmethod
     async def has_processable(self, now: datetime) -> bool: ...
 
     @abstractmethod

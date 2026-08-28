@@ -27,13 +27,19 @@ API_TIMEOUT = 15.0
 LONG_POLL_TIMEOUT = 40.0
 _CHANNEL = "weixin"
 
-#: iLink 在 HTTP 200 的响应体里回报业务结果. 只认微信约定的错误码键:
-#: ``ret`` / ``code`` 太通用, 正常响应也可能带, 误判会让轮询整体停摆.
+#: iLink 在 HTTP 200 的响应体里回报业务结果. 优先认微信约定的错误码键;
+#: ``errcode`` 缺失或为 0 时回退检查 ``ret`` — 协议规范约定 ``ret != 0``
+#: 即失败 (官方 openclaw-weixin 插件同时检查两者), 只看 errcode 会把
+#: ``{"ret": -14}`` 这类会话过期响应当成功, 轮询静默空转.
 _ERROR_CODE_KEYS = ("errcode", "err_code")
 _ERROR_MESSAGE_KEYS = ("errmsg", "err_msg", "message", "msg")
 
-#: 判定为凭证失效的业务错误码 — 需要用户重新扫码.
-_AUTH_ERROR_CODES = frozenset({-1000, 40001, 40014, 42001})
+#: 会话/token 陈旧 (session timeout) — 官方插件称 stale token.
+#: 可先通过 notifystart 重建服务端会话, 仍失败才需要重新扫码.
+STALE_TOKEN_ERROR_CODE = -14
+
+#: 判定为凭证失效的业务错误码 — 需要重建会话或重新扫码.
+_AUTH_ERROR_CODES = frozenset({STALE_TOKEN_ERROR_CODE, -1000, 40001, 40014, 42001})
 
 #: 限流与系统繁忙 — 退避后重试即可, 不应死信.
 _TRANSIENT_ERROR_CODES = frozenset({-1, 45009, 45011})
@@ -75,10 +81,33 @@ class WeixinApiClient:
         url = f"{self._base_url}/ilink/bot/get_qrcode_status?qrcode={quote(qrcode)}"
         logger.info("[WeChat-API] poll_login_qr_status: url=%.100s", url)
         async with httpx.AsyncClient(timeout=LONG_POLL_TIMEOUT) as client:
-            resp = await client.get(url)
+            resp = await client.get(
+                url, headers={"iLink-App-ClientVersion": "1"},
+            )
             logger.info("[WeChat-API] poll response: status=%d body=%.200s", resp.status_code, resp.text)
             resp.raise_for_status()
             return resp.json()
+
+    async def notify_start(self, bot_token: str) -> dict[str, Any]:
+        """POST /ilink/bot/msg/notifystart — 上报客户端上线.
+
+        官方 openclaw-weixin 插件在每次渠道启动时调用, 让 iLink 服务端
+        同步该账号的在线状态并重建会话; 也是 -14 (stale token) 后不重新
+        扫码即可恢复收发的手段.
+        """
+        return await self._post(
+            bot_token,
+            "msg/notifystart",
+            {"base_info": {"channel_version": CHANNEL_VERSION}},
+        )
+
+    async def notify_stop(self, bot_token: str) -> dict[str, Any]:
+        """POST /ilink/bot/msg/notifystop — 上报客户端下线."""
+        return await self._post(
+            bot_token,
+            "msg/notifystop",
+            {"base_info": {"channel_version": CHANNEL_VERSION}},
+        )
 
     async def get_updates(
         self, bot_token: str, get_updates_buf: str = "",
@@ -244,10 +273,12 @@ def _raise_for_business_error(endpoint: str, payload: dict[str, Any]) -> None:
         (
             payload[key]
             for key in _ERROR_CODE_KEYS
-            if isinstance(payload.get(key), int)
+            if isinstance(payload.get(key), int) and payload[key] != 0
         ),
         0,
     )
+    if code == 0 and isinstance(payload.get("ret"), int):
+        code = payload["ret"]
     if code == 0:
         return
     message = next(

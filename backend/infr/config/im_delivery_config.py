@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 _ENV_LEASE_SECONDS = "IM_DELIVERY_LEASE_SECONDS"
 _ENV_MAX_ATTEMPTS = "IM_DELIVERY_MAX_ATTEMPTS"
 _ENV_MAX_BACKOFF_SECONDS = "IM_DELIVERY_MAX_BACKOFF_SECONDS"
+_ENV_BUSY_RETRY_SECONDS = "IM_DELIVERY_BUSY_RETRY_SECONDS"
 _ENV_INBOX_WORKERS = "IM_INBOX_WORKERS"
 _ENV_OUTBOX_WORKERS = "IM_OUTBOX_WORKERS"
 
@@ -22,12 +23,14 @@ class ImDeliveryPolicy:
     - ``lease_seconds``: worker 租约时长, 超时后消息可被其他 worker 重认领
     - ``max_attempts``: 最大尝试次数, 超过即死信
     - ``max_backoff_seconds``: 指数退避的上限
+    - ``busy_retry_seconds``: 会话忙时的固定延后间隔 (不计入尝试次数)
     - ``inbox_workers`` / ``outbox_workers``: 并发 worker 数
     """
 
     lease_seconds: int = 120
     max_attempts: int = 8
     max_backoff_seconds: int = 300
+    busy_retry_seconds: int = 15
     inbox_workers: int = 4
     outbox_workers: int = 4
 
@@ -43,6 +46,9 @@ class ImDeliveryPolicy:
             ),
             max_backoff_seconds=_read_bounded_int(
                 _ENV_MAX_BACKOFF_SECONDS, default.max_backoff_seconds, 1, 3600,
+            ),
+            busy_retry_seconds=_read_bounded_int(
+                _ENV_BUSY_RETRY_SECONDS, default.busy_retry_seconds, 1, 300,
             ),
             inbox_workers=_read_bounded_int(
                 _ENV_INBOX_WORKERS, default.inbox_workers, 1, 16,

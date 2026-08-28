@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, func, literal, select, update
@@ -206,7 +207,16 @@ class SessionRepositoryImpl(SessionRepository):
     @staticmethod
     def _serialize_messages(messages: list[Message]) -> str:
         return json.dumps(
-            [{"type": msg.message_type.value, "content": msg.content} for msg in messages],
+            [
+                {
+                    "type": msg.message_type.value,
+                    "content": msg.content,
+                    "created_at": (
+                        msg.created_at.isoformat() if msg.created_at else None
+                    ),
+                }
+                for msg in messages
+            ],
             ensure_ascii=False,
         )
 
@@ -217,9 +227,21 @@ class SessionRepositoryImpl(SessionRepository):
             Message(
                 message_type=MessageType(item["type"]),
                 content=item["content"],
+                created_at=SessionRepositoryImpl._parse_message_time(
+                    item.get("created_at"),
+                ),
             )
             for item in items
         ]
+
+    @staticmethod
+    def _parse_message_time(raw: Any) -> datetime | None:
+        if not raw or not isinstance(raw, str):
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
 
     async def commit(self) -> None:
         try:
