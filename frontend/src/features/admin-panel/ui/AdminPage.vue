@@ -8,6 +8,7 @@ import { SettingsDialog } from '@features/settings-manager'
 import { GitManagerDialog } from '@features/git-manager'
 import AgentTemplateTab from './AgentTemplateTab.vue'
 import ClaudeMarketplacePanel from './ClaudeMarketplacePanel.vue'
+import MarketTab from './MarketTab.vue'
 import UserManagementTab from './UserManagementTab.vue'
 
 const emit = defineEmits(['close', 'logout', 'dirty-change'])
@@ -17,6 +18,13 @@ const sections = [
     label: '管理',
     items: [
       { key: 'agents', label: 'Agent 模板', icon: 'bot' },
+    ],
+  },
+  {
+    label: '市场',
+    items: [
+      { key: 'mcp-market', label: 'MCP 市场', icon: 'plug' },
+      { key: 'skill-market', label: 'Skill 市场', icon: 'target' },
     ],
   },
   {
@@ -41,7 +49,9 @@ const agentFormDirty = ref(false)
 const claudeSettingsDirty = ref(false)
 const marketplaceDirty = ref(false)
 const gitDirty = ref(false)
-const hasUnsavedChanges = computed(() => agentFormDirty.value || claudeSettingsDirty.value || marketplaceDirty.value || gitDirty.value)
+const mcpMarketDirty = ref(false)
+const skillMarketDirty = ref(false)
+const hasUnsavedChanges = computed(() => agentFormDirty.value || claudeSettingsDirty.value || marketplaceDirty.value || gitDirty.value || mcpMarketDirty.value || skillMarketDirty.value)
 const pageTitle = computed(() => sections.flatMap(section => section.items).find(item => item.key === activePage.value)?.label || '')
 const previousDocumentTitle = document.title
 
@@ -140,12 +150,14 @@ watch(pageTitle, value => { document.title = `${value} · Velpos 管理后台` }
               @click="selectPage(item.key)"
             >
               <svg v-if="item.icon === 'bot'" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>
+              <svg v-else-if="item.icon === 'plug'" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8Z"/><path d="M12 18v4"/></svg>
+              <svg v-else-if="item.icon === 'target'" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
               <svg v-else-if="item.icon === 'terminal'" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
               <svg v-else-if="item.icon === 'git'" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="6" cy="18" r="2"/><path d="M6 8v8M8 6h4a6 6 0 0 1 6 6v4"/></svg>
               <svg v-else viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               <span>{{ item.label }}</span>
               <i
-                v-if="(item.key === 'agents' && agentFormDirty) || (item.key === 'claude-code' && (claudeSettingsDirty || marketplaceDirty)) || (item.key === 'git' && gitDirty)"
+                v-if="(item.key === 'agents' && agentFormDirty) || (item.key === 'claude-code' && (claudeSettingsDirty || marketplaceDirty)) || (item.key === 'git' && gitDirty) || (item.key === 'mcp-market' && mcpMarketDirty) || (item.key === 'skill-market' && skillMarketDirty)"
                 class="unsaved-dot"
                 aria-label="有未保存修改"
               ></i>
@@ -160,6 +172,8 @@ watch(pageTitle, value => { document.title = `${value} · Velpos 管理后台` }
           <span>管理后台 / {{ pageTitle }}</span>
         </div>
         <AgentTemplateTab v-if="visitedPages.has('agents')" v-show="activePage === 'agents'" @dirty-change="agentFormDirty = $event === true" />
+        <MarketTab v-if="visitedPages.has('mcp-market')" v-show="activePage === 'mcp-market'" kind="mcp" @dirty-change="mcpMarketDirty = $event === true" />
+        <MarketTab v-if="visitedPages.has('skill-market')" v-show="activePage === 'skill-market'" kind="skill" @dirty-change="skillMarketDirty = $event === true" />
         <div v-if="visitedPages.has('claude-code')" v-show="activePage === 'claude-code'" class="stacked-pages">
           <SettingsDialog :visible="true" embedded @dirty-change="claudeSettingsDirty = $event === true" />
           <ClaudeMarketplacePanel @dirty-change="marketplaceDirty = $event === true" />

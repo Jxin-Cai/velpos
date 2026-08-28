@@ -5,6 +5,9 @@ import logging
 
 from application.memory.claude_md_revision_application_service import ClaudeMdRevisionApplicationService
 from domain.agent.repository.agent_template_repository import AgentTemplateRepository
+from domain.market.repository.mcp_server_entry_repository import McpServerEntryRepository
+from domain.market.repository.skill_entry_repository import SkillEntryRepository
+from domain.project.acl.agent_asset_installer import AgentAssetInstaller
 from domain.project.acl.plugin_manager import PluginManager
 from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
@@ -27,10 +30,16 @@ class AgentApplicationService:
         plugin_manager: PluginManager | None = None,
         claude_md_revision_service: ClaudeMdRevisionApplicationService | None = None,
         agent_template_repository: AgentTemplateRepository | None = None,
+        mcp_entry_repository: McpServerEntryRepository | None = None,
+        skill_entry_repository: SkillEntryRepository | None = None,
+        asset_installer: AgentAssetInstaller | None = None,
     ) -> None:
         self._plugin_manager = plugin_manager
         self._claude_md_revision_service = claude_md_revision_service
         self._agent_template_repository = agent_template_repository
+        self._mcp_entry_repository = mcp_entry_repository
+        self._skill_entry_repository = skill_entry_repository
+        self._asset_installer = asset_installer
 
     async def list_agents(self, language: str = "en") -> dict:
         name_key = f"name_{language}" if language in ("en", "zh") else "name_en"
@@ -110,6 +119,7 @@ class AgentApplicationService:
         current_agent = project.get_current_agent()
         if current_agent and current_agent.get("id") != agent_id:
             await self._uninstall_agent_plugins(current_agent["id"], project_dir)
+            await self._uninstall_agent_assets(current_agent["id"], project_dir)
 
         prompt_content = self._read_prompt(agent_meta, language)
         await self._apply_claude_md_revision(project_dir, prompt_content)
@@ -120,6 +130,7 @@ class AgentApplicationService:
 
         # Install new agent's plugins
         await self._install_agent_plugins(agent_id, project_dir)
+        await self._install_agent_assets(agent_id, project_dir)
 
         project.load_agent(agent_id, language)
         await project_repository.save(project)
@@ -158,6 +169,8 @@ class AgentApplicationService:
         # Reinstall plugins (uninstall then install to get latest versions)
         await self._uninstall_agent_plugins(agent_id, project_dir)
         await self._install_agent_plugins(agent_id, project_dir)
+        await self._uninstall_agent_assets(agent_id, project_dir)
+        await self._install_agent_assets(agent_id, project_dir)
 
         return project
 
@@ -179,6 +192,7 @@ class AgentApplicationService:
         current_agent = project.get_current_agent()
         if current_agent:
             await self._uninstall_agent_plugins(current_agent["id"], project.dir_path)
+            await self._uninstall_agent_assets(current_agent["id"], project.dir_path)
 
         project.unload_agent()
         await project_repository.save(project)
@@ -300,6 +314,87 @@ class AgentApplicationService:
                     plugin_name, agent_id, exc_info=True,
                 )
 
+    async def _install_agent_assets(self, agent_id: str, project_dir: str) -> None:
+        """Apply the agent's MCP servers and skills from the market to the project."""
+        if self._asset_installer is None:
+            return
+        agent_meta = await self._resolve_agent_meta(agent_id)
+        if not agent_meta:
+            return
+
+        mcp_ids = list(agent_meta.get("mcp_server_ids") or [])
+        if mcp_ids and self._mcp_entry_repository is not None:
+            try:
+                entries = await self._mcp_entry_repository.find_by_ids(mcp_ids)
+                servers = {e.name: e.to_client_config() for e in entries if e.is_active}
+                await self._asset_installer.apply_mcp_servers(project_dir, servers)
+                logger.info(
+                    "Applied %d MCP servers for agent %s", len(servers), agent_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to apply MCP servers for agent %s", agent_id, exc_info=True,
+                )
+
+        skill_ids = list(agent_meta.get("skill_ids") or [])
+        if skill_ids and self._skill_entry_repository is not None:
+            try:
+                entries = await self._skill_entry_repository.find_by_ids(skill_ids)
+            except Exception:
+                logger.warning(
+                    "Failed to load skill entries for agent %s", agent_id, exc_info=True,
+                )
+                entries = []
+            for entry in entries:
+                if not entry.is_active:
+                    continue
+                try:
+                    await self._asset_installer.install_skill(project_dir, entry.name, entry.content)
+                    logger.info("Installed skill %s for agent %s", entry.name, agent_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to install skill %s for agent %s",
+                        entry.name, agent_id, exc_info=True,
+                    )
+
+    async def _uninstall_agent_assets(self, agent_id: str, project_dir: str) -> None:
+        """Remove the agent's MCP servers and skills from the project."""
+        if self._asset_installer is None:
+            return
+        agent_meta = await self._resolve_agent_meta(agent_id, active_only=False)
+        if not agent_meta:
+            return
+
+        mcp_ids = list(agent_meta.get("mcp_server_ids") or [])
+        if mcp_ids and self._mcp_entry_repository is not None:
+            try:
+                entries = await self._mcp_entry_repository.find_by_ids(mcp_ids)
+                await self._asset_installer.remove_mcp_servers(
+                    project_dir, [e.name for e in entries],
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to remove MCP servers for agent %s", agent_id, exc_info=True,
+                )
+
+        skill_ids = list(agent_meta.get("skill_ids") or [])
+        if skill_ids and self._skill_entry_repository is not None:
+            try:
+                entries = await self._skill_entry_repository.find_by_ids(skill_ids)
+            except Exception:
+                logger.warning(
+                    "Failed to load skill entries for agent %s", agent_id, exc_info=True,
+                )
+                entries = []
+            for entry in entries:
+                try:
+                    await self._asset_installer.uninstall_skill(project_dir, entry.name)
+                except Exception:
+                    logger.warning(
+                        "Failed to uninstall skill %s for agent %s",
+                        entry.name, agent_id, exc_info=True,
+                    )
+
     async def _resolve_agent_meta(
         self,
         agent_id: str,
@@ -327,6 +422,8 @@ class AgentApplicationService:
                 "marketplaces": list(plugin_config.get("marketplaces") or []),
                 "plugins": list(plugin_config.get("plugins") or []),
             },
+            "mcp_server_ids": list(plugin_config.get("mcp_server_ids") or []),
+            "skill_ids": list(plugin_config.get("skill_ids") or []),
         }
 
     @staticmethod

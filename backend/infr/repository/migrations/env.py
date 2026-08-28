@@ -52,6 +52,8 @@ import infr.repository.im_delivery_model  # noqa: F401
 import infr.repository.user_model  # noqa: F401
 import infr.repository.agent_template_model  # noqa: F401
 import infr.repository.execution_ledger_event_model  # noqa: F401
+import infr.repository.mcp_server_entry_model  # noqa: F401
+import infr.repository.skill_entry_model  # noqa: F401
 # ------------------------------------------------
 
 config = context.config

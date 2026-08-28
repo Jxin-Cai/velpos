@@ -29,6 +29,8 @@ from application.memory.claude_md_revision_application_service import ClaudeMdRe
 from application.memory.memory_file_application_service import MemoryFileApplicationService
 from application.memory.project_memory_application_service import ProjectMemoryApplicationService
 from application.memory.rule_file_application_service import RuleFileApplicationService
+from application.market.mcp_market_application_service import McpMarketApplicationService
+from application.market.skill_market_application_service import SkillMarketApplicationService
 from application.plugin.plugin_application_service import PluginApplicationService
 from application.project.plugin_init_application_service import PluginInitApplicationService
 from application.project.project_application_service import ProjectApplicationService
@@ -762,12 +764,18 @@ def get_rule_file_application_service() -> RuleFileApplicationService:
 async def get_agent_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> AgentApplicationService:
+    from infr.client.agent_asset_installer_impl import FilesystemAgentAssetInstaller
     from infr.repository.agent_template_repository_impl import AgentTemplateRepositoryImpl
+    from infr.repository.mcp_server_entry_repository_impl import McpServerEntryRepositoryImpl
+    from infr.repository.skill_entry_repository_impl import SkillEntryRepositoryImpl
     revision_service = _create_revision_service(db_session)
     return AgentApplicationService(
         plugin_manager=_claude_plugin_manager,
         claude_md_revision_service=revision_service,
         agent_template_repository=AgentTemplateRepositoryImpl(db_session),
+        mcp_entry_repository=McpServerEntryRepositoryImpl(db_session),
+        skill_entry_repository=SkillEntryRepositoryImpl(db_session),
+        asset_installer=FilesystemAgentAssetInstaller(),
     )
 
 
@@ -916,3 +924,17 @@ async def get_agent_template_application_service(
 ) -> AgentTemplateApplicationService:
     from infr.repository.agent_template_repository_impl import AgentTemplateRepositoryImpl
     return AgentTemplateApplicationService(AgentTemplateRepositoryImpl(db_session))
+
+
+async def get_mcp_market_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> McpMarketApplicationService:
+    from infr.repository.mcp_server_entry_repository_impl import McpServerEntryRepositoryImpl
+    return McpMarketApplicationService(McpServerEntryRepositoryImpl(db_session))
+
+
+async def get_skill_market_application_service(
+    db_session: AsyncSession = Depends(get_async_session),
+) -> SkillMarketApplicationService:
+    from infr.repository.skill_entry_repository_impl import SkillEntryRepositoryImpl
+    return SkillMarketApplicationService(SkillEntryRepositoryImpl(db_session))

@@ -45,6 +45,8 @@ class PluginsConfig(BaseModel):
     marketplaces: list[MarketplaceConfig] = Field(default_factory=list)
     plugins: list[str] = Field(default_factory=list)
     local_plugins: list[LocalPluginConfig] = Field(default_factory=list)
+    mcp_server_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list)
 
 
 class AgentTemplateRequest(BaseModel):

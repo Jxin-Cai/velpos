@@ -6,6 +6,7 @@ import {
   listClaudeMarketplaces,
   updateAgentTemplate,
 } from '../api/adminAgentApi'
+import { listMcpServerEntries, listSkillEntries } from '../api/adminMarketApi'
 
 const props = defineProps({ template: { type: Object, default: null } })
 const emit = defineEmits(['saved', 'cancel', 'dirty-change'])
@@ -21,6 +22,13 @@ const selectedPlugins = ref([])
 const preservedLocalPlugins = ref([])
 const configuredMarketplaces = ref([])
 const pluginQuery = ref('')
+const mcpEntries = ref([])
+const skillEntries = ref([])
+const selectedMcpIds = ref([])
+const selectedSkillIds = ref([])
+const mcpQuery = ref('')
+const skillQuery = ref('')
+const marketLoading = ref(false)
 const pluginsLoading = ref(false)
 const marketplacesLoading = ref(false)
 const saving = ref(false)
@@ -36,10 +44,35 @@ const filteredPlugins = computed(() => {
   return availablePlugins.value.filter(plugin => [plugin.name, plugin.key, plugin.description]
     .some(value => String(value || '').toLocaleLowerCase().includes(keyword)))
 })
+
+function filterMarketEntries(entries, keyword) {
+  const normalized = keyword.trim().toLocaleLowerCase()
+  if (!normalized) return entries
+  return entries.filter(entry => [
+    entry.name,
+    entry.display_name,
+    entry.description,
+    entry.author,
+    ...(entry.tags || []),
+  ].some(value => String(value || '').toLocaleLowerCase().includes(normalized)))
+}
+
+const filteredMcpEntries = computed(() => filterMarketEntries(mcpEntries.value, mcpQuery.value))
+const filteredSkillEntries = computed(() => filterMarketEntries(skillEntries.value, skillQuery.value))
+
+function countMissingSelections(selectedIds, entries) {
+  const knownIds = new Set(entries.map(entry => entry.id))
+  return selectedIds.filter(id => !knownIds.has(id)).length
+}
+
+const missingMcpCount = computed(() => (marketLoading.value ? 0 : countMissingSelections(selectedMcpIds.value, mcpEntries.value)))
+const missingSkillCount = computed(() => (marketLoading.value ? 0 : countMissingSelections(selectedSkillIds.value, skillEntries.value)))
 const currentSnapshot = computed(() => JSON.stringify({
   form: { ...form.value, color: String(form.value.color || '').toLowerCase() },
   plugins: [...selectedPlugins.value].sort(),
   localPlugins: preservedLocalPlugins.value,
+  mcpServerIds: [...selectedMcpIds.value].sort(),
+  skillIds: [...selectedSkillIds.value].sort(),
 }))
 const isDirty = computed(() => Boolean(initialSnapshot.value) && currentSnapshot.value !== initialSnapshot.value)
 
@@ -93,10 +126,14 @@ onMounted(async () => {
     selectedMarketplaceName.value = config.marketplaces?.[0]?.name || ''
     selectedPlugins.value = [...(config.plugins || [])]
     preservedLocalPlugins.value = [...(config.local_plugins || [])]
+    selectedMcpIds.value = [...(config.mcp_server_ids || [])]
+    selectedSkillIds.value = [...(config.skill_ids || [])]
   }
   await nextTick()
   initialSnapshot.value = currentSnapshot.value
   marketplacesLoading.value = true
+  marketLoading.value = true
+  loadMarketEntries()
   try {
     marketplaces.value = await listClaudeMarketplaces()
   } catch (loadError) {
@@ -105,6 +142,21 @@ onMounted(async () => {
     marketplacesLoading.value = false
   }
 })
+
+async function loadMarketEntries() {
+  try {
+    const [mcpList, skillList] = await Promise.all([
+      listMcpServerEntries({ onlyActive: true }),
+      listSkillEntries({ onlyActive: true }),
+    ])
+    mcpEntries.value = mcpList || []
+    skillEntries.value = skillList || []
+  } catch (loadError) {
+    error.value = loadError.message || '读取 MCP / Skill 市场失败'
+  } finally {
+    marketLoading.value = false
+  }
+}
 
 onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnload))
 
@@ -122,10 +174,13 @@ async function handleSubmit() {
       || configuredMarketplaces.value.find(item => item.name === name),
   ).filter(Boolean).map(item => ({ name: item.name, source: item.source }))
   const pluginsConfig = marketplaceConfigs.length || selectedPlugins.value.length || preservedLocalPlugins.value.length
+    || selectedMcpIds.value.length || selectedSkillIds.value.length
     ? {
         marketplaces: marketplaceConfigs,
         plugins: [...selectedPlugins.value],
         local_plugins: [...preservedLocalPlugins.value],
+        mcp_server_ids: [...selectedMcpIds.value],
+        skill_ids: [...selectedSkillIds.value],
       }
     : null
 
@@ -195,6 +250,36 @@ async function handleSubmit() {
       <p v-if="preservedLocalPlugins.length" class="preserved-note">该模板还保留 {{ preservedLocalPlugins.length }} 个随 Agent 提供的本地插件。</p>
     </section>
 
+    <section class="form-section">
+      <div class="section-heading"><div><h3>MCP Server（可多选）</h3><p>从 MCP 市场选择，加载 Agent 时自动写入项目 .mcp.json。</p></div></div>
+      <div class="plugin-search"><input v-model="mcpQuery" type="search" aria-label="搜索 MCP Server" placeholder="搜索名称、描述、作者或标签"/><span>共已选 {{ selectedMcpIds.length }}</span></div>
+      <div v-if="marketLoading" class="plugin-empty">正在读取 MCP 市场…</div>
+      <div v-else-if="!mcpEntries.length" class="plugin-empty">MCP 市场暂无已上架条目，请先前往「MCP 市场」新增。</div>
+      <div v-else-if="!filteredMcpEntries.length" class="plugin-empty">没有匹配的 MCP Server。</div>
+      <div v-else class="plugin-grid">
+        <label v-for="entry in filteredMcpEntries" :key="entry.id" class="plugin-card">
+          <input v-model="selectedMcpIds" type="checkbox" :value="entry.id" />
+          <span><strong>{{ entry.logo_emoji }} {{ entry.display_name }}</strong><small>{{ entry.description || '暂无描述' }}</small><code>{{ entry.name }} · {{ entry.transport }}</code></span>
+        </label>
+      </div>
+      <p v-if="missingMcpCount" class="missing-note">已选的 {{ missingMcpCount }} 个 MCP Server 当前不在市场列表中（可能已删除），保存后将继续保留其配置。</p>
+    </section>
+
+    <section class="form-section">
+      <div class="section-heading"><div><h3>Skill（可多选）</h3><p>从 Skill 市场选择，加载 Agent 时自动写入项目 .claude/skills/。</p></div></div>
+      <div class="plugin-search"><input v-model="skillQuery" type="search" aria-label="搜索 Skill" placeholder="搜索名称、描述、作者或标签"/><span>共已选 {{ selectedSkillIds.length }}</span></div>
+      <div v-if="marketLoading" class="plugin-empty">正在读取 Skill 市场…</div>
+      <div v-else-if="!skillEntries.length" class="plugin-empty">Skill 市场暂无已上架条目，请先前往「Skill 市场」新增。</div>
+      <div v-else-if="!filteredSkillEntries.length" class="plugin-empty">没有匹配的 Skill。</div>
+      <div v-else class="plugin-grid">
+        <label v-for="entry in filteredSkillEntries" :key="entry.id" class="plugin-card">
+          <input v-model="selectedSkillIds" type="checkbox" :value="entry.id" />
+          <span><strong>{{ entry.logo_emoji }} {{ entry.display_name }}</strong><small>{{ entry.description || '暂无描述' }}</small><code>{{ entry.name }}</code></span>
+        </label>
+      </div>
+      <p v-if="missingSkillCount" class="missing-note">已选的 {{ missingSkillCount }} 个 Skill 当前不在市场列表中（可能已删除），保存后将继续保留其配置。</p>
+    </section>
+
     <footer class="form-actions"><span v-if="isDirty" class="dirty-hint">有未保存的修改</span><button class="glass-btn" type="button" @click="requestCancel">取消</button><button class="glass-btn primary" type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存模板' }}</button></footer>
   </form>
 </template>
@@ -218,6 +303,7 @@ textarea { resize: vertical; line-height: 1.5; } input:focus, textarea:focus, se
 .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; max-height: 320px; overflow-y: auto; }
 .plugin-card { display: flex; flex-direction: row; align-items: flex-start; gap: 9px; margin: 0; padding: 11px; border: 1px solid var(--border-subtle); border-radius: 8px; cursor: pointer; }.plugin-card:has(input:checked) { border-color: var(--accent); background: var(--accent-dim); }.plugin-card input { width: auto; margin-top: 2px; box-shadow: none; }.plugin-card span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.plugin-card strong { color: var(--text-primary); font-size: 12px; }.plugin-card small { color: var(--text-muted); line-height: 1.35; }.plugin-card code { overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-empty { padding: 24px; border: 1px dashed var(--border-subtle); border-radius: 8px; color: var(--text-muted); font-size: 12px; text-align: center; }
+.missing-note { margin: 10px 0 0; color: var(--text-muted); font-size: 12px; }
 .preserved-note { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 6px; }
 .dirty-hint { margin-right: auto; color: var(--text-muted); font-size: 11px; }

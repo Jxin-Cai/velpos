@@ -46,6 +46,8 @@ from ohs.http.flow_router import router as flow_router
 from ohs.http.admin_agent_template_router import router as admin_agent_template_router
 from ohs.http.admin_user_router import router as admin_user_router
 from ohs.http.admin_plugin_router import router as admin_plugin_router
+from ohs.http.admin_mcp_market_router import router as admin_mcp_market_router
+from ohs.http.admin_skill_market_router import router as admin_skill_market_router
 from ohs.ws.session_ws import router as ws_router
 from ohs.auth_dependency import AuthMiddleware
 from ohs.cors_config import DEFAULT_CORS_ORIGINS as _DEFAULT_CORS_ORIGINS
@@ -130,6 +132,8 @@ async def _run_alembic_upgrade() -> None:
     import infr.repository.im_delivery_model  # noqa: F401
     import infr.repository.user_model  # noqa: F401
     import infr.repository.agent_template_model  # noqa: F401
+    import infr.repository.mcp_server_entry_model  # noqa: F401
+    import infr.repository.skill_entry_model  # noqa: F401
 
     connectable = async_engine_from_config(
         alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
@@ -510,6 +514,8 @@ app.include_router(flow_router)
 app.include_router(admin_agent_template_router)
 app.include_router(admin_user_router)
 app.include_router(admin_plugin_router)
+app.include_router(admin_mcp_market_router)
+app.include_router(admin_skill_market_router)
 
 
 @app.exception_handler(BusinessException)
