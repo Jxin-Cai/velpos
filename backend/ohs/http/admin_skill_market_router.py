@@ -8,10 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from application.market.skill_market_application_service import (
     CreateSkillEntryCommand,
+    ImportSkillEntryCommand,
     SkillMarketApplicationService,
     UpdateSkillEntryCommand,
 )
-from domain.market.model.market_categories import SkillCategory
+from domain.market.model.market_categories import EntrySource, MarketplaceSort, SkillCategory
 from domain.market.model.skill_entry import SkillEntry
 from domain.user.model.user import User
 from ohs.auth_dependency import require_admin
@@ -60,6 +61,12 @@ class SkillEntryRequest(BaseModel):
     is_active: bool = True
 
 
+class MarketplaceImportRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    ref: str = Field(min_length=1, max_length=512)
+
+
 def _to_dict(entry: SkillEntry, include_content: bool = True) -> dict:
     payload = {
         "id": entry.id,
@@ -72,6 +79,8 @@ def _to_dict(entry: SkillEntry, include_content: bool = True) -> dict:
         "author": entry.author,
         "version": entry.version,
         "logo_emoji": entry.logo_emoji,
+        "source": entry.source.value,
+        "source_ref": entry.source_ref,
         "created_by": entry.created_by,
         "is_active": entry.is_active,
         "created_at": entry.created_at.isoformat(),
@@ -100,13 +109,55 @@ async def search_entries(
     keyword: Annotated[str | None, Query(max_length=128)] = None,
     category: Annotated[SkillCategory | None, Query()] = None,
     only_active: Annotated[bool, Query()] = False,
+    source: Annotated[EntrySource | None, Query()] = None,
 ) -> ApiResponse[list]:
     entries = await service.search_entries(
         keyword=keyword,
         category=category.value if category else None,
         only_active=only_active,
+        source=source.value if source else None,
     )
     return ApiResponse.success([_to_dict(e, include_content=False) for e in entries])
+
+
+@router.get("/marketplace", summary="Browse the open-source skill marketplace")
+async def browse_marketplace(
+    service: ServiceDep,
+    keyword: Annotated[str | None, Query(max_length=128)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int, Query(ge=1, le=50)] = 30,
+    sort: Annotated[MarketplaceSort, Query()] = MarketplaceSort.STARS,
+) -> ApiResponse[dict]:
+    view = await service.browse_marketplace(keyword=keyword, page=page, limit=limit, sort=sort)
+    return ApiResponse.success({
+        "items": [
+            {
+                "ref": skill.ref,
+                "name": skill.name,
+                "display_name": skill.display_name,
+                "description": skill.description,
+                "author": skill.author,
+                "repo_url": skill.repo_url,
+                "stars": skill.stars,
+                "imported": skill.ref in view.imported_refs,
+            }
+            for skill in view.page.items
+        ],
+        "total": view.page.total,
+        "has_next": view.page.has_next,
+    })
+
+
+@router.post("/marketplace/import", summary="Import a skill from the marketplace")
+async def import_marketplace_entry(
+    request: MarketplaceImportRequest,
+    service: ServiceDep,
+    admin: Annotated[User, Depends(require_admin)],
+) -> ApiResponse[dict]:
+    entry = await service.import_from_marketplace(
+        ImportSkillEntryCommand(ref=request.ref, created_by=admin.id)
+    )
+    return ApiResponse.success(_to_dict(entry, include_content=False))
 
 
 @router.get("/{entry_id}", summary="Get skill entry detail")

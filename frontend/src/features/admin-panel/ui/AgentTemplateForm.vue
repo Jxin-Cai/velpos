@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import EmojiPickerField from '@shared/ui/EmojiPickerField.vue'
 import {
   createAgentTemplate,
   listClaudeMarketplacePlugins,
@@ -215,7 +216,7 @@ async function handleSubmit() {
         <label><span>描述（中文）</span><input v-model="form.description_zh" type="text" placeholder="简短描述" /></label>
         <label><span>描述（英文）</span><input v-model="form.description_en" type="text" placeholder="Short description" /></label>
         <label><span>分类</span><input v-model="form.category" type="text" placeholder="例：development" /></label>
-        <div class="compact-fields"><label><span>Emoji</span><input v-model="form.emoji" class="emoji-input" /></label><label><span>颜色</span><input v-model="form.color" type="color" class="color-input" /></label></div>
+        <div class="compact-fields"><label><span>Emoji</span><EmojiPickerField v-model="form.emoji" fallback="🤖" /></label><label><span>颜色</span><input v-model="form.color" type="color" class="color-input" /></label></div>
       </div>
     </section>
 
@@ -297,7 +298,7 @@ async function handleSubmit() {
 label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 13px; color: var(--text-secondary); font-size: 11px; }
 input, textarea, select { width: 100%; padding: 9px 11px; border: 1px solid var(--border-subtle); border-radius: 8px; outline: 0; background: var(--layer-base); color: var(--text-primary); font: inherit; font-size: 13px; }
 textarea { resize: vertical; line-height: 1.5; } input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
-.compact-fields { display: flex; gap: 14px; }.emoji-input { width: 70px; }.color-input { width: 48px; height: 37px; padding: 3px; }
+.compact-fields { display: flex; gap: 14px; }.color-input { width: 48px; height: 37px; padding: 3px; }
 .form-error { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: var(--red-dim); color: var(--red); font-size: 12px; }
 .plugin-browser { margin-top: 12px; }.plugin-search { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }.plugin-search span { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; }
 .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; max-height: 320px; overflow-y: auto; }

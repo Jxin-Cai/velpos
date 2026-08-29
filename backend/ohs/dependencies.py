@@ -926,15 +926,42 @@ async def get_agent_template_application_service(
     return AgentTemplateApplicationService(AgentTemplateRepositoryImpl(db_session))
 
 
+_mcp_marketplace_catalog = None
+_skill_marketplace_catalog = None
+
+
+def _get_mcp_marketplace_catalog():
+    # Module-level singleton so the catalog's TTL cache survives across requests.
+    global _mcp_marketplace_catalog
+    if _mcp_marketplace_catalog is None:
+        from infr.client.cline_mcp_catalog_impl import ClineMcpMarketplaceCatalog
+        _mcp_marketplace_catalog = ClineMcpMarketplaceCatalog()
+    return _mcp_marketplace_catalog
+
+
+def _get_skill_marketplace_catalog():
+    global _skill_marketplace_catalog
+    if _skill_marketplace_catalog is None:
+        from infr.client.skillsmp_catalog_impl import SkillsmpCatalog
+        _skill_marketplace_catalog = SkillsmpCatalog()
+    return _skill_marketplace_catalog
+
+
 async def get_mcp_market_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> McpMarketApplicationService:
     from infr.repository.mcp_server_entry_repository_impl import McpServerEntryRepositoryImpl
-    return McpMarketApplicationService(McpServerEntryRepositoryImpl(db_session))
+    return McpMarketApplicationService(
+        McpServerEntryRepositoryImpl(db_session),
+        marketplace_catalog=_get_mcp_marketplace_catalog(),
+    )
 
 
 async def get_skill_market_application_service(
     db_session: AsyncSession = Depends(get_async_session),
 ) -> SkillMarketApplicationService:
     from infr.repository.skill_entry_repository_impl import SkillEntryRepositoryImpl
-    return SkillMarketApplicationService(SkillEntryRepositoryImpl(db_session))
+    return SkillMarketApplicationService(
+        SkillEntryRepositoryImpl(db_session),
+        marketplace_catalog=_get_skill_marketplace_catalog(),
+    )

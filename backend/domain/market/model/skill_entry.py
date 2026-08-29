@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from domain.market.model.market_categories import SkillCategory
+from domain.market.model.market_categories import EntrySource, SkillCategory
 
 
 @dataclass
@@ -22,6 +22,8 @@ class SkillEntry:
     _version: str
     _logo_emoji: str
     _created_by: int
+    _source: EntrySource = EntrySource.CUSTOM
+    _source_ref: str = ""
     _created_at: datetime = field(default_factory=datetime.now)
     _updated_at: datetime = field(default_factory=datetime.now)
     _is_active: bool = True
@@ -75,6 +77,14 @@ class SkillEntry:
         return self._created_by
 
     @property
+    def source(self) -> EntrySource:
+        return self._source
+
+    @property
+    def source_ref(self) -> str:
+        return self._source_ref
+
+    @property
     def created_at(self) -> datetime:
         return self._created_at
 
@@ -101,6 +111,8 @@ class SkillEntry:
         author: str = "",
         version: str = "",
         logo_emoji: str = "🎯",
+        source: EntrySource = EntrySource.CUSTOM,
+        source_ref: str = "",
     ) -> SkillEntry:
         now = datetime.now()
         return cls(
@@ -116,6 +128,8 @@ class SkillEntry:
             _version=version,
             _logo_emoji=logo_emoji,
             _created_by=created_by,
+            _source=source,
+            _source_ref=source_ref,
             _created_at=now,
             _updated_at=now,
         )
@@ -138,6 +152,8 @@ class SkillEntry:
         created_at: datetime,
         updated_at: datetime,
         is_active: bool,
+        source: EntrySource = EntrySource.CUSTOM,
+        source_ref: str = "",
     ) -> SkillEntry:
         return cls(
             _id=id,
@@ -152,6 +168,8 @@ class SkillEntry:
             _version=version,
             _logo_emoji=logo_emoji,
             _created_by=created_by,
+            _source=source,
+            _source_ref=source_ref,
             _created_at=created_at,
             _updated_at=updated_at,
             _is_active=is_active,

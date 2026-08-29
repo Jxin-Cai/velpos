@@ -8,10 +8,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from application.market.mcp_market_application_service import (
     CreateMcpServerEntryCommand,
+    ImportMcpServerEntryCommand,
     McpMarketApplicationService,
     UpdateMcpServerEntryCommand,
 )
-from domain.market.model.market_categories import McpCategory, McpTransport
+from domain.market.model.market_categories import (
+    EntrySource,
+    MarketplaceSort,
+    McpCategory,
+    McpTransport,
+)
 from domain.market.model.mcp_server_entry import McpServerEntry
 from domain.user.model.user import User
 from ohs.auth_dependency import require_admin
@@ -80,6 +86,12 @@ class McpServerEntryRequest(BaseModel):
         return self
 
 
+class MarketplaceImportRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    ref: str = Field(min_length=1, max_length=256)
+
+
 def _to_dict(entry: McpServerEntry) -> dict:
     return {
         "id": entry.id,
@@ -95,6 +107,8 @@ def _to_dict(entry: McpServerEntry) -> dict:
         "author": entry.author,
         "version": entry.version,
         "logo_emoji": entry.logo_emoji,
+        "source": entry.source.value,
+        "source_ref": entry.source_ref,
         "created_by": entry.created_by,
         "is_active": entry.is_active,
         "created_at": entry.created_at.isoformat(),
@@ -120,13 +134,58 @@ async def search_entries(
     keyword: Annotated[str | None, Query(max_length=128)] = None,
     category: Annotated[McpCategory | None, Query()] = None,
     only_active: Annotated[bool, Query()] = False,
+    source: Annotated[EntrySource | None, Query()] = None,
 ) -> ApiResponse[list]:
     entries = await service.search_entries(
         keyword=keyword,
         category=category.value if category else None,
         only_active=only_active,
+        source=source.value if source else None,
     )
     return ApiResponse.success([_to_dict(e) for e in entries])
+
+
+@router.get("/marketplace", summary="Browse the open-source MCP marketplace")
+async def browse_marketplace(
+    service: ServiceDep,
+    keyword: Annotated[str | None, Query(max_length=128)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int, Query(ge=1, le=50)] = 30,
+    sort: Annotated[MarketplaceSort, Query()] = MarketplaceSort.STARS,
+) -> ApiResponse[dict]:
+    view = await service.browse_marketplace(keyword=keyword, page=page, limit=limit, sort=sort)
+    return ApiResponse.success({
+        "items": [
+            {
+                "ref": server.ref,
+                "name": server.name,
+                "display_name": server.display_name,
+                "description": server.description,
+                "author": server.author,
+                "category": server.category,
+                "logo_url": server.logo_url,
+                "repo_url": server.repo_url,
+                "stars": server.stars,
+                "downloads": server.downloads,
+                "imported": server.ref in view.imported_refs,
+            }
+            for server in view.page.items
+        ],
+        "total": view.page.total,
+        "has_next": view.page.has_next,
+    })
+
+
+@router.post("/marketplace/import", summary="Import an MCP server from the marketplace")
+async def import_marketplace_entry(
+    request: MarketplaceImportRequest,
+    service: ServiceDep,
+    admin: Annotated[User, Depends(require_admin)],
+) -> ApiResponse[dict]:
+    entry = await service.import_from_marketplace(
+        ImportMcpServerEntryCommand(ref=request.ref, created_by=admin.id)
+    )
+    return ApiResponse.success(_to_dict(entry))
 
 
 @router.post("", summary="Create MCP server entry")

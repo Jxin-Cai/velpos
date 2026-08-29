@@ -1,12 +1,17 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTimeout } from '@shared/lib/useTimeout'
+import EmojiPickerField from '@shared/ui/EmojiPickerField.vue'
 import {
+  browseMcpMarketplace,
+  browseSkillMarketplace,
   createMcpServerEntry,
   createSkillEntry,
   deleteMcpServerEntry,
   deleteSkillEntry,
   getSkillEntry,
+  importMcpMarketplaceEntry,
+  importSkillMarketplaceEntry,
   listMcpCategories,
   listMcpServerEntries,
   listSkillCategories,
@@ -27,12 +32,19 @@ const KIND_META = {
     defaultEmoji: '🔌',
     namePattern: /^[a-z0-9][a-z0-9._-]*$/,
     nameHint: '小写字母/数字开头，可含 . _ -（作为 .mcp.json 中的 server 键名）',
+    marketplaceHint: '数据来自 Cline MCP Marketplace 开源精选目录，拉取后自动补全安装配置（可再编辑）。',
+    marketplaceSorts: [
+      { value: 'stars', label: '按热度（Stars）' },
+      { value: 'downloads', label: '按下载量' },
+    ],
     api: {
       list: listMcpServerEntries,
       categories: listMcpCategories,
       create: createMcpServerEntry,
       update: updateMcpServerEntry,
       remove: deleteMcpServerEntry,
+      browse: browseMcpMarketplace,
+      importEntry: importMcpMarketplaceEntry,
     },
   },
   skill: {
@@ -43,12 +55,19 @@ const KIND_META = {
     defaultEmoji: '🎯',
     namePattern: /^[a-z0-9][a-z0-9-]*$/,
     nameHint: '小写字母/数字开头，仅可含 -（兼作 skills 目录名）',
+    marketplaceHint: '数据来自 SkillsMP 开源技能市场，拉取时自动抓取仓库中的 SKILL.md 内容。',
+    marketplaceSorts: [
+      { value: 'stars', label: '按热度（Stars）' },
+      { value: 'recent', label: '按最近更新' },
+    ],
     api: {
       list: listSkillEntries,
       categories: listSkillCategories,
       create: createSkillEntry,
       update: updateSkillEntry,
       remove: deleteSkillEntry,
+      browse: browseSkillMarketplace,
+      importEntry: importSkillMarketplaceEntry,
     },
   },
 }
@@ -73,6 +92,26 @@ const categoryFilter = ref('')
 const currentPage = ref(1)
 const deletingId = ref('')
 const { set: setTimer } = useTimeout()
+
+const BOARD_OPTIONS = [
+  { value: 'custom', label: '自建' },
+  { value: 'marketplace', label: '开源市场' },
+]
+const board = ref('custom')
+
+const MARKETPLACE_PAGE_SIZE = 12
+const mkKeyword = ref('')
+const mkSort = ref('stars')
+const mkPage = ref(1)
+const mkItems = ref([])
+const mkTotal = ref(0)
+const mkHasNext = ref(false)
+const mkLoading = ref(false)
+const mkError = ref('')
+const mkLoadedOnce = ref(false)
+const importingRef = ref('')
+const importedEntries = ref([])
+const importedLoading = ref(false)
 
 const showForm = ref(false)
 const editingEntry = ref(null)
@@ -150,7 +189,7 @@ async function loadData() {
   error.value = ''
   try {
     const [entryList, categoryList] = await Promise.all([
-      meta.value.api.list(),
+      meta.value.api.list({ source: 'custom' }),
       meta.value.api.categories(),
     ])
     entries.value = entryList || []
@@ -160,6 +199,86 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadImported() {
+  importedLoading.value = true
+  try {
+    importedEntries.value = (await meta.value.api.list({ source: 'marketplace' })) || []
+  } catch (loadError) {
+    mkError.value = loadError.message || '加载已拉取列表失败'
+  } finally {
+    importedLoading.value = false
+  }
+}
+
+async function loadMarketplace() {
+  mkLoading.value = true
+  mkError.value = ''
+  try {
+    const data = await meta.value.api.browse({
+      keyword: mkKeyword.value.trim(),
+      page: mkPage.value,
+      limit: MARKETPLACE_PAGE_SIZE,
+      sort: mkSort.value,
+    })
+    mkItems.value = data?.items || []
+    mkTotal.value = data?.total || 0
+    mkHasNext.value = Boolean(data?.has_next)
+    mkLoadedOnce.value = true
+  } catch (browseError) {
+    mkError.value = browseError.message || '加载开源市场失败'
+  } finally {
+    mkLoading.value = false
+  }
+}
+
+function handleMarketplaceSearch() {
+  mkPage.value = 1
+  loadMarketplace()
+}
+
+function clearMarketplaceSearch() {
+  mkKeyword.value = ''
+  handleMarketplaceSearch()
+}
+
+function changeMarketplacePage(delta) {
+  mkPage.value = Math.max(1, mkPage.value + delta)
+  loadMarketplace()
+}
+
+watch(mkSort, () => {
+  if (mkLoadedOnce.value) handleMarketplaceSearch()
+})
+
+watch(board, value => {
+  if (value === 'marketplace' && !mkLoadedOnce.value && !mkLoading.value) {
+    loadMarketplace()
+    loadImported()
+  }
+})
+
+async function handleImport(item) {
+  if (item.imported || importingRef.value) return
+  importingRef.value = item.ref
+  mkError.value = ''
+  try {
+    await meta.value.api.importEntry(item.ref)
+    item.imported = true
+    showSuccess(`「${item.display_name || item.name}」已拉取到本地`)
+    await loadImported()
+  } catch (importError) {
+    mkError.value = importError.message || '拉取失败'
+  } finally {
+    importingRef.value = ''
+  }
+}
+
+function formatCount(value) {
+  const count = Number(value) || 0
+  if (count >= 1000) return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}k`
+  return String(count)
 }
 
 function handleCreate() {
@@ -279,6 +398,7 @@ async function handleSubmit() {
     initialSnapshot.value = ''
     emit('dirty-change', false)
     await loadData()
+    if (mkLoadedOnce.value) await loadImported()
     showSuccess(`${meta.value.entryLabel} 已保存`)
   } catch (saveError) {
     formError.value = saveError.message || '保存失败'
@@ -293,6 +413,11 @@ async function handleDelete(entry) {
     deletingId.value = entry.id
     await meta.value.api.remove(entry.id)
     entries.value = entries.value.filter(item => item.id !== entry.id)
+    importedEntries.value = importedEntries.value.filter(item => item.id !== entry.id)
+    if (entry.source_ref) {
+      const remote = mkItems.value.find(item => item.ref === entry.source_ref)
+      if (remote) remote.imported = false
+    }
     showSuccess(`${meta.value.entryLabel} 已删除`)
   } catch (deleteError) {
     error.value = deleteError.message || '删除失败'
@@ -338,7 +463,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnl
           </label>
           <label><span>标签（逗号分隔，最多 16 个）</span><input v-model="form.tagsText" type="text" placeholder="例：git, vcs" /></label>
           <div class="compact-fields">
-            <label><span>Logo Emoji</span><input v-model="form.logo_emoji" class="emoji-input" /></label>
+            <label><span>Logo Emoji</span><EmojiPickerField v-model="form.logo_emoji" :fallback="meta.defaultEmoji" /></label>
             <label><span>版本</span><input v-model="form.version" type="text" placeholder="例：1.0.0" /></label>
             <label class="checkbox-field"><input v-model="form.is_active" type="checkbox" /><span>上架（可被 Agent 模板选用）</span></label>
           </div>
@@ -378,63 +503,180 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnl
 
     <template v-else>
       <div v-if="success" class="success-state" role="status">{{ success }}</div>
-      <div class="toolbar">
-        <div class="search-row">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-          <input v-model="query" type="search" :aria-label="`搜索 ${meta.entryLabel}`" placeholder="搜索名称、描述、作者或标签" />
-          <button v-if="query" class="clear-search" type="button" aria-label="清除搜索" @click="query = ''">清除</button>
-        </div>
-        <select v-model="categoryFilter" class="category-select" aria-label="按分类筛选">
-          <option value="">全部分类</option>
-          <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name_zh || cat.name_en }}</option>
-        </select>
-        <button class="glass-btn primary" type="button" @click="handleCreate">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-          新增 {{ meta.entryLabel }}
+
+      <div class="board-switch" role="tablist" aria-label="资源来源板块">
+        <button
+          v-for="option in BOARD_OPTIONS"
+          :key="option.value"
+          type="button"
+          role="tab"
+          class="board-btn"
+          :class="{ active: board === option.value }"
+          :aria-selected="board === option.value"
+          @click="board = option.value"
+        >
+          {{ option.label }}
         </button>
       </div>
 
-      <div class="result-count">共 {{ filteredEntries.length }} 项</div>
+      <template v-if="board === 'custom'">
+        <div class="toolbar">
+          <div class="search-row">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input v-model="query" type="search" :aria-label="`搜索 ${meta.entryLabel}`" placeholder="搜索名称、描述、作者或标签" />
+            <button v-if="query" class="clear-search" type="button" aria-label="清除搜索" @click="query = ''">清除</button>
+          </div>
+          <select v-model="categoryFilter" class="category-select" aria-label="按分类筛选">
+            <option value="">全部分类</option>
+            <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name_zh || cat.name_en }}</option>
+          </select>
+          <button class="glass-btn primary" type="button" @click="handleCreate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新增 {{ meta.entryLabel }}
+          </button>
+        </div>
 
-      <div v-if="error" class="error-state" role="alert"><span>{{ error }}</span><button class="glass-btn sm" type="button" @click="loadData">重试</button></div>
-      <div v-else-if="loading" class="loading-state">加载中...</div>
+        <div class="result-count">共 {{ filteredEntries.length }} 项</div>
 
-      <div v-else class="entry-grid">
-        <article v-for="entry in paginatedEntries" :key="entry.id" class="entry-card" :class="{ inactive: !entry.is_active }">
-          <div class="card-top">
-            <span class="entry-emoji">{{ entry.logo_emoji || meta.defaultEmoji }}</span>
-            <div class="badge-row">
-              <span v-if="isMcp" class="transport-badge">{{ entry.transport }}</span>
-              <span v-if="!entry.is_active" class="inactive-badge">已下架</span>
+        <div v-if="error" class="error-state" role="alert"><span>{{ error }}</span><button class="glass-btn sm" type="button" @click="loadData">重试</button></div>
+        <div v-else-if="loading" class="loading-state">加载中...</div>
+
+        <div v-else class="entry-grid">
+          <article v-for="entry in paginatedEntries" :key="entry.id" class="entry-card" :class="{ inactive: !entry.is_active }">
+            <div class="card-top">
+              <span class="entry-emoji">{{ entry.logo_emoji || meta.defaultEmoji }}</span>
+              <div class="badge-row">
+                <span v-if="isMcp" class="transport-badge">{{ entry.transport }}</span>
+                <span v-if="!entry.is_active" class="inactive-badge">已下架</span>
+              </div>
             </div>
-          </div>
-          <h2>{{ entry.display_name }}</h2>
-          <p>{{ entry.description || '暂无描述' }}</p>
-          <div v-if="(entry.tags || []).length" class="tag-row">
-            <span v-for="tag in entry.tags" :key="tag" class="tag-chip">{{ tag }}</span>
-          </div>
-          <div class="card-meta">
-            <span>{{ categoryLabelById[entry.category] || entry.category }}</span>
-            <span v-if="entry.author">{{ entry.author }}</span>
-            <span v-if="entry.version">v{{ entry.version }}</span>
-            <code>{{ entry.name }}</code>
-          </div>
-          <div class="card-footer">
-            <a v-if="entry.repo_url" class="repo-link" :href="entry.repo_url" target="_blank" rel="noopener noreferrer">仓库</a>
-            <div class="entry-actions">
-              <button class="glass-btn sm" type="button" :disabled="deletingId === entry.id" @click="handleEdit(entry)">编辑</button>
-              <button class="glass-btn sm danger" type="button" :disabled="deletingId === entry.id" @click="handleDelete(entry)">{{ deletingId === entry.id ? '删除中…' : '删除' }}</button>
+            <h2>{{ entry.display_name }}</h2>
+            <p>{{ entry.description || '暂无描述' }}</p>
+            <div v-if="(entry.tags || []).length" class="tag-row">
+              <span v-for="tag in entry.tags" :key="tag" class="tag-chip">{{ tag }}</span>
             </div>
-          </div>
-        </article>
-        <div v-if="paginatedEntries.length === 0" class="empty-state">{{ entries.length ? `没有匹配的 ${meta.entryLabel}` : `暂无 ${meta.entryLabel}，点击右上角新增` }}</div>
-      </div>
+            <div class="card-meta">
+              <span>{{ categoryLabelById[entry.category] || entry.category }}</span>
+              <span v-if="entry.author">{{ entry.author }}</span>
+              <span v-if="entry.version">v{{ entry.version }}</span>
+              <code>{{ entry.name }}</code>
+            </div>
+            <div class="card-footer">
+              <a v-if="entry.repo_url" class="repo-link" :href="entry.repo_url" target="_blank" rel="noopener noreferrer">仓库</a>
+              <div class="entry-actions">
+                <button class="glass-btn sm" type="button" :disabled="deletingId === entry.id" @click="handleEdit(entry)">编辑</button>
+                <button class="glass-btn sm danger" type="button" :disabled="deletingId === entry.id" @click="handleDelete(entry)">{{ deletingId === entry.id ? '删除中…' : '删除' }}</button>
+              </div>
+            </div>
+          </article>
+          <div v-if="paginatedEntries.length === 0" class="empty-state">{{ entries.length ? `没有匹配的 ${meta.entryLabel}` : `暂无自建 ${meta.entryLabel}，点击右上角新增` }}</div>
+        </div>
 
-      <nav v-if="totalPages > 1" class="pagination" aria-label="分页导航">
-        <button type="button" class="page-btn" :disabled="currentPage <= 1" @click="currentPage--">上一页</button>
-        <span class="page-info">{{ currentPage }} / {{ totalPages }}</span>
-        <button type="button" class="page-btn" :disabled="currentPage >= totalPages" @click="currentPage++">下一页</button>
-      </nav>
+        <nav v-if="totalPages > 1" class="pagination" aria-label="分页导航">
+          <button type="button" class="page-btn" :disabled="currentPage <= 1" @click="currentPage--">上一页</button>
+          <span class="page-info">{{ currentPage }} / {{ totalPages }}</span>
+          <button type="button" class="page-btn" :disabled="currentPage >= totalPages" @click="currentPage++">下一页</button>
+        </nav>
+      </template>
+
+      <template v-else>
+        <p class="marketplace-hint">{{ meta.marketplaceHint }}</p>
+        <div class="toolbar">
+          <div class="search-row">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input
+              v-model="mkKeyword"
+              type="search"
+              :aria-label="`搜索开源市场 ${meta.entryLabel}`"
+              placeholder="搜索开源市场（回车检索）"
+              @keydown.enter.prevent="handleMarketplaceSearch"
+            />
+            <button v-if="mkKeyword" class="clear-search" type="button" aria-label="清除搜索" @click="clearMarketplaceSearch">清除</button>
+          </div>
+          <select v-model="mkSort" class="category-select" aria-label="排序方式">
+            <option v-for="option in meta.marketplaceSorts" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+          <button class="glass-btn primary" type="button" :disabled="mkLoading" @click="handleMarketplaceSearch">搜索</button>
+        </div>
+
+        <div class="result-count">共 {{ mkTotal }} 项</div>
+
+        <div v-if="mkError" class="error-state" role="alert"><span>{{ mkError }}</span><button class="glass-btn sm" type="button" @click="loadMarketplace">重试</button></div>
+        <div v-else-if="mkLoading" class="loading-state">加载中...</div>
+
+        <div v-else class="entry-grid">
+          <article v-for="item in mkItems" :key="item.ref" class="entry-card">
+            <div class="card-top">
+              <img v-if="item.logo_url" :src="item.logo_url" class="entry-logo" alt="" loading="lazy" />
+              <span v-else class="entry-emoji">{{ meta.defaultEmoji }}</span>
+              <div class="badge-row">
+                <span class="stat-badge" title="GitHub Stars">⭐ {{ formatCount(item.stars) }}</span>
+                <span v-if="isMcp" class="stat-badge" title="下载量">⬇ {{ formatCount(item.downloads) }}</span>
+              </div>
+            </div>
+            <h2>{{ item.display_name || item.name }}</h2>
+            <p>{{ item.description || '暂无描述' }}</p>
+            <div class="card-meta">
+              <span v-if="item.category">{{ categoryLabelById[item.category] || item.category }}</span>
+              <span v-if="item.author">{{ item.author }}</span>
+              <code>{{ item.name }}</code>
+            </div>
+            <div class="card-footer">
+              <a v-if="item.repo_url" class="repo-link" :href="item.repo_url" target="_blank" rel="noopener noreferrer">仓库</a>
+              <div class="entry-actions">
+                <span v-if="item.imported" class="imported-badge">已拉取</span>
+                <button
+                  v-else
+                  class="glass-btn sm primary"
+                  type="button"
+                  :disabled="importingRef === item.ref"
+                  @click="handleImport(item)"
+                >
+                  {{ importingRef === item.ref ? '拉取中…' : '拉取' }}
+                </button>
+              </div>
+            </div>
+          </article>
+          <div v-if="mkItems.length === 0 && mkLoadedOnce" class="empty-state">开源市场没有匹配的 {{ meta.entryLabel }}</div>
+        </div>
+
+        <nav v-if="mkPage > 1 || mkHasNext" class="pagination" aria-label="市场分页导航">
+          <button type="button" class="page-btn" :disabled="mkPage <= 1 || mkLoading" @click="changeMarketplacePage(-1)">上一页</button>
+          <span class="page-info">第 {{ mkPage }} 页</span>
+          <button type="button" class="page-btn" :disabled="!mkHasNext || mkLoading" @click="changeMarketplacePage(1)">下一页</button>
+        </nav>
+
+        <section class="imported-section">
+          <h2 class="imported-title">已拉取到本地（{{ importedEntries.length }}）</h2>
+          <div v-if="importedLoading" class="loading-state">加载中...</div>
+          <div v-else-if="importedEntries.length" class="entry-grid">
+            <article v-for="entry in importedEntries" :key="entry.id" class="entry-card" :class="{ inactive: !entry.is_active }">
+              <div class="card-top">
+                <span class="entry-emoji">{{ entry.logo_emoji || meta.defaultEmoji }}</span>
+                <div class="badge-row">
+                  <span v-if="isMcp" class="transport-badge">{{ entry.transport }}</span>
+                  <span v-if="!entry.is_active" class="inactive-badge">已下架</span>
+                </div>
+              </div>
+              <h2>{{ entry.display_name }}</h2>
+              <p>{{ entry.description || '暂无描述' }}</p>
+              <div class="card-meta">
+                <span>{{ categoryLabelById[entry.category] || entry.category }}</span>
+                <span v-if="entry.author">{{ entry.author }}</span>
+                <code>{{ entry.name }}</code>
+              </div>
+              <div class="card-footer">
+                <a v-if="entry.repo_url" class="repo-link" :href="entry.repo_url" target="_blank" rel="noopener noreferrer">仓库</a>
+                <div class="entry-actions">
+                  <button class="glass-btn sm" type="button" :disabled="deletingId === entry.id" @click="handleEdit(entry)">编辑</button>
+                  <button class="glass-btn sm danger" type="button" :disabled="deletingId === entry.id" @click="handleDelete(entry)">{{ deletingId === entry.id ? '删除中…' : '删除' }}</button>
+                </div>
+              </div>
+            </article>
+          </div>
+          <div v-else class="empty-state">尚未从市场拉取任何 {{ meta.entryLabel }}，在上方浏览并点击「拉取」。</div>
+        </section>
+      </template>
     </template>
   </section>
 </template>
@@ -447,6 +689,12 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnl
 .page-header p { margin: 0; color: var(--text-muted); font-size: 13px; }
 
 .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+
+.board-switch { display: inline-flex; gap: 4px; margin-bottom: 16px; padding: 4px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--layer-base); }
+.board-btn { padding: 7px 18px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; transition: background .16s, color .16s; }
+.board-btn:hover:not(.active) { color: var(--text-primary); }
+.board-btn.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.marketplace-hint { margin: 0 0 12px; color: var(--text-muted); font-size: 11px; }
 .search-row { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 200px; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--layer-base); }
 .search-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .search-row svg { width: 17px; fill: none; stroke: var(--text-muted); stroke-width: 1.8; flex-shrink: 0; }
@@ -464,6 +712,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnl
 .card-top { display: flex; align-items: center; justify-content: space-between; }
 .badge-row { display: flex; gap: 6px; }
 .entry-emoji { display: grid; place-items: center; width: 35px; height: 35px; flex: 0 0 auto; border-radius: 9px; background: var(--accent-dim); font-size: 18px; }
+.entry-logo { width: 35px; height: 35px; flex: 0 0 auto; border-radius: 9px; background: var(--accent-dim); object-fit: cover; }
+.stat-badge { padding: 3px 7px; border-radius: 5px; background: var(--layer-active); color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
+.imported-badge { padding: 5px 10px; border-radius: 6px; background: var(--green-dim); color: var(--green); font-size: 11px; }
+.imported-section { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
+.imported-title { margin: 0 0 12px; font-size: 14px; }
 .transport-badge { padding: 3px 7px; border-radius: 5px; background: var(--accent-dim); color: var(--accent); font-size: 10px; text-transform: uppercase; }
 .inactive-badge { padding: 3px 7px; border-radius: 5px; background: var(--layer-active); color: var(--text-muted); font-size: 10px; }
 .entry-card h2 { margin: 13px 0 6px; font-size: 14px; }
@@ -499,7 +752,6 @@ input, textarea, select { width: 100%; padding: 9px 11px; border: 1px solid var(
 textarea { resize: vertical; line-height: 1.5; font-family: var(--font-mono, monospace); }
 input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .compact-fields { display: flex; align-items: flex-end; gap: 14px; }
-.emoji-input { width: 70px; }
 .checkbox-field { flex-direction: row; align-items: center; gap: 8px; padding-bottom: 9px; }
 .checkbox-field input { width: auto; box-shadow: none; }
 .form-error { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: var(--red-dim); color: var(--red); font-size: 12px; }

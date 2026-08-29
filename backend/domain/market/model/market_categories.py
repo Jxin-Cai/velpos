@@ -3,6 +3,21 @@ from __future__ import annotations
 from enum import Enum
 
 
+class EntrySource(str, Enum):
+    """Where a market entry came from: created by hand or pulled from an open-source marketplace."""
+
+    CUSTOM = "custom"
+    MARKETPLACE = "marketplace"
+
+
+class MarketplaceSort(str, Enum):
+    """Sort order when browsing an open-source marketplace."""
+
+    STARS = "stars"
+    DOWNLOADS = "downloads"
+    RECENT = "recent"
+
+
 class McpTransport(str, Enum):
     """Transport protocol of an MCP server."""
 

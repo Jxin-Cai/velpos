@@ -1,12 +1,22 @@
 import { get, post, put, del } from '@shared/api/httpClient'
 
-function buildQuery({ keyword = '', category = '', onlyActive = false } = {}) {
+function buildQuery({ keyword = '', category = '', onlyActive = false, source = '' } = {}) {
   const params = new URLSearchParams()
   if (keyword) params.set('keyword', keyword)
   if (category) params.set('category', category)
   if (onlyActive) params.set('only_active', 'true')
+  if (source) params.set('source', source)
   const query = params.toString()
   return query ? `?${query}` : ''
+}
+
+function buildMarketplaceQuery({ keyword = '', page = 1, limit = 30, sort = 'stars' } = {}) {
+  const params = new URLSearchParams()
+  if (keyword) params.set('keyword', keyword)
+  params.set('page', String(page))
+  params.set('limit', String(limit))
+  params.set('sort', sort)
+  return `?${params.toString()}`
 }
 
 export function listMcpServerEntries(filters) {
@@ -51,4 +61,20 @@ export function updateSkillEntry(id, data) {
 
 export function deleteSkillEntry(id) {
   return del(`/admin/market/skills/${encodeURIComponent(id)}`)
+}
+
+export function browseMcpMarketplace(filters) {
+  return get(`/admin/market/mcp-servers/marketplace${buildMarketplaceQuery(filters)}`)
+}
+
+export function importMcpMarketplaceEntry(ref) {
+  return post('/admin/market/mcp-servers/marketplace/import', { ref })
+}
+
+export function browseSkillMarketplace(filters) {
+  return get(`/admin/market/skills/marketplace${buildMarketplaceQuery(filters)}`)
+}
+
+export function importSkillMarketplaceEntry(ref) {
+  return post('/admin/market/skills/marketplace/import', { ref })
 }

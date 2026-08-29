@@ -4,7 +4,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domain.market.model.market_categories import SkillCategory
+from domain.market.model.market_categories import EntrySource, SkillCategory
 from domain.market.model.skill_entry import SkillEntry
 from domain.market.repository.skill_entry_repository import SkillEntryRepository
 from domain.shared.business_exception import BusinessException
@@ -32,6 +32,8 @@ class SkillEntryRepositoryImpl(SkillEntryRepository):
             existing.author = entry.author
             existing.version = entry.version
             existing.logo_emoji = entry.logo_emoji
+            existing.source = entry.source.value
+            existing.source_ref = entry.source_ref
             existing.updated_at = entry.updated_at
             existing.is_active = entry.is_active
         try:
@@ -63,11 +65,20 @@ class SkillEntryRepositoryImpl(SkillEntryRepository):
             return None
         return self._to_domain(model)
 
+    async def find_by_source_ref(self, source_ref: str) -> SkillEntry | None:
+        stmt = select(SkillEntryModel).where(SkillEntryModel.source_ref == source_ref)
+        result = await self._db.execute(stmt)
+        model = result.scalars().first()
+        if model is None:
+            return None
+        return self._to_domain(model)
+
     async def search(
         self,
         keyword: str | None = None,
         category: str | None = None,
         only_active: bool = False,
+        source: str | None = None,
     ) -> list[SkillEntry]:
         stmt = select(SkillEntryModel)
         if keyword:
@@ -84,6 +95,8 @@ class SkillEntryRepositoryImpl(SkillEntryRepository):
             stmt = stmt.where(SkillEntryModel.category == category)
         if only_active:
             stmt = stmt.where(SkillEntryModel.is_active == True)  # noqa: E712
+        if source:
+            stmt = stmt.where(SkillEntryModel.source == source)
         stmt = stmt.order_by(SkillEntryModel.created_at.desc())
         result = await self._db.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
@@ -107,6 +120,8 @@ class SkillEntryRepositoryImpl(SkillEntryRepository):
             author=entry.author,
             version=entry.version,
             logo_emoji=entry.logo_emoji,
+            source=entry.source.value,
+            source_ref=entry.source_ref,
             created_by=entry.created_by,
             created_at=entry.created_at,
             updated_at=entry.updated_at,
@@ -131,4 +146,6 @@ class SkillEntryRepositoryImpl(SkillEntryRepository):
             created_at=model.created_at,
             updated_at=model.updated_at,
             is_active=model.is_active,
+            source=EntrySource(model.source or EntrySource.CUSTOM.value),
+            source_ref=model.source_ref or "",
         )

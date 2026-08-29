@@ -22,6 +22,8 @@ class SkillEntryModel(Base):
     author: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     logo_emoji: Mapped[str] = mapped_column(String(16), nullable=False, default="🎯")
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="custom", index=True)
+    source_ref: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     created_by: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)

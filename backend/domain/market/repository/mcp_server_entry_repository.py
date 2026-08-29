@@ -24,11 +24,16 @@ class McpServerEntryRepository(ABC):
         ...
 
     @abstractmethod
+    async def find_by_source_ref(self, source_ref: str) -> McpServerEntry | None:
+        ...
+
+    @abstractmethod
     async def search(
         self,
         keyword: str | None = None,
         category: str | None = None,
         only_active: bool = False,
+        source: str | None = None,
     ) -> list[McpServerEntry]:
         ...
 

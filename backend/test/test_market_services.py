@@ -9,14 +9,28 @@ import pytest
 from application.agent.agent_application_service import AgentApplicationService
 from application.market.mcp_market_application_service import (
     CreateMcpServerEntryCommand,
+    ImportMcpServerEntryCommand,
     McpMarketApplicationService,
+    slugify_entry_name,
 )
 from application.market.skill_market_application_service import (
+    ImportSkillEntryCommand,
     SkillMarketApplicationService,
     UpdateSkillEntryCommand,
 )
 from domain.agent.model.agent_template import AgentTemplate
-from domain.market.model.market_categories import McpCategory, McpTransport, SkillCategory
+from domain.market.acl.marketplace_catalog import (
+    RemoteMcpServer,
+    RemoteMcpServerPage,
+    RemoteSkill,
+)
+from domain.market.model.market_categories import (
+    EntrySource,
+    MarketplaceSort,
+    McpCategory,
+    McpTransport,
+    SkillCategory,
+)
 from domain.market.model.mcp_server_entry import McpServerEntry
 from domain.market.model.skill_entry import SkillEntry
 from domain.shared.business_exception import BusinessException
@@ -302,3 +316,223 @@ async def test_rejects_skill_install_when_name_is_unsafe(tmp_path) -> None:
     # Act & Assert
     with pytest.raises(ValueError):
         await installer.install_skill(str(tmp_path), "../evil", "skill body")
+
+
+def _remote_mcp_server(ref: str = "github.com/foo/bar-mcp") -> RemoteMcpServer:
+    return RemoteMcpServer(
+        ref=ref,
+        name="bar-mcp",
+        display_name="Bar MCP",
+        description="Does bar things",
+        version="1.0.0",
+        transport=McpTransport.STDIO,
+        server_config={"command": "npx", "args": ["-y", "bar-mcp"]},
+        repo_url="https://github.com/foo/bar-mcp",
+        author="foo",
+        category="developer-tools",
+        stars=120,
+        downloads=4000,
+    )
+
+
+def _remote_skill(ref: str = "https://github.com/foo/skills/tree/main/skills/report") -> RemoteSkill:
+    return RemoteSkill(
+        ref=ref,
+        name="report",
+        display_name="report",
+        description="Build reports",
+        content="---\nname: report\n---\n\nSteps...",
+        repo_url=ref,
+        author="foo",
+        stars=99,
+    )
+
+
+@pytest.mark.asyncio
+async def test_imports_marketplace_mcp_entry_when_ref_is_new() -> None:
+    # Arrange
+    repository = SimpleNamespace(
+        find_by_source_ref=AsyncMock(return_value=None),
+        find_by_name=AsyncMock(return_value=None),
+        save=AsyncMock(side_effect=lambda entry: entry),
+    )
+    catalog = SimpleNamespace(get_server=AsyncMock(return_value=_remote_mcp_server()))
+    service = McpMarketApplicationService(repository, marketplace_catalog=catalog)
+
+    # Act
+    entry = await service.import_from_marketplace(
+        ImportMcpServerEntryCommand(ref="github.com/foo/bar-mcp", created_by=1)
+    )
+
+    # Assert
+    assert entry.source is EntrySource.MARKETPLACE
+    assert entry.source_ref == "github.com/foo/bar-mcp"
+    assert entry.category is McpCategory.DEVELOPER_TOOLS
+    assert entry.name == "bar-mcp"
+
+
+@pytest.mark.asyncio
+async def test_rejects_marketplace_import_when_ref_already_imported() -> None:
+    # Arrange
+    repository = SimpleNamespace(find_by_source_ref=AsyncMock(return_value=_mcp_entry()))
+    catalog = SimpleNamespace(get_server=AsyncMock())
+    service = McpMarketApplicationService(repository, marketplace_catalog=catalog)
+
+    # Act & Assert
+    with pytest.raises(BusinessException):
+        await service.import_from_marketplace(
+            ImportMcpServerEntryCommand(ref="github.com/foo/bar-mcp", created_by=1)
+        )
+
+
+@pytest.mark.asyncio
+async def test_allocates_suffixed_name_when_marketplace_name_conflicts() -> None:
+    # Arrange
+    repository = SimpleNamespace(
+        find_by_source_ref=AsyncMock(return_value=None),
+        find_by_name=AsyncMock(side_effect=[_mcp_entry(), None]),
+        save=AsyncMock(side_effect=lambda entry: entry),
+    )
+    catalog = SimpleNamespace(get_server=AsyncMock(return_value=_remote_mcp_server()))
+    service = McpMarketApplicationService(repository, marketplace_catalog=catalog)
+
+    # Act
+    entry = await service.import_from_marketplace(
+        ImportMcpServerEntryCommand(ref="github.com/foo/bar-mcp", created_by=1)
+    )
+
+    # Assert
+    assert entry.name == "bar-mcp-2"
+
+
+@pytest.mark.asyncio
+async def test_marks_imported_refs_when_browsing_marketplace() -> None:
+    # Arrange
+    imported = McpServerEntry.create(
+        id="mcp-9",
+        name="bar-mcp",
+        display_name="Bar MCP",
+        description="",
+        category=McpCategory.OTHER,
+        tags=(),
+        transport=McpTransport.STDIO,
+        server_config={"command": "npx"},
+        created_by=1,
+        source=EntrySource.MARKETPLACE,
+        source_ref="github.com/foo/bar-mcp",
+    )
+    repository = SimpleNamespace(search=AsyncMock(return_value=[imported]))
+    catalog = SimpleNamespace(
+        search=AsyncMock(
+            return_value=RemoteMcpServerPage(items=(_remote_mcp_server(),), total=1, has_next=False)
+        )
+    )
+    service = McpMarketApplicationService(repository, marketplace_catalog=catalog)
+
+    # Act
+    view = await service.browse_marketplace(keyword="bar", sort=MarketplaceSort.DOWNLOADS)
+
+    # Assert
+    assert view.imported_refs == frozenset({"github.com/foo/bar-mcp"})
+
+
+@pytest.mark.asyncio
+async def test_imports_marketplace_skill_when_ref_is_new() -> None:
+    # Arrange
+    repository = SimpleNamespace(
+        find_by_source_ref=AsyncMock(return_value=None),
+        find_by_name=AsyncMock(return_value=None),
+        save=AsyncMock(side_effect=lambda entry: entry),
+    )
+    catalog = SimpleNamespace(get_skill=AsyncMock(return_value=_remote_skill()))
+    service = SkillMarketApplicationService(repository, marketplace_catalog=catalog)
+
+    # Act
+    entry = await service.import_from_marketplace(
+        ImportSkillEntryCommand(ref=_remote_skill().ref, created_by=1)
+    )
+
+    # Assert
+    assert entry.source is EntrySource.MARKETPLACE
+    assert entry.content == _remote_skill().content
+    assert entry.name == "report"
+
+
+@pytest.mark.asyncio
+async def test_rejects_marketplace_browse_when_catalog_not_configured() -> None:
+    # Arrange
+    service = SkillMarketApplicationService(SimpleNamespace())
+
+    # Act & Assert
+    with pytest.raises(BusinessException):
+        await service.browse_marketplace()
+
+
+def test_slugifies_upstream_ref_when_name_has_illegal_chars() -> None:
+    # Arrange
+    raw = "io.github.Some_Owner/My Repo!"
+
+    # Act
+    slug = slugify_entry_name(raw)
+
+    # Assert
+    assert slug == "my-repo"
+
+
+@pytest.mark.asyncio
+async def test_sorts_catalog_by_downloads_when_requested() -> None:
+    # Arrange
+    import time as time_module
+
+    from infr.client.cline_mcp_catalog_impl import ClineMcpMarketplaceCatalog
+
+    catalog = ClineMcpMarketplaceCatalog()
+    low = _remote_mcp_server("github.com/foo/low")
+    high = RemoteMcpServer(
+        ref="github.com/foo/high",
+        name="high",
+        display_name="High",
+        description="",
+        version="",
+        transport=McpTransport.STDIO,
+        server_config={},
+        stars=1,
+        downloads=99999,
+    )
+    catalog._cache = (time_module.monotonic() + 60, (low, high))
+
+    # Act
+    page = await catalog.search(sort=MarketplaceSort.DOWNLOADS, limit=1)
+
+    # Assert
+    assert page.items[0].ref == "github.com/foo/high"
+    assert page.total == 2
+    assert page.has_next is True
+
+
+def test_extracts_frontmatter_fields_when_metadata_is_nested() -> None:
+    # Arrange
+    from infr.client.skillsmp_catalog_impl import SkillsmpCatalog
+
+    content = '---\nname: nano-pdf\ndescription: "Edit PDFs."\nmetadata:\n  emoji: x\n---\n\nBody'
+
+    # Act
+    fields = SkillsmpCatalog._parse_frontmatter(content)
+
+    # Assert
+    assert fields["name"] == "nano-pdf"
+    assert fields["description"] == "Edit PDFs."
+    assert "emoji" not in fields
+
+
+def test_derives_raw_content_url_when_ref_is_tree_url() -> None:
+    # Arrange
+    from infr.client.skillsmp_catalog_impl import SkillsmpCatalog
+
+    ref = "https://github.com/openclaw/openclaw/tree/main/skills/nano-pdf"
+
+    # Act
+    raw_url = SkillsmpCatalog._to_raw_content_url(ref)
+
+    # Assert
+    assert raw_url == "https://raw.githubusercontent.com/openclaw/openclaw/main/skills/nano-pdf/SKILL.md"
