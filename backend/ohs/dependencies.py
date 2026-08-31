@@ -79,6 +79,7 @@ from infr.repository.usage_governance_repository_impl import UsageGovernanceRepo
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 from infr.workspace.workspace_root_resolver_impl import WorkspaceRootResolverImpl
 from domain.im_binding.model.channel_registry import ImChannelRegistry
+from domain.im_binding.model.channel_type import ImChannelType
 from domain.team.model.status import ExecutionFailureCategory, ExecutionFailurePhase
 from ohs.session_event_coordinator import SessionEventCoordinator
 from ohs.im_delivery_coordinator import ImDeliveryCoordinator
@@ -117,6 +118,14 @@ _im_delivery_monitor = ImDeliveryMonitor(
 )
 
 
+#: 允许从渠道临时目录搬进会话工作区的附件来源.
+#: 渠道适配器下载入站媒体时会把自己的 channel_type 写进 ``source``;
+#: ``feishu`` 是飞书品牌下的历史别名, 一并接受。
+_IM_ATTACHMENT_SOURCES: frozenset[str] = frozenset(
+    {channel.value for channel in ImChannelType} | {"feishu"}
+)
+
+
 async def _stage_inbound_attachments(
     session: Any,
     attachments: list[dict[str, Any]],
@@ -143,7 +152,7 @@ async def _stage_inbound_attachments(
                 staged.append(item)
                 continue
 
-            if str(item.get("source") or "").lower() not in {"lark", "feishu"}:
+            if str(item.get("source") or "").lower() not in _IM_ATTACHMENT_SOURCES:
                 staged.append(item)
                 continue
 

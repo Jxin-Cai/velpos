@@ -6,6 +6,7 @@ Supports multiple concurrent channel instances, each with its own WS listener.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import mimetypes
@@ -39,6 +40,7 @@ from domain.im_binding.model.im_message import (
     SegmentType,
     SendReceipt,
 )
+from infr.im.inbound_voice import MILLISECONDS_PER_SECOND
 from infr.im.lark.lark_api import LarkApiClient, LarkApiError
 from infr.im.lark.lark_message import (
     LarkInboundContent,
@@ -49,6 +51,19 @@ from infr.im.lark.lark_message import (
 from infr.storage.attachment_storage_gateway import AttachmentStorageGateway
 
 logger = logging.getLogger(__name__)
+
+#: 飞书语音文件识别接口的固定入参 — 只接受 16k 单声道 pcm.
+_SPEECH_RECOGNITION_FORMAT = "pcm"
+_SPEECH_RECOGNITION_ENGINE = "16k_auto"
+_SPEECH_RECOGNITION_SAMPLE_RATE = 16000
+_SPEECH_RECOGNITION_BYTES_PER_SAMPLE = 2
+#: 文件识别接口只受理 60 秒以内的语音, 更长的直接跳过而不是发一个必然被拒的请求.
+_SPEECH_RECOGNITION_MAX_SECONDS = 60
+_SPEECH_RECOGNITION_MAX_PCM_BYTES = (
+    _SPEECH_RECOGNITION_SAMPLE_RATE
+    * _SPEECH_RECOGNITION_BYTES_PER_SAMPLE
+    * _SPEECH_RECOGNITION_MAX_SECONDS
+)
 
 LARK_CHANNEL_SPEC = ImChannelSpec(
     channel_type=ImChannelType.LARK,
@@ -843,7 +858,129 @@ class LarkAdapter(ImChannelAdapter):
                     resource_type,
                     exc_info=True,
                 )
-        return parsed.text, attachments
+        if not parsed.is_voice:
+            return parsed.text, attachments
+        return await self._transcribe_inbound_voice(
+            client, conn, message_id, parsed, attachments,
+        )
+
+    async def _transcribe_inbound_voice(
+        self,
+        client,
+        conn: _WsConnection,
+        message_id: str,
+        parsed: LarkInboundContent,
+        attachments: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """用飞书语音识别补齐转写文本 — 失败时保留占位正文与音频文件."""
+        if not attachments:
+            return parsed.text, attachments
+        voice = attachments[0]
+        if parsed.duration_ms > 0:
+            voice["duration"] = round(parsed.duration_ms / MILLISECONDS_PER_SECOND)
+        transcript = await self._recognize_speech_file(client, voice["path"])
+        if not transcript:
+            logger.info(
+                "[Lark-adapter] Voice left untranscribed, forwarding audio only: "
+                "channel=%s msg_id=%s",
+                conn.channel_id,
+                message_id,
+            )
+            return parsed.text, attachments
+        voice["transcript"] = transcript
+        return transcript, attachments
+
+    async def _recognize_speech_file(self, client, audio_path: str) -> str:
+        """调用飞书语音文件识别接口, 返回转写文本; 不可用时返回空串.
+
+        该接口只吃 16k 单声道 pcm, 而消息里的语音是 opus, 必须先转码。识别
+        依赖应用开通"语音识别"权限, 未开通或超出时长上限都只影响这一条消息,
+        因此这里降级而不是让整条入站消息失败。
+        """
+        from lark_oapi.api.speech_to_text.v1 import (
+            FileConfig,
+            FileRecognizeSpeechRequest,
+            FileRecognizeSpeechRequestBody,
+            Speech,
+        )
+
+        pcm_path: Path | None = None
+        try:
+            pcm_path = await self._transcode_to_recognizable_pcm(audio_path)
+            encoded = await asyncio.to_thread(self._encode_pcm_for_recognition, pcm_path)
+            if not encoded:
+                return ""
+            body = (
+                FileRecognizeSpeechRequestBody.builder()
+                .speech(Speech.builder().speech(encoded).build())
+                .config(
+                    FileConfig.builder()
+                    .file_id(uuid.uuid4().hex)
+                    .format(_SPEECH_RECOGNITION_FORMAT)
+                    .engine_type(_SPEECH_RECOGNITION_ENGINE)
+                    .build()
+                )
+                .build()
+            )
+            request = FileRecognizeSpeechRequest.builder().request_body(body).build()
+            response = await client.speech_to_text.v1.speech.afile_recognize(request)
+            if not response.success():
+                raise self._sdk_error("recognize speech file", response)
+            text = getattr(getattr(response, "data", None), "recognition_text", "")
+            return str(text or "").strip()
+        except (LarkApiError, RuntimeError, OSError):
+            logger.warning(
+                "[Lark-adapter] Speech recognition unavailable for %s "
+                "(检查应用是否开通语音识别权限, 以及 ffmpeg 是否可用)",
+                audio_path,
+                exc_info=True,
+            )
+            return ""
+        finally:
+            if pcm_path is not None:
+                try:
+                    pcm_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "[Lark-adapter] Failed to remove temporary pcm file",
+                        exc_info=True,
+                    )
+
+    @staticmethod
+    def _encode_pcm_for_recognition(pcm_path: Path) -> str:
+        """把 pcm 读成 base64; 超出接口时长上限时返回空串, 由调用方降级."""
+        size = pcm_path.stat().st_size
+        if size > _SPEECH_RECOGNITION_MAX_PCM_BYTES:
+            logger.info(
+                "[Lark-adapter] Voice too long for file recognition "
+                "(%d bytes > %ds), forwarding audio only",
+                size,
+                _SPEECH_RECOGNITION_MAX_SECONDS,
+            )
+            return ""
+        return base64.b64encode(pcm_path.read_bytes()).decode("ascii")
+
+    async def _transcode_to_recognizable_pcm(self, audio_path: str) -> Path:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg is required to transcribe Lark voice messages")
+        output = self._temporary_media_path(".pcm")
+        await self._run_ffmpeg(
+            ffmpeg,
+            "-i",
+            audio_path,
+            "-vn",
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ac",
+            "1",
+            "-ar",
+            str(_SPEECH_RECOGNITION_SAMPLE_RATE),
+            str(output),
+        )
+        return output
 
     def _connection_credentials(self, channel_id: str) -> tuple[str, str, str] | None:
         conn = self._connections.get(channel_id)

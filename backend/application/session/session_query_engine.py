@@ -1414,26 +1414,55 @@ class SessionQueryEngine:
             "attachments": self._serialize_attachments(queued.attachments),
         }
 
-    @staticmethod
-    def _compose_prompt(command: RunQueryCommand) -> str:
-        attachment_refs = []
+    @classmethod
+    def _compose_prompt(cls, command: RunQueryCommand) -> str:
         image_paths = set(command.image_paths)
-        for attachment in command.attachments:
-            path = attachment.get("path", "")
-            filename = attachment.get("filename", "attachment")
-            mime_type = attachment.get("mime_type", "")
-            if not path:
-                continue
-            if mime_type.startswith("image/") or path in image_paths:
-                attachment_refs.append(f"[Image: {path}]")
-            else:
-                attachment_refs.append(f"[Attachment: {filename} path={path}]")
+        attachment_refs = [
+            reference
+            for attachment in command.attachments
+            if (
+                reference := cls._attachment_reference(
+                    attachment, image_paths, command.prompt,
+                )
+            )
+        ]
         if not attachment_refs:
             return command.prompt
         references = "\n".join(attachment_refs)
         if not command.prompt:
             return references
         return f"{command.prompt}\n\n{references}"
+
+    @staticmethod
+    def _attachment_reference(
+        attachment: dict[str, Any],
+        image_paths: set[str],
+        prompt: str,
+    ) -> str:
+        """把一个附件渲染成 prompt 里的引用行; 无法定位的附件返回空串."""
+        path = attachment.get("path", "")
+        if not path:
+            return ""
+        filename = attachment.get("filename", "attachment")
+        mime_type = str(attachment.get("mime_type") or "")
+
+        if mime_type.startswith("image/") or path in image_paths:
+            return f"[Image: {path}]"
+
+        if not mime_type.startswith("audio/"):
+            return f"[Attachment: {filename} path={path}]"
+
+        # 语音单独标注, 让模型知道正文来自语音而非键入, 并能读到原始音频.
+        parts = [f"[Voice: {filename} path={path}"]
+        duration = int(attachment.get("duration") or 0)
+        if duration > 0:
+            parts.append(f" duration={duration}s")
+        transcript = str(attachment.get("transcript") or "").strip()
+        # 转写文本通常已经是这条消息的正文, 重复一遍只会浪费上下文.
+        if transcript and transcript not in prompt:
+            parts.append(f' transcript="{transcript}"')
+        parts.append("]")
+        return "".join(parts)
 
     @staticmethod
     def _resolve_outbound_attachments(

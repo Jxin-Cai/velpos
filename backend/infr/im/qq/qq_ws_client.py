@@ -8,9 +8,10 @@ auto-reconnection — all scoped to individual connections.
 from __future__ import annotations
 
 import asyncio
+import enum
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,10 +49,29 @@ _OP_INVALID_SESSION = 9
 _OP_HELLO = 10
 _OP_HEARTBEAT_ACK = 11
 
-OnMessageCallback = Callable[
-    [str, str, str, str | None],  # msg_id, content, sender_openid, group_openid
-    Awaitable[None],
-]
+
+class QqMessageEvent(str, enum.Enum):
+    """携带用户消息的网关派发事件."""
+
+    C2C = "C2C_MESSAGE_CREATE"
+    GROUP_AT = "GROUP_AT_MESSAGE_CREATE"
+
+
+_MESSAGE_EVENT_TYPES = frozenset(event.value for event in QqMessageEvent)
+
+
+@dataclass(frozen=True)
+class QqInboundEvent:
+    """一条 QQ 入站消息 — 网关只做协议搬运, 富媒体交由适配器物化."""
+
+    message_id: str
+    content: str
+    sender_openid: str
+    group_openid: str | None = None
+    attachments: tuple[Mapping[str, Any], ...] = ()
+
+
+OnMessageCallback = Callable[[QqInboundEvent], Awaitable[None]]
 
 
 @dataclass
@@ -298,18 +318,25 @@ class QqWsClient:
         event_data = data.get("d", {})
         logger.info("[QQ-WS] channel=%s Dispatch event: t=%s", conn.channel_id, event_type)
 
-        if event_type in ("C2C_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE"):
+        if event_type in _MESSAGE_EVENT_TYPES:
             msg_id = event_data.get("id", "")
             content = (event_data.get("content") or "").strip()
+            attachments = _parse_attachments(event_data)
             logger.info(
-                "[QQ-WS] channel=%s Message event: t=%s msg_id=%s content=%.100s",
-                conn.channel_id, event_type, msg_id, content,
+                "[QQ-WS] channel=%s Message event: t=%s msg_id=%s "
+                "attachments=%d content=%.100s",
+                conn.channel_id, event_type, msg_id, len(attachments), content,
             )
-            if not content or not msg_id:
-                logger.warning("[QQ-WS] channel=%s Skipping: empty content or msg_id", conn.channel_id)
+            # 语音和图片消息的 content 通常为空, 只有附件 — 单看 content 会把
+            # 它们当成空消息丢掉。
+            if not msg_id or not (content or attachments):
+                logger.warning(
+                    "[QQ-WS] channel=%s Skipping: no msg_id, or neither content "
+                    "nor attachments", conn.channel_id,
+                )
                 return
 
-            if event_type == "C2C_MESSAGE_CREATE":
+            if event_type == QqMessageEvent.C2C.value:
                 sender_openid = event_data.get("author", {}).get("user_openid", "")
                 group_openid = None
             else:
@@ -324,7 +351,15 @@ class QqWsClient:
             if conn.on_message:
                 try:
                     logger.info("[QQ-WS] channel=%s Calling on_message callback...", conn.channel_id)
-                    await conn.on_message(msg_id, content, sender_openid, group_openid)
+                    await conn.on_message(
+                        QqInboundEvent(
+                            message_id=msg_id,
+                            content=content,
+                            sender_openid=sender_openid,
+                            group_openid=group_openid,
+                            attachments=attachments,
+                        )
+                    )
                     logger.info("[QQ-WS] channel=%s on_message callback returned", conn.channel_id)
                 except Exception:
                     logger.error(
@@ -338,3 +373,15 @@ class QqWsClient:
             pass  # Already handled during connect
         else:
             logger.info("[QQ-WS] channel=%s Unhandled dispatch: t=%s", conn.channel_id, event_type)
+
+
+def _parse_attachments(event_data: dict[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """挑出带下载地址的附件 — 没有 url 也没有 voice_wav_url 的条目无法物化."""
+    raw = event_data.get("attachments")
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        item
+        for item in raw
+        if isinstance(item, dict) and (item.get("url") or item.get("voice_wav_url"))
+    )

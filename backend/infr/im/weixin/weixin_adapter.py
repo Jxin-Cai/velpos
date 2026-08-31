@@ -31,6 +31,7 @@ from domain.im_binding.model.im_message import (
     OutboundMessage,
     SendReceipt,
 )
+from infr.im.inbound_voice import VOICE_PLACEHOLDER_TEXT
 from infr.im.weixin.weixin_api import WeixinApiClient, DEFAULT_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,24 @@ _AUTH_RECOVERY_RETRY_SECONDS = 5
 class _TypingStatus(IntEnum):
     TYPING = 1
     CANCEL = 2
+
+
+class _MessageItemType(IntEnum):
+    """iLink ``item_list[].type`` — 消息内容项类型."""
+
+    TEXT = 1
+    IMAGE = 2
+    VOICE = 3
+    FILE = 4
+    VIDEO = 5
+
+
+@dataclass(frozen=True)
+class _WeixinInboundContent:
+    """一条 iLink 入站消息的可读正文与来源标记."""
+
+    text: str = ""
+    is_voice: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,14 +401,16 @@ class WeixinAdapter(ImChannelAdapter):
                     from_user_id = msg.get("from_user_id", "")
                     context_token = msg.get("context_token", "")
                     message_id = str(msg.get("message_id", msg.get("seq", "")))
-                    text = _extract_text(msg)
+                    parsed = _extract_inbound_content(msg)
+                    text = parsed.text
 
                     if not text or not message_id:
                         continue
 
                     logger.info(
-                        "[WeChat-adapter] Inbound message: channel=%s msg_id=%s from=%s text=%.100s",
-                        channel_id, message_id, from_user_id, text,
+                        "[WeChat-adapter] Inbound message: channel=%s msg_id=%s "
+                        "from=%s voice=%s text=%.100s",
+                        channel_id, message_id, from_user_id, parsed.is_voice, text,
                     )
 
                     on_message = self._on_messages.get(channel_id)
@@ -679,16 +700,32 @@ class WeixinAdapter(ImChannelAdapter):
             )
 
 
-def _extract_text(msg: dict[str, Any]) -> str:
-    """Concatenate the text items (``type == 1``) of an iLink message."""
+def _extract_inbound_content(msg: dict[str, Any]) -> _WeixinInboundContent:
+    """把 iLink 的 ``item_list`` 收敛成一条可读正文.
+
+    语音项由 iLink 服务端转写后放在 ``voice_item.text``, 直接当正文使用 — 这也
+    是微信侧唯一能拿到的语音内容, 原始音频是微信私有的 SILK 编码, 走 CDN 并用
+    AES-128-ECB 加密, 需要额外的解密与解码依赖才能落盘, 暂不下载。
+    """
     parts: list[str] = []
+    is_voice = False
     for item in msg.get("item_list", []):
-        if item.get("type") != 1:
+        if not isinstance(item, dict):
             continue
-        text_item = item.get("text_item", {})
-        parts.append(
-            text_item.get("text", "")
-            if isinstance(text_item, dict)
-            else str(text_item)
-        )
-    return "".join(parts).strip()
+        item_type = item.get("type")
+        if item_type == _MessageItemType.TEXT:
+            parts.append(_item_text(item, "text_item"))
+        elif item_type == _MessageItemType.VOICE:
+            is_voice = True
+            parts.append(_item_text(item, "voice_item"))
+    text = "".join(parts).strip()
+    if is_voice and not text:
+        # 转写为空 (静音或识别失败) 时给占位, 否则整条消息会被当空消息丢弃,
+        # 用户看到的是"发了语音但机器人毫无反应"。
+        text = VOICE_PLACEHOLDER_TEXT
+    return _WeixinInboundContent(text=text, is_voice=is_voice)
+
+
+def _item_text(item: dict[str, Any], key: str) -> str:
+    payload = item.get(key)
+    return str(payload.get("text") or "") if isinstance(payload, dict) else ""

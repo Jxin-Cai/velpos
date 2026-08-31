@@ -14,11 +14,26 @@ from dataclasses import dataclass
 
 import httpx
 
+from domain.message.model.attachment import ensure_within_attachment_limit
+
 logger = logging.getLogger(__name__)
 
 TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 API_BASE = "https://api.sgroup.qq.com"
 API_TIMEOUT = 10.0
+MEDIA_TIMEOUT = 30.0
+
+
+def _normalize_media_url(url: str) -> str:
+    """补齐 QQ 富媒体链接的协议头 — 下发的链接可能是 ``//host/path`` 或裸 host."""
+    candidate = (url or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith(("http://", "https://")):
+        return candidate
+    if candidate.startswith("//"):
+        return f"https:{candidate}"
+    return f"https://{candidate}"
 
 
 @dataclass
@@ -132,6 +147,32 @@ class QqApiClient:
             logger.info("[QQ-API] send_c2c_message response: status=%d body=%.200s", resp.status_code, resp.text)
             resp.raise_for_status()
             return resp.json()
+
+    # ── Rich media download ──
+
+    async def download_attachment(self, url: str) -> bytes:
+        """下载入站附件.
+
+        QQ 把富媒体放在自带签名的公开 CDN 链接上, 不需要 bot token; 但下发的
+        链接常常省略协议头, 且大小不受我们控制, 所以这里补齐 scheme 并在流式
+        读取时守住附件上限。
+        """
+        resolved = _normalize_media_url(url)
+        if not resolved:
+            raise ValueError("QQ attachment url is empty")
+
+        chunks: list[bytes] = []
+        downloaded = 0
+        async with httpx.AsyncClient(
+            timeout=MEDIA_TIMEOUT, follow_redirects=True,
+        ) as client:
+            async with client.stream("GET", resolved) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    downloaded += len(chunk)
+                    ensure_within_attachment_limit(downloaded)
+                    chunks.append(chunk)
+        return b"".join(chunks)
 
     async def send_group_message(
         self, group_openid: str, content: str, msg_id: str = "",

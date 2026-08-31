@@ -6,6 +6,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from infr.im.inbound_voice import VOICE_PLACEHOLDER_TEXT
+
 
 class LarkMessageType(str, Enum):
     TEXT = "text"
@@ -103,8 +105,16 @@ class LarkOutboundMessage:
 
 @dataclass(frozen=True)
 class LarkInboundContent:
+    """飞书入站消息的解析结果.
+
+    ``is_voice`` 标记这条消息是语音输入 — 飞书不随消息下发转写文本, 适配器
+    需要据此另调语音识别接口, 拿到结果后替换 ``text`` 占位。
+    """
+
     text: str
     resources: tuple[tuple[str, str], ...] = ()
+    is_voice: bool = False
+    duration_ms: int = 0
 
 
 def parse_inbound_content(message_type: str, raw_content: str) -> LarkInboundContent:
@@ -122,15 +132,22 @@ def parse_inbound_content(message_type: str, raw_content: str) -> LarkInboundCon
         key = _string_value(content, "image_key")
         return LarkInboundContent(text="[收到图片]", resources=(("image", key),) if key else ())
 
+    if message_type == LarkMessageType.AUDIO.value:
+        key = _string_value(content, "file_key")
+        return LarkInboundContent(
+            text=VOICE_PLACEHOLDER_TEXT,
+            resources=(("file", key),) if key else (),
+            is_voice=True,
+            duration_ms=_int_value(content, "duration"),
+        )
+
     if message_type in {
         LarkMessageType.FILE.value,
-        LarkMessageType.AUDIO.value,
         LarkMessageType.MEDIA.value,
     }:
         key = _string_value(content, "file_key")
         label = {
             LarkMessageType.FILE.value: "文件",
-            LarkMessageType.AUDIO.value: "音频",
             LarkMessageType.MEDIA.value: "视频",
         }[message_type]
         name = _string_value(content, "file_name")
@@ -161,6 +178,15 @@ def _string_value(value: Any, key: str) -> str:
         return ""
     result = value.get(key)
     return result if isinstance(result, str) else ""
+
+
+def _int_value(value: Any, key: str) -> int:
+    if not isinstance(value, dict):
+        return 0
+    try:
+        return max(0, int(value.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _render_rich_text(

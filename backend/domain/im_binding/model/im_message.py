@@ -45,7 +45,8 @@ class MessageSegment:
     """消息片段.
 
     文本片段只用 ``text``；媒体片段用 ``path`` 指向已落盘的本地文件；
-    卡片片段用 ``payload`` 承载渠道原生的卡片结构。
+    卡片片段用 ``payload`` 承载渠道原生的卡片结构。音频片段可额外携带
+    ``transcript`` — 平台或语音识别服务给出的转写文本。
     """
 
     segment_type: SegmentType
@@ -56,6 +57,7 @@ class MessageSegment:
     size_bytes: int = 0
     duration_seconds: int = 0
     external_key: str = ""
+    transcript: str = ""
     payload: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_PAYLOAD)
 
     def __post_init__(self) -> None:
@@ -90,6 +92,7 @@ class MessageSegment:
         size_bytes: int = 0,
         duration_seconds: int = 0,
         external_key: str = "",
+        transcript: str = "",
     ) -> MessageSegment:
         return cls(
             segment_type=segment_type,
@@ -99,6 +102,7 @@ class MessageSegment:
             size_bytes=size_bytes,
             duration_seconds=duration_seconds,
             external_key=external_key,
+            transcript=transcript,
         )
 
     # -- 与现有附件 dict 的互转 --
@@ -114,6 +118,7 @@ class MessageSegment:
             size_bytes=int(attachment.get("size_bytes") or 0),
             duration_seconds=int(attachment.get("duration") or 0),
             external_key=str(attachment.get("external_key") or ""),
+            transcript=str(attachment.get("transcript") or ""),
         )
 
     def to_attachment(self, source: str = "") -> dict[str, Any]:
@@ -127,6 +132,8 @@ class MessageSegment:
             payload["external_key"] = self.external_key
         if self.duration_seconds:
             payload["duration"] = self.duration_seconds
+        if self.transcript:
+            payload["transcript"] = self.transcript
         if source:
             payload["source"] = source
         return payload

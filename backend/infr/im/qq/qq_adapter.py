@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Mapping
 from typing import Any
+
+import httpx
 
 from domain.im_binding.acl.channel_errors import ChannelRoutingError
 from domain.im_binding.acl.im_channel_adapter import (
@@ -24,10 +27,19 @@ from domain.im_binding.model.im_message import (
     OutboundMessage,
     SendReceipt,
 )
+from infr.im.inbound_voice import (
+    VOICE_PLACEHOLDER_TEXT,
+    InboundVoice,
+    InboundVoiceStore,
+    VoiceCodec,
+)
 from infr.im.qq.qq_api import QqApiClient
-from infr.im.qq.qq_ws_client import QqWsClient
+from infr.im.qq.qq_ws_client import QqInboundEvent, QqWsClient
 
 logger = logging.getLogger(__name__)
+
+#: QQ 附件的 ``content_type`` 取值 — 语音消息是唯一的非 MIME 形式取值.
+_VOICE_CONTENT_TYPE = "voice"
 
 QQ_CHANNEL_SPEC = ImChannelSpec(
     channel_type=ImChannelType.QQ,
@@ -41,6 +53,8 @@ QQ_CHANNEL_SPEC = ImChannelSpec(
     capabilities=frozenset({
         ChannelCapability.INBOUND_LISTEN,
         ChannelCapability.OUTBOUND_TEXT,
+        # 语音消息随附件下发, 下载落盘后进入会话工作区.
+        ChannelCapability.INBOUND_ATTACHMENT,
         ChannelCapability.THREAD_REPLY,
         ChannelCapability.GROUP_CHAT,
         # msg_seq 让同一 idempotency_key 的重发被 QQ 侧去重.
@@ -65,9 +79,11 @@ class QqAdapter(ImChannelAdapter):
         self,
         ws_client: QqWsClient,
         api_client: QqApiClient,
+        voice_store: InboundVoiceStore | None = None,
     ) -> None:
         self._ws = ws_client
         self._api = api_client
+        self._voice_store = voice_store or InboundVoiceStore()
 
     # ── Initialization ──
 
@@ -154,18 +170,34 @@ class QqAdapter(ImChannelAdapter):
             logger.warning("[QQ-adapter] No credentials in binding config for channel=%s!", channel_id)
             return
 
-        async def dispatch(
-            msg_id: str, content: str, sender_id: str, group_id: str,
-        ) -> None:
+        async def dispatch(event: QqInboundEvent) -> None:
             if on_message is None:
+                return
+            text, attachments = await self._materialize_inbound_event(
+                binding.session_id, event,
+            )
+            if not text:
+                logger.warning(
+                    "[QQ-adapter] Skipping message without usable content: "
+                    "channel=%s msg_id=%s", channel_id, event.message_id,
+                )
                 return
             await on_message(
                 InboundMessage(
                     channel_id=channel_id or binding.id,
                     channel_type=ImChannelType.QQ.value,
-                    external_message_id=msg_id,
-                    route=ChannelRoute(sender_id=sender_id, group_id=group_id),
-                    segments=(MessageSegment.of_text(content),),
+                    external_message_id=event.message_id,
+                    route=ChannelRoute(
+                        sender_id=event.sender_openid,
+                        group_id=event.group_openid or "",
+                    ),
+                    segments=(
+                        MessageSegment.of_text(text),
+                        *(
+                            MessageSegment.from_attachment(item)
+                            for item in attachments
+                        ),
+                    ),
                 )
             )
 
@@ -178,6 +210,59 @@ class QqAdapter(ImChannelAdapter):
             app_secret=app_secret,
         )
         logger.info("[QQ-adapter] WS client started for channel=%s", channel_id)
+
+    async def _materialize_inbound_event(
+        self, session_id: str, event: QqInboundEvent,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """把 QQ 富媒体转成正文 + 已落盘附件.
+
+        语音附件上腾讯自带 ``asr_refer_text`` 转写结果, 直接当正文使用; 同时把
+        转码后的 WAV 落盘, 模型需要时可以听原始音频。
+        """
+        voices = [
+            item
+            for item in event.attachments
+            if str(item.get("content_type") or "").lower() == _VOICE_CONTENT_TYPE
+        ]
+        if not voices:
+            return event.content, []
+
+        attachments: list[dict[str, Any]] = []
+        transcripts: list[str] = []
+        for item in voices:
+            voice = await self._materialize_voice(session_id, item)
+            attachments.extend(voice.attachments)
+            if voice.transcript.strip():
+                transcripts.append(voice.transcript.strip())
+
+        text = "\n".join([event.content, *transcripts]).strip()
+        return text or VOICE_PLACEHOLDER_TEXT, attachments
+
+    async def _materialize_voice(
+        self, session_id: str, attachment: Mapping[str, Any],
+    ) -> InboundVoice:
+        transcript = str(attachment.get("asr_refer_text") or "").strip()
+        # 转码后的 WAV 通用得多, 原始链接常常是 SILK, 优先取 WAV.
+        wav_url = str(attachment.get("voice_wav_url") or "")
+        url = wav_url or str(attachment.get("url") or "")
+        codec = VoiceCodec.WAV if wav_url else VoiceCodec.SILK
+        try:
+            audio = await self._api.download_attachment(url)
+        except (httpx.HTTPError, ValueError):
+            logger.warning(
+                "[QQ-adapter] Failed to download inbound voice, keeping "
+                "transcript only: url=%.120s", url,
+                exc_info=True,
+            )
+            return InboundVoice(transcript=transcript)
+
+        return await self._voice_store.store(
+            session_id=session_id,
+            source=ImChannelType.QQ.value,
+            audio=audio,
+            codec=codec,
+            transcript=transcript,
+        )
 
     async def stop_listening(self, binding: ImBinding) -> None:
         """Stop the QQ WebSocket listener for a specific channel."""
