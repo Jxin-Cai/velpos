@@ -33,10 +33,9 @@ import { TaskProgressPanel, useTaskProgress } from '@features/task-progress'
 import { TracePanel } from '@features/trace-viewer'
 import { getSettings, updateSettings } from '@features/settings-manager'
 import { usePermissionMode } from '../model/usePermissionMode'
-import { getExecutionHistory } from '@features/team-board'
 import { isAdmin } from '@shared/lib/authStore'
 
-const emit = defineEmits(['locate-session', 'return-team', 'open-file'])
+const emit = defineEmits(['locate-session', 'open-file'])
 
 const {
   session, messages, status, canceling, cancelledHint, waitingForSlot, recovery, currentSessionId,
@@ -51,55 +50,12 @@ const {
   loadAvailableModels,
   beginModelsLoading,
 } = useAvailableModels()
-const { currentProject, updateProjectInList, projects } = useProject()
+const { currentProject, updateProjectInList } = useProject()
 
 const wsConnection = inject('wsConnection')
 
 const isRunning = computed(() => status.value === 'running')
 const isReconnecting = computed(() => status.value === 'reconnecting')
-const cardExecutionId = computed(() => session.value?.card_execution_id || '')
-const cardProjectId = computed(() => {
-  const agentProjectId = session.value?.project_id || currentProject.value?.id || ''
-  const teamProject = projects.value.find(
-    p => p.project_type === 'team' && p.dir_path && agentProjectId &&
-      projects.value.find(ap => ap.id === agentProjectId)?.dir_path?.startsWith(p.dir_path)
-  )
-  return teamProject?.id || agentProjectId
-})
-const cardHistoryVisible = ref(false)
-const cardHistoryLoading = ref(false)
-const cardHistoryError = ref('')
-const cardHistory = ref([])
-
-async function toggleCardHistory() {
-  cardHistoryVisible.value = !cardHistoryVisible.value
-  if (!cardHistoryVisible.value || cardHistory.value.length || !cardExecutionId.value) return
-  cardHistoryLoading.value = true
-  cardHistoryError.value = ''
-  try {
-    const result = await getExecutionHistory(cardExecutionId.value)
-    cardHistory.value = result || []
-  } catch (error) {
-    cardHistoryError.value = error.message || '无法加载愿望卡流转记录'
-  } finally {
-    cardHistoryLoading.value = false
-  }
-}
-
-function returnToTeam() {
-  emit('return-team', cardProjectId.value)
-}
-
-function formatCardHistoryTime(value) {
-  if (!value) return '—'
-  return new Date(value).toLocaleString()
-}
-
-watch(cardExecutionId, () => {
-  cardHistoryVisible.value = false
-  cardHistory.value = []
-  cardHistoryError.value = ''
-})
 const recoveryPending = computed(() => recovery.value?.pending_request || null)
 const recoveryQueued = computed(() => recovery.value?.queued_command || null)
 const isCancelRequested = computed(() => Boolean(recovery.value?.cancel_requested))
@@ -1501,60 +1457,6 @@ function formatMaxTokens(n) {
           :clearing="clearing"
           @clear="handleClear"
         />
-        <div v-if="cardExecutionId" class="dropdown-wrapper" @click.stop>
-          <button
-            class="toolbar-btn wish-card-toolbar-btn"
-            :class="{ 'toolbar-btn--active': cardHistoryVisible }"
-            type="button"
-            aria-label="View wish card history"
-            data-tooltip="Wish card"
-            title="View wish card flow"
-            @click="toggleCardHistory"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <path d="M7 8h10M7 12h6M7 16h8" />
-            </svg>
-            <span class="wish-card-toolbar-label">愿望卡</span>
-          </button>
-          <Transition name="dropdown-fade">
-            <div v-if="cardHistoryVisible" class="card-history-panel" role="dialog" aria-label="Wish card flow history">
-              <div class="card-history-header">
-                <div>
-                  <strong>愿望卡流转记录</strong>
-                  <span>每次执行对应一个 Agent 会话</span>
-                </div>
-                <button type="button" class="card-history-back" @click="returnToTeam">回到 Team</button>
-              </div>
-              <div v-if="cardHistoryLoading" class="card-history-state">加载流转记录…</div>
-              <div v-else-if="cardHistoryError" class="card-history-state card-history-state--error">{{ cardHistoryError }}</div>
-              <ol v-else class="card-history-list">
-                <li v-for="(item, index) in cardHistory" :key="item.execution_id" class="card-history-item">
-                  <span class="card-history-step">{{ index + 1 }}</span>
-                  <div class="card-history-item-main">
-                    <div class="card-history-item-title">
-                      <strong>{{ item.agent_name }}</strong>
-                      <span class="card-history-status" :class="`card-history-status--${item.status}`">{{ item.status }}</span>
-                    </div>
-                    <div class="card-history-meta">
-                      <button
-                        v-if="item.session_id"
-                        type="button"
-                        class="card-history-session"
-                        @click="setCurrentSessionId(item.session_id)"
-                      >
-                        Session {{ item.session_id }}
-                      </button>
-                      <span v-else>Session 未创建</span>
-                      <span>· {{ formatCardHistoryTime(item.started_at || item.created_at) }}</span>
-                    </div>
-                    <div v-if="item.failure_reason" class="card-history-failure">{{ item.failure_reason }}</div>
-                  </div>
-                </li>
-              </ol>
-            </div>
-          </Transition>
-        </div>
         <!-- History button -->
         <div class="dropdown-wrapper" @click.stop>
           <button
@@ -4047,178 +3949,4 @@ button.dash-chip[disabled] {
   color: var(--text-secondary);
 }
 
-.wish-card-toolbar-btn {
-  color: #f2c94c;
-  border-color: color-mix(in srgb, #f2c94c 38%, var(--border));
-}
-
-.wish-card-toolbar-label {
-  font-weight: 600;
-}
-
-.card-history-panel {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
-  z-index: 50;
-  width: min(390px, calc(100vw - 28px));
-  max-height: min(520px, 65vh);
-  overflow: auto;
-  padding: 14px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(18px);
-}
-
-.card-history-header,
-.card-history-item-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.card-history-header {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.card-history-header > div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.card-history-header strong {
-  color: var(--text-primary);
-  font-size: 13px;
-}
-
-.card-history-header span,
-.card-history-meta {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.card-history-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.card-history-session {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-  font: inherit;
-}
-
-.card-history-session:hover {
-  text-decoration: underline;
-}
-
-.card-history-back {
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: var(--radius-md);
-  background: var(--accent-dim);
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.card-history-state {
-  padding: 24px 8px;
-  color: var(--text-muted);
-  text-align: center;
-  font-size: 12px;
-}
-
-.card-history-state--error,
-.card-history-failure {
-  color: var(--status-danger);
-}
-
-.card-history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 0;
-  padding: 12px 0 0;
-  list-style: none;
-}
-
-.card-history-item {
-  position: relative;
-  display: grid;
-  grid-template-columns: 26px 1fr;
-  gap: 10px;
-  min-height: 58px;
-}
-
-.card-history-item:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  top: 24px;
-  bottom: 0;
-  left: 12px;
-  width: 1px;
-  background: var(--border);
-}
-
-.card-history-step {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 25px;
-  height: 25px;
-  border: 1px solid var(--border-active);
-  border-radius: 50%;
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.card-history-item-main {
-  min-width: 0;
-  padding: 2px 0 12px;
-}
-
-.card-history-item-title strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.card-history-status {
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: var(--bg-hover);
-  color: var(--text-muted);
-  font-size: 10px;
-  text-transform: capitalize;
-}
-
-.card-history-status--running { color: #f2c94c; }
-.card-history-status--completed { color: #42b883; }
-.card-history-status--failed { color: #e06c75; }
-
-.card-history-failure {
-  margin-top: 4px;
-  font-size: 11px;
-}
-
-@media (max-width: 640px) {
-  .wish-card-toolbar-label { display: none; }
-  .card-history-panel { position: fixed; right: 14px; bottom: 86px; left: 14px; width: auto; }
-}
 </style>

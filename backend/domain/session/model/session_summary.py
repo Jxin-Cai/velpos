@@ -20,5 +20,3 @@ class SessionSummary:
     name: str
     sdk_session_id: str
     updated_time: datetime | None
-    card_execution_id: str | None = None
-    agent_slot_id: str | None = None

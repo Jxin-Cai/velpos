@@ -8,7 +8,6 @@ import { useImBinding } from '@features/im-binding'
 import { createWsConnection, createGlobalEventConnection } from '@shared/api/wsClient'
 import { AUTH_REQUIRED_EVENT } from '@shared/api/httpClient'
 import { listSchedules } from '@features/scheduler/api/schedulerApi'
-import { TeamBoardPage, useTeamBoard } from '@features/team-board'
 import { ChatPanelPage } from '@pages/chat-panel'
 import { SessionSidebar, useSessionList } from '@features/session-list'
 import { NOTIFICATION_TYPE, NotificationBell, useNotifications } from '@features/notification-center'
@@ -59,7 +58,7 @@ const {
   setRestoredPrompt,
 } = useSession()
 
-const { projects, currentProject, sidebarMode, setSidebarMode, setCurrentProjectId } = useProject()
+const { projects, currentProject, setCurrentProjectId } = useProject()
 
 const {
   loading,
@@ -100,21 +99,9 @@ const schedulerProjectId = ref('')
 const scheduleCounts = ref({})
 let globalEventConnection = null
 const sidebarRef = ref(null)
-const { handleBoardEvent, refreshBoardAfterReconnect } = useTeamBoard()
 const vbRunning = ref(false)
 const vbMessage = ref('')
 let vbRefresh = null
-const teamBoardVisible = ref(false)
-const focusCardId = ref(null)
-const focusRequestId = ref(0)
-
-function handleOpenWishCard({ teamId, cardId }) {
-  handleProjectSelect(
-    projects.value.find(p => p.team_config?.team_id === teamId)?.id || null
-  )
-  focusCardId.value = cardId
-  focusRequestId.value++
-}
 
 async function handleApplyVb(payload) {
   if (!currentSessionId.value || !currentProject.value || vbRunning.value) return
@@ -158,7 +145,6 @@ function handleTerminalHeightChange(height) {
 }
 
 function handleSessionSelect(id) {
-  teamBoardVisible.value = false
   switchSession(id)
   isMobileSidebarOpen.value = false
 }
@@ -166,41 +152,17 @@ function handleSessionSelect(id) {
 function handleProjectSelect(projectId) {
   setCurrentProjectId(projectId)
   setCurrentSessionId(null)
-  teamBoardVisible.value = Boolean(
-    projectId && projects.value.find(project => project.id === projectId)?.project_type === 'team'
-  )
   isMobileSidebarOpen.value = false
-}
-
-function handleTeamNavigate(sessionId) {
-  if (!sessionId) return
-  setSidebarMode('single')
-  handleSessionSelect(sessionId)
-}
-
-function handleReturnToTeam(projectId) {
-  if (!projectId) return
-  setSidebarMode('teams')
-  handleProjectSelect(projectId)
-}
-
-function handleSidebarModeChange(mode) {
-  if (mode === 'single') {
-    teamBoardVisible.value = false
-    restoreLastSession()
-  }
 }
 
 function handleNotificationNavigate(sessionId) {
   if (!sessionId) return
-  setSidebarMode('single')
   handleSessionSelect(sessionId)
 }
 
 async function handleLocateSession() {
   if (!currentSessionId.value) return
 
-  setSidebarMode('single')
   if (isSidebarCollapsed.value) {
     isSidebarCollapsed.value = false
     localStorage.setItem('pf_sidebar_collapsed', false)
@@ -238,15 +200,11 @@ async function loadScheduleCounts() {
 }
 
 async function handleGlobalEvent(data) {
-  if (data?.event === 'scheduled_session_created' || data?.event === 'team_session_created') {
+  if (data?.event === 'scheduled_session_created') {
     await loadSessions()
     if (data.session_id) {
       ensureConnection(data.session_id)
     }
-  }
-  // Forward board card events to the team board composable
-  if (data?.event?.startsWith('board_card_')) {
-    handleBoardEvent(data)
   }
   if (data?.event === 'session_waiting_for_input' && !_connections.has(data.session_id)) {
     const sess = sessions.value.find(s => s.session_id === data.session_id)
@@ -763,16 +721,8 @@ async function bootApp() {
     await loadScheduleCounts()
     globalEventConnection = createGlobalEventConnection()
     globalEventConnection.onEvent(handleGlobalEvent)
-    globalEventConnection.onReconnect(() => {
-      refreshBoardAfterReconnect()
-    })
     window.addEventListener('vp-schedules-changed', loadScheduleCounts)
-    if (sidebarMode.value === 'teams') {
-      const firstTeam = projects.value.find(project => project.project_type === 'team')
-      handleProjectSelect(firstTeam?.id || null)
-    } else {
-      restoreLastSession()
-    }
+    restoreLastSession()
     ready.value = true
   } catch (e) {
     initError.value = e.message || 'Failed to load sessions'
@@ -1008,8 +958,6 @@ useGlobalHotkeys({
           @open-scheduler="openProjectScheduler"
           @reorder-projects="handleReorderProjects"
           @select-project="handleProjectSelect"
-          @mode-change="handleSidebarModeChange"
-          @open-wish-card="handleOpenWishCard"
           @refresh="loadSessions"
         />
         <div class="sidebar-collapse-area" :class="{ collapsed: isSidebarCollapsed }">
@@ -1040,30 +988,9 @@ useGlobalHotkeys({
               <div class="error-hint">Make sure the backend server is running on port 8083</div>
             </div>
           </div>
-          <TeamBoardPage
-            v-else-if="teamBoardVisible && currentProject?.project_type === 'team' && currentProject?.team_config?.team_id"
-            :key="currentProject.team_config.team_id"
-            :team-id="currentProject.team_config.team_id"
-            :project-id="currentProject.id"
-            :focus-card-id="focusCardId"
-            :focus-request-id="focusRequestId"
-            @navigate-session="handleTeamNavigate"
-          />
-          <div v-else-if="sidebarMode === 'teams'" class="empty-state">
-            <div class="empty-icon">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-            </div>
-            <div class="empty-text">Select or create a team to open its board</div>
-          </div>
           <ChatPanelPage
             v-else-if="currentSessionId && !importing"
             @locate-session="handleLocateSession"
-            @return-team="handleReturnToTeam"
             @open-file="openWorkspaceFile"
           />
           <div v-else-if="importing" class="loading">

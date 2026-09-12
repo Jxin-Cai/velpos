@@ -18,10 +18,6 @@ def default_agent_workspace_root(user_id: int = 1) -> Path:
     return default_user_workspace_root(user_id) / "agents"
 
 
-def default_team_workspace_root(user_id: int = 1) -> Path:
-    return default_user_workspace_root(user_id) / "teams"
-
-
 def github_repository_name(github_url: str) -> str:
     repository = github_url.strip().rstrip("/").rsplit("/", maxsplit=1)[-1]
     repository = repository.rsplit(":", maxsplit=1)[-1]

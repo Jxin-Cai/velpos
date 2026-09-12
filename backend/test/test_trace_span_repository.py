@@ -14,24 +14,12 @@ from domain.session.model.trace_span import TraceSpan
 from infr.repository.project_model import ProjectModel
 from infr.repository.session_model import SessionModel
 from infr.repository.session_repository_impl import SessionRepositoryImpl
-from infr.repository.team_model import (
-    AgentSlotModel,
-    CardExecutionModel,
-    TeamModel,
-    WishCardModel,
-)
 from infr.repository.trace_span_model import TraceSpanModel
 from infr.repository.trace_span_repository_impl import TraceSpanRepositoryImpl
 from test.db_fixture import sqlite_session
 
-# SessionModel carries foreign keys into the team aggregate, so those tables must
-# exist for the schema to be created even though this suite never writes them.
 _TABLES = [
     ProjectModel.__table__,
-    TeamModel.__table__,
-    AgentSlotModel.__table__,
-    WishCardModel.__table__,
-    CardExecutionModel.__table__,
     SessionModel.__table__,
     TraceSpanModel.__table__,
 ]

@@ -9,5 +9,3 @@ class CreateSessionCommand(BaseModel):
     project_dir: str = ""
     name: str = ""
     user_id: int = 1
-    card_execution_id: str | None = None
-    agent_slot_id: str | None = None

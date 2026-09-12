@@ -18,7 +18,6 @@ class Project:
     _plugins: dict[str, dict] = field(default_factory=dict)
     _sort_order: int = 0
     _project_type: str = "single"
-    _team_config: dict = field(default_factory=dict)
     _active_claude_md_revision_id: str = ""
     _claude_md_file_hash: str = ""
     _created_at: datetime = field(default_factory=datetime.now)
@@ -78,10 +77,6 @@ class Project:
         return self._project_type
 
     @property
-    def team_config(self) -> dict:
-        return dict(self._team_config)
-
-    @property
     def sort_order(self) -> int:
         return self._sort_order
 
@@ -116,7 +111,7 @@ class Project:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, name: str, dir_path: str, project_type: str = "single", team_config: dict | None = None, user_id: int = 1) -> Project:
+    def create(cls, name: str, dir_path: str, project_type: str = "single", user_id: int = 1) -> Project:
         now = datetime.now()
         return cls(
             _id=uuid.uuid4().hex[:8],
@@ -127,7 +122,6 @@ class Project:
             _plugins={},
             _sort_order=0,
             _project_type=project_type,
-            _team_config=team_config or {},
             _active_claude_md_revision_id="",
             _claude_md_file_hash="",
             _created_at=now,
@@ -144,7 +138,6 @@ class Project:
         plugins: dict[str, dict] | None = None,
         sort_order: int = 0,
         project_type: str = "single",
-        team_config: dict | None = None,
         active_claude_md_revision_id: str = "",
         claude_md_file_hash: str = "",
         user_id: int = 1,
@@ -160,7 +153,6 @@ class Project:
             _plugins=dict(plugins) if plugins else {},
             _sort_order=sort_order,
             _project_type=project_type,
-            _team_config=dict(team_config) if team_config else {},
             _active_claude_md_revision_id=active_claude_md_revision_id,
             _claude_md_file_hash=claude_md_file_hash,
             _created_at=created_at or datetime.now(),
@@ -219,8 +211,4 @@ class Project:
         key = plugin_type.value
         if self._plugins.pop(key, None) is not None:
             self._updated_at = datetime.now()
-
-    def update_team_config(self, config: dict) -> None:
-        self._team_config = dict(config)
-        self._updated_at = datetime.now()
 

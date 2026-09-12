@@ -27,8 +27,6 @@ class Session:
     _pending_request_context: dict[str, Any] | None = None
     _queued_command: dict[str, Any] | None = None
     _cancel_requested: bool = False
-    _card_execution_id: str | None = None
-    _agent_slot_id: str | None = None
     _trace_id: str = ""
     _updated_time: datetime | None = None
 
@@ -101,14 +99,6 @@ class Session:
         return self._cancel_requested
 
     @property
-    def card_execution_id(self) -> str | None:
-        return self._card_execution_id
-
-    @property
-    def agent_slot_id(self) -> str | None:
-        return self._agent_slot_id
-
-    @property
     def trace_id(self) -> str:
         return self._trace_id
 
@@ -134,8 +124,6 @@ class Session:
         model: str = "",
         project_id: str = "",
         project_dir: str = "",
-        card_execution_id: str | None = None,
-        agent_slot_id: str | None = None,
         trace_id: str = "",
     ) -> Session:
         """Create a new Session.
@@ -164,8 +152,6 @@ class Session:
             _pending_request_context=None,
             _queued_command=None,
             _cancel_requested=False,
-            _card_execution_id=card_execution_id,
-            _agent_slot_id=agent_slot_id,
             _trace_id=trace_id,
             _updated_time=datetime.now(),
         )
@@ -187,8 +173,6 @@ class Session:
         pending_request_context: dict[str, Any] | None = None,
         queued_command: dict[str, Any] | None = None,
         cancel_requested: bool = False,
-        card_execution_id: str | None = None,
-        agent_slot_id: str | None = None,
         trace_id: str = "",
         updated_time: datetime | None = None,
     ) -> Session:
@@ -213,8 +197,6 @@ class Session:
             _pending_request_context=dict(pending_request_context) if pending_request_context else None,
             _queued_command=cls._normalize_queued_command(queued_command),
             _cancel_requested=cancel_requested,
-            _card_execution_id=card_execution_id,
-            _agent_slot_id=agent_slot_id,
             _trace_id=trace_id,
             _updated_time=updated_time,
         )

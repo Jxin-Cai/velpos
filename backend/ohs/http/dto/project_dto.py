@@ -38,8 +38,7 @@ class ProjectResponse(BaseModel):
     plugins: dict[str, dict] = {}
     sort_order: int = 0
     project_type: str = "single"
-    team_config: dict = {}
-    created_at: str | None = None
+    created_at: str | None = None,
     updated_at: str | None = None
 
     @classmethod

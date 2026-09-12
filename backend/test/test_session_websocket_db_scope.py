@@ -85,7 +85,6 @@ def test_websocket_route_uses_managed_scope_instead_of_request_session() -> None
     request_scoped_service_dependencies = {
         "get_session_application_service",
         "get_attachment_application_service",
-        "get_team_board_service",
     }
 
     # Act / Assert

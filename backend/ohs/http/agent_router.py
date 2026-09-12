@@ -12,8 +12,6 @@ from ohs.http.dto.agent_dto import (
     AgentInfo,
     AgentListResponse,
     LoadAgentRequest,
-    TeamTemplateInfo,
-    TeamTemplateListResponse,
 )
 from ohs.http.dto.project_dto import ProjectResponse
 
@@ -40,17 +38,6 @@ async def list_agents(
         for c in result["categories"]
     ]
     return ApiResponse.success(AgentListResponse(categories=categories))
-
-
-@router.get("/teams/templates", summary="List team templates")
-async def list_team_templates(
-    service: ServiceDep,
-    language: str = Query(default="en", pattern="^(en|zh)$"),
-    mode: str | None = Query(default=None, pattern="^(delegation|collaboration)$"),
-) -> ApiResponse[TeamTemplateListResponse]:
-    result = await service.list_team_templates(language, mode)
-    templates = [TeamTemplateInfo(**template) for template in result["templates"]]
-    return ApiResponse.success(TeamTemplateListResponse(templates=templates))
 
 
 @router.post("/projects/{project_id}/load", summary="Load agent for project")

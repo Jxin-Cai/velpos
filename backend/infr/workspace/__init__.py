@@ -1,3 +1,3 @@
-from .filesystem_workspace_gateway import FilesystemWorkspaceGateway
+from .workspace_root_resolver_impl import WorkspaceRootResolverImpl
 
-__all__ = ["FilesystemWorkspaceGateway"]
+__all__ = ["WorkspaceRootResolverImpl"]

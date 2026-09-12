@@ -8,7 +8,6 @@ import pytest
 from application.project.workspace_directory import (
     create_workspace_directory,
     default_agent_workspace_root,
-    default_team_workspace_root,
     github_repository_name,
 )
 
@@ -75,8 +74,6 @@ def test_returns_velpos_roots_when_default_directories_are_requested(
 
     # Act
     agent_root = default_agent_workspace_root()
-    team_root = default_team_workspace_root()
 
     # Assert
     assert agent_root == tmp_path / "velpos" / "1" / "agents"
-    assert team_root == tmp_path / "velpos" / "1" / "teams"

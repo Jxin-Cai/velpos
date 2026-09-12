@@ -2,25 +2,15 @@ import { ref, computed } from 'vue'
 
 const projects = ref([])
 const currentProjectId = ref(null)
-const sidebarMode = ref(localStorage.getItem('pf_sidebar_mode') || 'single')
 
 export function useProject() {
   const currentProject = computed(() =>
     projects.value.find((p) => p.id === currentProjectId.value) || null
   )
 
-  const singleProjects = computed(() =>
-    projects.value.filter((p) => p.project_type !== 'team')
-  )
-
   const singleAgentProjects = computed(() =>
-    singleProjects.value.filter((p) => Boolean(p.agents?.current))
+    projects.value.filter((p) => Boolean(p.agents?.current))
   )
-
-  function setSidebarMode(mode) {
-    sidebarMode.value = mode
-    localStorage.setItem('pf_sidebar_mode', mode)
-  }
 
   function setProjects(list) {
     projects.value = list
@@ -53,9 +43,7 @@ export function useProject() {
     projects,
     currentProjectId,
     currentProject,
-    sidebarMode,
     singleAgentProjects,
-    setSidebarMode,
     setProjects,
     setCurrentProjectId,
     addProject,

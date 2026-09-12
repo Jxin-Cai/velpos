@@ -22,20 +22,10 @@ from infr.repository.execution_ledger_event_repository_impl import (
 from infr.repository.project_model import ProjectModel
 from infr.repository.session_model import SessionModel
 from infr.repository.session_repository_impl import SessionRepositoryImpl
-from infr.repository.team_model import (
-    AgentSlotModel,
-    CardExecutionModel,
-    TeamModel,
-    WishCardModel,
-)
 from test.db_fixture import sqlite_session
 
 _TABLES = [
     ProjectModel.__table__,
-    TeamModel.__table__,
-    AgentSlotModel.__table__,
-    WishCardModel.__table__,
-    CardExecutionModel.__table__,
     SessionModel.__table__,
     ExecutionLedgerEventModel.__table__,
 ]

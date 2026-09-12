@@ -62,7 +62,6 @@ class SessionApplicationService:
         trace_collector: Any | None = None,
         session_service_factory: Callable[[], Awaitable["SessionApplicationService"]] | None = None,
         execution_lock_factory: Callable[[str], AsyncContextManager[None]] | None = None,
-        sync_card_execution_fn: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -109,7 +108,6 @@ class SessionApplicationService:
             on_query_finished=on_query_finished,
             session_service_factory=session_service_factory,
             execution_lock_factory=execution_lock_factory,
-            sync_card_execution_fn=sync_card_execution_fn,
         )
 
     # ── Query delegation ─────────────────────────────────────
@@ -374,8 +372,6 @@ class SessionApplicationService:
             model=command.model,
             project_id=command.project_id,
             project_dir=project_dir,
-            card_execution_id=command.card_execution_id,
-            agent_slot_id=command.agent_slot_id,
         )
 
         if command.name:

@@ -66,7 +66,7 @@ This is especially useful for teams where the operators are **product owners, su
 - **Packaged agents** — bundle identity, role boundaries, and behavior expectations into a reusable unit
 - **Plugin-powered SOPs** — turn repeatable workflows into stable operating procedures through plugins
 - **Tool encapsulation** — hide low-level tool wiring so end users work at the task level
-- **Multi-agent collaboration** — combine packaged agents for specialized roles, handoffs, and team workflows
+- **Packaged role catalog** — combine specialized agents for different jobs without custom prompt engineering
 - **Marketplace refresh** — update plugin marketplace metadata before installing packaged agents so projects use current tool definitions
 
 ### Project Operations
@@ -296,7 +296,7 @@ cp build/prod/.env.example build/prod/.env
 | `MYSQL_ROOT_PASSWORD` | — | MySQL root password |
 | `MYSQL_DATABASE` | `velpos` | Database name |
 | `APP_PORT` | `80` | Public port exposed by nginx |
-| `PROJECTS_HOST_DIR` | `${HOME}/velpos` | Host workspace root; contains `{user_id}/agents` and `{user_id}/teams` |
+| `PROJECTS_HOST_DIR` | `${HOME}/velpos` | Host workspace root; contains `{user_id}/agents` |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | Default permission mode |
 | `CORS_ALLOW_ORIGINS` | *(empty)* | Same-origin only; set an explicit allowlist when needed |
 

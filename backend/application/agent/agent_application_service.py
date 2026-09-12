@@ -16,7 +16,6 @@ from infr.agent.catalog import (
     AGENT_CATALOG,
     CATEGORIES,
     get_agent_by_id,
-    list_team_templates,
     read_prompt,
 )
 
@@ -90,9 +89,6 @@ class AgentApplicationService:
 
         return {"categories": categories}
 
-    async def list_team_templates(self, language: str = "en", mode: str | None = None) -> dict:
-        return {"templates": list_team_templates(language, mode)}
-
     async def load_agent(
         self,
         project_id: str,
@@ -110,7 +106,7 @@ class AgentApplicationService:
 
         if project.is_agent_locked():
             raise BusinessException(
-                f"Project agent is locked by a running team task, cannot switch agent"
+                f"Project agent is locked by a running task, cannot switch agent"
             )
 
         project_dir = project.dir_path
@@ -185,7 +181,7 @@ class AgentApplicationService:
 
         if project.is_agent_locked():
             raise BusinessException(
-                f"Project agent is locked by a running team task, cannot unload agent"
+                f"Project agent is locked by a running task, cannot unload agent"
             )
 
         # Uninstall current agent's plugins

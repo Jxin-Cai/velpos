@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 _AGENTS_DIR = Path(__file__).parent / "agents"
-_TEAMS_DIR = Path(__file__).parent / "teams"
 
 # ── Category definitions ──
 
@@ -70,45 +68,7 @@ def _scan_agents() -> list[dict]:
     return agents
 
 
-def _scan_team_templates() -> list[dict[str, Any]]:
-    templates: list[dict[str, Any]] = []
-    if not _TEAMS_DIR.is_dir():
-        return templates
-
-    for team_type_dir in sorted(_TEAMS_DIR.iterdir()):
-        if not team_type_dir.is_dir():
-            continue
-        for template_dir in sorted(team_type_dir.iterdir()):
-            config_path = template_dir / "config" / "team.json"
-            if not config_path.exists():
-                continue
-            try:
-                meta = json.loads(config_path.read_text(encoding="utf-8"))
-                meta["id"] = meta.get("id", template_dir.name)
-                meta["mode"] = meta.get("mode", team_type_dir.name)
-                templates.append(meta)
-            except Exception:
-                continue
-    return templates
-
-
-def _localize_team_template(template: dict[str, Any], language: str) -> dict[str, Any]:
-    name_key = f"name_{language}" if language in ("en", "zh") else "name_en"
-    desc_key = f"description_{language}" if language in ("en", "zh") else "description_en"
-    return {
-        "id": template["id"],
-        "name": template.get(name_key, template.get("name_en", template["id"])),
-        "description": template.get(desc_key, template.get("description_en", "")),
-        "mode": template.get("mode", "delegation"),
-        "pipeline": template.get("pipeline", []),
-        "members": template.get("members", []),
-        "default_workflow": template.get("default_workflow", []),
-        "default_config": template.get("default_config", {}),
-    }
-
-
 AGENT_CATALOG: list[dict] = _scan_agents()
-TEAM_TEMPLATE_CATALOG: list[dict[str, Any]] = _scan_team_templates()
 
 
 def get_prompt_path(agent_id: str, language: str) -> Path:
@@ -130,10 +90,3 @@ def get_agent_by_id(agent_id: str) -> dict | None:
         if agent["id"] == agent_id:
             return agent
     return None
-
-
-def list_team_templates(language: str = "en", mode: str | None = None) -> list[dict[str, Any]]:
-    templates = TEAM_TEMPLATE_CATALOG
-    if mode:
-        templates = [template for template in templates if template.get("mode") == mode]
-    return [_localize_team_template(template, language) for template in templates]

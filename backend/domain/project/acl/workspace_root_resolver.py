@@ -13,7 +13,3 @@ class WorkspaceRootResolver(ABC):
     @abstractmethod
     def agent_root(self, user_id: int) -> Path:
         ...
-
-    @abstractmethod
-    def team_root(self, user_id: int) -> Path:
-        ...

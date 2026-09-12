@@ -15,6 +15,3 @@ class WorkspaceRootResolverImpl(WorkspaceRootResolver):
 
     def agent_root(self, user_id: int) -> Path:
         return self.user_root(user_id) / "agents"
-
-    def team_root(self, user_id: int) -> Path:
-        return self.user_root(user_id) / "teams"

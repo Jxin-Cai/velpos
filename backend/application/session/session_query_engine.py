@@ -46,8 +46,6 @@ class _QueryContext:
     actual_prompt: str
     message_id: str
     cancelled_during_stream: bool = False
-    card_sync_succeeded: bool | None = None
-    card_sync_reason: str = ""
 
 
 _shared_state = SessionExecutionState()
@@ -106,7 +104,6 @@ class SessionQueryEngine:
         on_query_finished: Callable[[str], Awaitable[None]] | None = None,
         session_service_factory: Callable | None = None,
         execution_lock_factory: Callable[[str], AsyncContextManager[None]] | None = None,
-        sync_card_execution_fn: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._claude_agent_gateway = claude_agent_gateway
@@ -123,7 +120,6 @@ class SessionQueryEngine:
         self._on_query_finished = on_query_finished
         self._session_service_factory = session_service_factory
         self._execution_lock_factory = execution_lock_factory
-        self._sync_card_execution_fn = sync_card_execution_fn
 
     async def cleanup_session_state(self, session_id: str) -> None:
         async with _shared_state.queue_guard:
@@ -839,7 +835,6 @@ class SessionQueryEngine:
             raise BusinessException(result_error)
 
         session.complete_query()
-        ctx.card_sync_succeeded = True
 
         # 只把最终结果同步到 IM; run 过程中的 assistant 文本不外发,
         # 需要用户回答的内容另经 user_choice_request 通知转发。
@@ -912,8 +907,6 @@ class SessionQueryEngine:
             exc_info=True,
         )
         session.fail_query()
-        ctx.card_sync_succeeded = False
-        ctx.card_sync_reason = str(e)
 
         await self._recorder.fail_run_step(run_step, {"error": str(e)[:500]})
         await self._recorder.record_audit_event(
@@ -983,8 +976,6 @@ class SessionQueryEngine:
                 )
         if not final_save_succeeded:
             session.fail_query()
-            ctx.card_sync_succeeded = False
-            ctx.card_sync_reason = "session final save failed"
         await self._connection_manager.broadcast(
             session.session_id,
             {
@@ -992,19 +983,6 @@ class SessionQueryEngine:
                 "session": SessionPresenter.session_to_dict(session),
             },
         )
-        if ctx.card_sync_succeeded is not None and self._sync_card_execution_fn is not None:
-            try:
-                await self._sync_card_execution_fn(
-                    session,
-                    succeeded=ctx.card_sync_succeeded,
-                    reason=ctx.card_sync_reason,
-                )
-            except Exception:
-                logger.error(
-                    "[session=%s] card execution sync failed",
-                    command.session_id,
-                    exc_info=True,
-                )
 
         async with _shared_state.queue_guard:
             queued = _shared_state.queued_messages.pop(command.session_id, None)

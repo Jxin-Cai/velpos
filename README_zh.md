@@ -66,7 +66,7 @@ Velpos 把这些分散的部分打包成可复用能力：
 - **Agent 封装** — 把身份、职责边界和行为预期打包成可复用单元
 - **插件驱动的 SOP** — 把重复工作流沉淀成稳定操作流程，而非依赖临场 prompt
 - **工具封装** — 通过插件隐藏底层工具接线，让最终用户按任务使用能力
-- **多 Agent 协作** — 组合多个已打包 Agent，形成分工明确的协作式 AI 助手团队
+- **角色目录** — 按岗位选用已打包 Agent，无需自己写提示词
 - **Marketplace 刷新** — 安装已打包 Agent 前自动刷新插件市场信息，让项目使用最新工具定义
 
 ### 项目运营
@@ -296,7 +296,7 @@ cp build/prod/.env.example build/prod/.env
 | `MYSQL_ROOT_PASSWORD` | — | MySQL root 密码 |
 | `MYSQL_DATABASE` | `velpos` | 数据库名 |
 | `APP_PORT` | `80` | nginx 对外暴露端口 |
-| `PROJECTS_HOST_DIR` | `${HOME}/velpos` | 宿主机工作空间根目录，包含 `{user_id}/agents` 和 `{user_id}/teams` |
+| `PROJECTS_HOST_DIR` | `${HOME}/velpos` | 宿主机工作空间根目录，包含 `{user_id}/agents` |
 | `CLAUDE_PERMISSION_MODE` | `acceptEdits` | 默认权限模式 |
 | `CORS_ALLOW_ORIGINS` | *（空）* | 默认仅同源访问；需要跨域时填写明确白名单 |
 

@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, func, literal, select, update
+from sqlalchemy import case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infr.config.database import is_sqlite
@@ -80,8 +80,6 @@ class SessionRepositoryImpl(SessionRepository):
             SessionModel.name,
             SessionModel.sdk_session_id,
             SessionModel.updated_time,
-            SessionModel.card_execution_id,
-            SessionModel.agent_slot_id,
         ).order_by(SessionModel.updated_time.desc())
         rows = (await self._session.execute(stmt)).all()
         return [
@@ -97,8 +95,6 @@ class SessionRepositoryImpl(SessionRepository):
                 name=row.name,
                 sdk_session_id=row.sdk_session_id,
                 updated_time=row.updated_time,
-                card_execution_id=row.card_execution_id,
-                agent_slot_id=row.agent_slot_id,
             )
             for row in rows
         ]
@@ -115,18 +111,6 @@ class SessionRepositoryImpl(SessionRepository):
 
     async def remove(self, session_id: str) -> bool:
         return await remove_by_pk(self._session, SessionModel.session_id, session_id)
-
-    async def clear_card_execution_references(self, execution_ids: list[str]) -> int:
-        if not execution_ids:
-            return 0
-        stmt = (
-            update(SessionModel)
-            .where(SessionModel.card_execution_id.in_(execution_ids))
-            .values(card_execution_id=None)
-        )
-        result = await self._session.execute(stmt)
-        await self._session.flush()
-        return result.rowcount or 0
 
     async def find_by_sdk_session_id(self, sdk_session_id: str) -> Session | None:
         if not sdk_session_id:
@@ -158,8 +142,6 @@ class SessionRepositoryImpl(SessionRepository):
             pending_request_context_json=SessionRepositoryImpl._serialize_json_field(session.pending_request_context),
             queued_command_json=SessionRepositoryImpl._serialize_json_field(session.queued_command),
             cancel_requested=1 if session.cancel_requested else 0,
-            card_execution_id=session.card_execution_id,
-            agent_slot_id=session.agent_slot_id,
             trace_id=session.trace_id,
         )
 
@@ -185,8 +167,6 @@ class SessionRepositoryImpl(SessionRepository):
             pending_request_context=SessionRepositoryImpl._deserialize_json_field(model.pending_request_context_json),
             queued_command=SessionRepositoryImpl._deserialize_json_field(model.queued_command_json),
             cancel_requested=model.cancel_requested == 1,
-            card_execution_id=model.card_execution_id,
-            agent_slot_id=model.agent_slot_id,
             trace_id=model.trace_id if model.trace_id else "",
             updated_time=model.updated_time,
         )

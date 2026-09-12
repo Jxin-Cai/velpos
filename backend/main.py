@@ -40,9 +40,7 @@ from ohs.http.settings_router import router as settings_router
 from ohs.http.terminal_router import router as terminal_router
 from ohs.http.usage_router import router as usage_router
 from ohs.http.memory_router import router as memory_router
-from ohs.http.team_router import router as team_router
 from ohs.http.auth_router import router as auth_router
-from ohs.http.flow_router import router as flow_router
 from ohs.http.admin_agent_template_router import router as admin_agent_template_router
 from ohs.http.admin_user_router import router as admin_user_router
 from ohs.http.admin_plugin_router import router as admin_plugin_router
@@ -399,29 +397,12 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.error("Failed to start scheduler runner", exc_info=True)
 
-    watchdog_runner = None
-    try:
-        from ohs.scheduler_runner import ExecutionWatchdogRunner
-        watchdog_runner = ExecutionWatchdogRunner()
-        # Recovery may wake a persistent Leader and wait for a full model turn.
-        # It must not block ASGI startup or the dev launcher's health deadline.
-        watchdog_runner.start(ignore_terminal_session_grace_on_first_run=True)
-        logger.info("Execution watchdog runner started (initial recovery in background)")
-    except Exception:
-        logger.error("Failed to start execution watchdog runner", exc_info=True)
-
     yield
 
     try:
         await im_delivery.close()
     except Exception:
         logger.error("Failed to stop durable IM delivery workers", exc_info=True)
-
-    if watchdog_runner is not None:
-        try:
-            await watchdog_runner.stop()
-        except Exception:
-            logger.error("Failed to stop execution watchdog runner", exc_info=True)
 
     if scheduler_runner is not None:
         try:
@@ -509,8 +490,6 @@ app.include_router(channel_profile_router)
 app.include_router(terminal_router)
 app.include_router(usage_router)
 app.include_router(memory_router)
-app.include_router(team_router)
-app.include_router(flow_router)
 app.include_router(admin_agent_template_router)
 app.include_router(admin_user_router)
 app.include_router(admin_plugin_router)

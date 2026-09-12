@@ -17,12 +17,10 @@ def test_returns_user_scoped_roots_when_user_id_is_valid(
     # Act
     user_root = resolver.user_root(42)
     agent_root = resolver.agent_root(42)
-    team_root = resolver.team_root(42)
 
     # Assert
     assert user_root == tmp_path / "velpos" / "42"
     assert agent_root == user_root / "agents"
-    assert team_root == user_root / "teams"
 
 
 def test_rejects_user_root_when_user_id_is_not_positive(

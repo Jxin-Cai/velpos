@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import io
 import mimetypes
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from application.project.command.create_project_command import CreateProjectCommand
@@ -15,16 +13,11 @@ from application.project.command.reorder_projects_command import ReorderProjects
 from application.project.plugin_init_application_service import PluginInitApplicationService
 from application.project.project_application_service import ProjectApplicationService
 from application.project.workspace_application_service import WorkspaceApplicationService
-from application.project.workspace_directory import create_workspace_directory
-from ohs.dependencies import get_workspace_root_resolver
 from ohs.assembler.session_assembler import SessionAssembler
 from domain.user.model.user import User
 from ohs.auth_dependency import get_current_user
 from ohs.dependencies import get_plugin_init_application_service, get_project_application_service, get_workspace_application_service
-from ohs.dependencies import get_project_repository, get_team_board_service
-from domain.project.model.project import Project
-from application.team_board.commands import AgentSlotConfig, CreateTeamCommand
-from application.team_board.team_board_service import TeamBoardApplicationService
+from ohs.dependencies import get_project_repository
 from infr.repository.project_repository_impl import ProjectRepositoryImpl
 from ohs.http.api_response import ApiResponse
 from ohs.http.dto.project_dto import (
@@ -70,76 +63,6 @@ PluginInitDep = Annotated[
 ]
 
 ProjectRepoDep = Annotated[ProjectRepositoryImpl, Depends(get_project_repository)]
-TeamBoardDep = Annotated[TeamBoardApplicationService, Depends(get_team_board_service)]
-
-
-class CreateTeamProjectRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    team_config: dict[str, Any] = Field(default_factory=dict)
-
-
-@router.post("/teams", summary="Create a team project and its board")
-async def create_team_project(
-    request: CreateTeamProjectRequest,
-    project_repo: ProjectRepoDep,
-    team_service: TeamBoardDep,
-    current_user: User = Depends(get_current_user),
-) -> ApiResponse[ProjectResponse]:
-    resolver = get_workspace_root_resolver()
-    dir_path = str(await asyncio.to_thread(
-        create_workspace_directory,
-        str(resolver.team_root(current_user.id)),
-    ))
-
-    config = dict(request.team_config)
-    items = config.get("pipeline") or config.get("members") or config.get("slots") or []
-    slots = []
-    for index, item in enumerate(items, start=1):
-        profile = item.get("agent_profile_id") or item.get("agent_id") or item.get("role") or item.get("project_id")
-        if not profile:
-            continue
-        slots.append(AgentSlotConfig(
-            display_name=item.get("role_label") or item.get("display_name") or item.get("role") or f"Agent {index}",
-            agent_profile_id=profile,
-            slug=item.get("slug") or f"agent-{index}",
-            is_leader=bool(item.get("is_leader", False)),
-        ))
-    if not slots:
-        raise HTTPException(status_code=422, detail="Team must have at least one agent slot")
-    if sum(slot.is_leader for slot in slots) != 1:
-        raise HTTPException(
-            status_code=422,
-            detail="Team must have exactly one Leader agent",
-        )
-    project = Project.create(request.name.strip(), dir_path, project_type="team", user_id=current_user.id)
-    await project_repo.save(project)
-    try:
-        team = await team_service.create_team(CreateTeamCommand(
-            name=project.name,
-            project_id=project.id,
-            root_path=project.dir_path,
-            slots=tuple(slots),
-            user_id=current_user.id,
-        ))
-    except Exception:
-        await project_repo.remove(project.id)
-        raise
-    config["team_id"] = team.id
-    config["slots"] = [
-        {
-            "display_name": slot.display_name,
-            "agent_profile_id": slot.agent_profile_id,
-            "slug": slot.slug,
-            "is_leader": slot.is_leader,
-        }
-        for slot in slots
-    ]
-    project.update_team_config(config)
-    await project_repo.save(project)
-    # The frontend opens the board as soon as this response arrives. Commit
-    # before returning so that request cannot race the dependency finalizer.
-    await project_repo.commit()
-    return ApiResponse.success(ProjectResponse.from_domain(project))
 
 
 @router.post("", summary="Create project")

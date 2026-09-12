@@ -69,8 +69,6 @@ class SessionAssembler:
             "updated_time": session.updated_time.isoformat() if session.updated_time else None,
             "git_branch": git_branch,
             "trace_id": session.trace_id or "",
-            "card_execution_id": session.card_execution_id,
-            "agent_slot_id": session.agent_slot_id,
             "recovery": SessionAssembler._recovery_to_dict(session),
         }
 

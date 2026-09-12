@@ -79,8 +79,6 @@ class SessionResponse(BaseModel):
     source: str = ""
     git_branch: str = ""
     im_binding: dict | None = None
-    card_execution_id: str | None = None
-    agent_slot_id: str | None = None
 
     @classmethod
     def from_domain(
@@ -105,8 +103,6 @@ class SessionResponse(BaseModel):
             source=summary.get("source", ""),
             git_branch=summary.get("git_branch", ""),
             im_binding=binding_info,
-            card_execution_id=summary.get("card_execution_id"),
-            agent_slot_id=summary.get("agent_slot_id"),
         )
 
     @classmethod
@@ -133,8 +129,6 @@ class SessionResponse(BaseModel):
             updated_time=session.updated_time.isoformat() if session.updated_time else None,
             git_branch=git_branch,
             im_binding=binding_info,
-            card_execution_id=session.card_execution_id,
-            agent_slot_id=session.agent_slot_id,
         )
 
 

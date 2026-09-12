@@ -94,7 +94,3 @@ export async function downloadWorkspaceSelection(projectId, paths) {
 export function readWorkspaceFileAtRef(projectId, path, ref) {
   return get(`/projects/${projectId}/workspace/file-at-ref?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`)
 }
-
-export function updateTeamConfig(projectId, teamConfig) {
-  return patch(`/projects/${projectId}/team-config`, { team_config: teamConfig })
-}

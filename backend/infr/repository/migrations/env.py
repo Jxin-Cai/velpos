@@ -34,7 +34,6 @@ from infr.config.base import DATABASE_URL, MYSQL_CONNECT_ARGS, Base
 import infr.repository.evolution_proposal_model  # noqa: F401
 import infr.repository.attachment_model  # noqa: F401
 import infr.repository.session_model  # noqa: F401
-import infr.repository.team_model  # noqa: F401
 import infr.repository.scheduled_task_model  # noqa: F401
 import infr.repository.session_audit_event_model  # noqa: F401
 import infr.repository.session_branch_model  # noqa: F401
