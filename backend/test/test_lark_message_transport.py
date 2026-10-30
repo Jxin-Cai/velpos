@@ -700,7 +700,7 @@ def test_does_not_raise_on_cache_destructor_when_ws_loop_shuts_down() -> None:
                 errors.append("loop_not_closed")
         finally:
             sys.unraisablehook = previous_hook
-            cache = None
+            cache = None  # noqa: F841 - Keep alive until shutdown, then release on every exit.
             if not loop.is_closed():
                 LarkAdapter._shutdown_event_loop(loop)
             asyncio.set_event_loop(None)

@@ -88,6 +88,3 @@ class AgentTemplateApplicationService:
 
     async def list_all_templates(self) -> list[AgentTemplate]:
         return await self._repository.find_all()
-
-    async def list_active_templates(self) -> list[AgentTemplate]:
-        return await self._repository.find_all_active()

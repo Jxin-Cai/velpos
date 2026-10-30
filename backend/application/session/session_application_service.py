@@ -394,10 +394,6 @@ class SessionApplicationService:
     async def list_sessions(self) -> list[Session]:
         return await self._session_repository.find_all()
 
-    async def commit(self) -> None:
-        """Flush and commit the current unit of work to the database."""
-        await self._session_repository.commit()
-
     async def list_session_summaries(self, user_id: int | None = None) -> list[SessionSummary]:
         summaries = await self._session_repository.find_all_summaries()
         if user_id is None:

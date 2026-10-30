@@ -21,7 +21,6 @@ from domain.im_binding.model.channel_registry import ImChannelRegistry
 from domain.im_binding.model.im_delivery import (
     ImDeliveryKind,
     ImInboxEvent,
-    ImInboxStatus,
     ImOutboxMessage,
     ImOutboxStatus,
 )

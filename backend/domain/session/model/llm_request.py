@@ -26,12 +26,6 @@ class LlmToolDefinition:
     description: str | None = None
     input_schema: dict[str, Any] | None = None
 
-    @property
-    def description_preview(self) -> str | None:
-        if not self.description:
-            return None
-        return _preview(self.description, SYSTEM_PREVIEW_LENGTH)
-
 
 @dataclass(frozen=True)
 class LlmRequestRecord:

@@ -22,14 +22,18 @@ def test_accepts_current_ingest_token_when_request_is_remote(monkeypatch) -> Non
     # Assert: no exception means the current token is valid from any peer.
 
 
-def test_accepts_legacy_ingest_token_when_request_is_local_in_dev(monkeypatch) -> None:
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+@pytest.mark.parametrize("token_length", [64, 65])
+def test_accepts_legacy_ingest_token_when_request_is_local_in_dev(
+    monkeypatch, host: str, token_length: int,
+) -> None:
     # Arrange
     monkeypatch.setenv("VELPOS_MODE", "dev")
     monkeypatch.delenv("VELPOS_OTEL_ACCEPT_LEGACY_LOOPBACK_TOKEN", raising=False)
-    request = _request_from("127.0.0.1")
+    request = _request_from(host)
 
     # Act
-    authorize_otel_request("legacy-token-from-running-sdk-process-1234", request)
+    authorize_otel_request("a" * token_length, request)
 
     # Assert: no exception keeps an already-running local SDK client exporting.
 
@@ -50,11 +54,12 @@ def test_rejects_missing_ingest_token_when_request_is_local_in_dev(monkeypatch) 
 def test_rejects_legacy_ingest_token_when_request_is_remote_in_dev(monkeypatch) -> None:
     # Arrange
     monkeypatch.setenv("VELPOS_MODE", "dev")
+    monkeypatch.delenv("VELPOS_OTEL_ACCEPT_LEGACY_LOOPBACK_TOKEN", raising=False)
     request = _request_from("203.0.113.10")
 
     # Act
     with pytest.raises(HTTPException) as exc_info:
-        authorize_otel_request("legacy-token-from-running-sdk-process-1234", request)
+        authorize_otel_request("a" * 64, request)
 
     # Assert
     assert exc_info.value.status_code == 401
@@ -68,7 +73,38 @@ def test_rejects_legacy_ingest_token_when_compatibility_is_disabled(monkeypatch)
 
     # Act
     with pytest.raises(HTTPException) as exc_info:
-        authorize_otel_request("legacy-token-from-running-sdk-process-1234", request)
+        authorize_otel_request("a" * 64, request)
+
+    # Assert
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.parametrize("token_length", [0, 32, 63])
+def test_rejects_short_legacy_token_when_request_is_local_in_dev(
+    monkeypatch, token_length: int,
+) -> None:
+    # Arrange
+    monkeypatch.setenv("VELPOS_MODE", "dev")
+    monkeypatch.delenv("VELPOS_OTEL_ACCEPT_LEGACY_LOOPBACK_TOKEN", raising=False)
+    request = _request_from("127.0.0.1")
+
+    # Act
+    with pytest.raises(HTTPException) as exc_info:
+        authorize_otel_request("a" * token_length, request)
+
+    # Assert
+    assert exc_info.value.status_code == 401
+
+
+def test_rejects_legacy_token_when_request_is_local_in_production(monkeypatch) -> None:
+    # Arrange
+    monkeypatch.setenv("VELPOS_MODE", "pro")
+    monkeypatch.delenv("VELPOS_OTEL_ACCEPT_LEGACY_LOOPBACK_TOKEN", raising=False)
+    request = _request_from("127.0.0.1")
+
+    # Act
+    with pytest.raises(HTTPException) as exc_info:
+        authorize_otel_request("a" * 64, request)
 
     # Assert
     assert exc_info.value.status_code == 401

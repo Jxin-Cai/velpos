@@ -19,13 +19,6 @@ class LarkMessageType(str, Enum):
     INTERACTIVE = "interactive"
 
 
-_TYPE_ALIASES = {
-    "rich_text": LarkMessageType.POST,
-    "card": LarkMessageType.INTERACTIVE,
-    "video": LarkMessageType.MEDIA,
-}
-
-
 @dataclass(frozen=True)
 class LarkOutboundMessage:
     """A typed Lark message.
@@ -41,35 +34,6 @@ class LarkOutboundMessage:
     image_key: str = ""
     duration: int = 0
     file_name: str = ""
-
-    @classmethod
-    def from_value(
-        cls,
-        value: str | dict[str, Any] | LarkOutboundMessage,
-    ) -> LarkOutboundMessage:
-        if isinstance(value, cls):
-            return value
-        if isinstance(value, str):
-            return cls(message_type=LarkMessageType.TEXT, content=value)
-        if not isinstance(value, dict):
-            raise TypeError("Lark message content must be text, a mapping, or LarkOutboundMessage")
-
-        raw_type = str(value.get("message_type") or value.get("msg_type") or value.get("type") or "text")
-        message_type = _TYPE_ALIASES.get(raw_type)
-        if message_type is None:
-            try:
-                message_type = LarkMessageType(raw_type)
-            except ValueError as exc:
-                raise ValueError(f"Unsupported Lark message type: {raw_type}") from exc
-        return cls(
-            message_type=message_type,
-            content=value.get("content", value.get("text", "")),
-            file_path=str(value.get("file_path") or value.get("path") or ""),
-            image_path=str(value.get("image_path") or ""),
-            image_key=str(value.get("image_key") or ""),
-            duration=int(value.get("duration") or 0),
-            file_name=str(value.get("file_name") or value.get("filename") or ""),
-        )
 
     def encoded_content(self, *, file_key: str = "", image_key: str = "") -> str:
         if self.message_type is LarkMessageType.TEXT:

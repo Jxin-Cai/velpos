@@ -164,6 +164,3 @@ class ClaudeTranscriptReader(TranscriptReader):
             incomplete_tail=incomplete_tail,
             warnings=tuple(warnings),
         )
-
-
-FileTranscriptReader = ClaudeTranscriptReader

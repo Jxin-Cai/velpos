@@ -24,7 +24,6 @@ SendText = Callable[[str, str], Awaitable[None]]
 class TaskOutcome(str, enum.Enum):
     COMPLETED = "已完成"
     FAILED = "未完成"
-    RETRYING = "执行异常，正在重试"
     WAITING = "等待中"
 
 

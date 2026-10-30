@@ -449,10 +449,6 @@ class SessionQueryEngine:
 
     async def _execute_streaming(self, ctx: _QueryContext) -> None:
         session = ctx.session
-        command = ctx.command
-        run_id = ctx.run_id
-        run_step = ctx.run_step
-        actual_prompt = ctx.actual_prompt
 
         if session.project_dir and not Path(session.project_dir).expanduser().is_dir():
             raise BusinessException(

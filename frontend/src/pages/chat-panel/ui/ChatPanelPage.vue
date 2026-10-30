@@ -82,10 +82,6 @@ function openMessageTrace(target) {
   tracePanelVisible.value = true
 }
 
-function handleTeamNavigate({ sessionId }) {
-  if (sessionId) setCurrentSessionId(sessionId)
-}
-
 function toggleDebug() {
   debugMode.value = !debugMode.value
   localStorage.setItem('pf_debug_mode', debugMode.value)
@@ -430,7 +426,7 @@ async function handleEffortSelect(val) {
 // Permission mode switching
 const {
   showPermMenu, currentPermMode, permModes,
-  getPermLabel, getPermColorClass, handlePermSelect, cyclePermissionMode,
+  getPermLabel, getPermColorClass, handlePermSelect,
 } = usePermissionMode({ session, currentSessionId, wsConnection })
 
 // ESC to close panels/popovers

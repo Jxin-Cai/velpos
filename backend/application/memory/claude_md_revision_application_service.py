@@ -8,6 +8,7 @@ from domain.memory.model.claude_md_revision import ClaudeMdRevision
 from domain.memory.model.claude_md_revision_event import ClaudeMdRevisionEvent
 from domain.memory.model.claude_md_revision_state import ClaudeMdRevisionState
 from domain.memory.repository.claude_md_revision_repository import ClaudeMdRevisionRepository
+from domain.project.model.project import Project
 from domain.project.repository.project_repository import ProjectRepository
 from domain.shared.business_exception import BusinessException
 

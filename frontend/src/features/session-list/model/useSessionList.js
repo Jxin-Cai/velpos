@@ -33,12 +33,10 @@ export function useSessionList() {
 
   const {
     projects,
-    currentProjectId,
     setProjects,
     setCurrentProjectId,
     addProject,
     removeProject,
-    updateProjectInList,
   } = useProject()
 
   const loading = ref(false)

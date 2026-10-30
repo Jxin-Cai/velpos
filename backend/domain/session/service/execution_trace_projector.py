@@ -737,7 +737,6 @@ class ExecutionTraceProjector:
         blocks = content if isinstance(content, list) else []
         total_chars = 0
         tool_result_count = 0
-        text_block_count = 0
         has_images = False
         for block in blocks:
             if not isinstance(block, dict):
@@ -748,7 +747,6 @@ class ExecutionTraceProjector:
                 tool_result_count += 1
                 total_chars += len(str(block.get("content", "")))
             elif block_type == "text":
-                text_block_count += 1
                 total_chars += len(block.get("text", ""))
             elif block_type == "image":
                 has_images = True

@@ -58,7 +58,6 @@ const {
   handleComplete,
   handleUnbind,
   handleInitialize,
-  handleResetChannel,
   handleSyncContext,
   fetchDeliveries,
   handleRetryDelivery,

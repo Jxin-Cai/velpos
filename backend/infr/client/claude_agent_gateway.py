@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import collections
 import logging
-import re
 import time
 from typing import Any, AsyncIterator, Callable
 
@@ -177,15 +175,13 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         return str(content)[:500]
 
     @staticmethod
-    def _create_stderr_collector() -> tuple[collections.deque[str], Callable[[str], None]]:
-        """Create a stderr line collector and its callback."""
-        lines: collections.deque[str] = collections.deque(maxlen=500)
+    def _create_stderr_callback() -> Callable[[str], None]:
+        """Log CLI stderr. Collected lines were never read."""
 
         def _on_stderr(line: str) -> None:
-            lines.append(line)
             logger.warning("CLI stderr: %s", line)
 
-        return lines, _on_stderr
+        return _on_stderr
 
     _FORK_SESSION_PREFIX = "fork:"
 
@@ -216,7 +212,7 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
         Returns (client, resume_failed) where resume_failed is True if we
         attempted resume but had to fall back to a fresh session.
         """
-        stderr_lines, stderr_cb = self._create_stderr_collector()
+        stderr_cb = self._create_stderr_callback()
         # The UI can switch an existing connection to bypassPermissions.
         # Claude CLI rejects that control request unless bypass mode was
         # explicitly enabled when the process started.  This flag only makes
@@ -576,21 +572,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
     async def disconnect(self, session_id: str) -> None:
         async with self._client_lock:
             await self._disconnect_unlocked(session_id)
-
-    async def disconnect_by_cwd(self, cwd: str) -> int:
-        """Disconnect all connected sessions whose project_dir matches *cwd*.
-
-        Returns the number of sessions disconnected.
-        """
-        targets = [
-            sid for sid, session_cwd in self._session_cwds.items()
-            if session_cwd == cwd and sid in self._clients
-        ]
-        for sid in targets:
-            await self.disconnect(sid)
-        if targets:
-            logger.info("disconnect_by_cwd: 断开 %d 个连接 (cwd=%s)", len(targets), cwd)
-        return len(targets)
 
     async def reload_plugins_by_cwd(self, cwd: str) -> int:
         """Ask connected sessions for *cwd* to activate pending plugin changes.
@@ -1094,20 +1075,6 @@ class ClaudeAgentGateway(ClaudeAgentGatewayPort):
                 f"Resume failed for session {session_id}: "
                 f"CLI session {prev_sdk_sid} no longer exists"
             )
-
-    async def open_fresh_connection(
-        self,
-        session_id: str,
-        model: str,
-        cwd: str = "",
-    ) -> None:
-        """Open a fresh SDK connection (no resume) for a new session."""
-        await self._connect_and_register(
-            session_id=session_id,
-            model=model,
-            cwd=cwd,
-            prev_sdk_sid=None,
-        )
 
     async def get_context_usage(self, session_id: str) -> dict[str, Any] | None:
         client = self._clients.get(session_id)

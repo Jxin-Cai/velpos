@@ -9,7 +9,6 @@ import {
   getBindingStatus,
   unbindIm,
   initializeChannel,
-  resetChannel,
   syncContext,
   getDeliveries,
   retryDelivery,
@@ -25,7 +24,6 @@ export const ImAction = Object.freeze({
   UNBIND: 'unbind',
   SWITCH: 'switch',
   INITIALIZE: 'initialize',
-  RESET: 'reset',
   SYNC: 'sync',
   RETRY_DELIVERY: 'retry_delivery',
 })
@@ -305,19 +303,6 @@ export function useImBinding() {
     }
   }
 
-  async function handleResetChannel(channelId) {
-    beginAction(ImAction.RESET, channelId)
-    error.value = null
-    try {
-      await resetChannel(channelId)
-      await fetchChannels(true)
-    } catch (e) {
-      error.value = e.message
-    } finally {
-      endAction(ImAction.RESET)
-    }
-  }
-
   async function handleSyncContext(sessionId) {
     if (!sessionId) return null
     beginAction(ImAction.SYNC)
@@ -422,7 +407,6 @@ export function useImBinding() {
     handleUnbind,
     handleRemoteUnbind,
     handleInitialize,
-    handleResetChannel,
     handleSyncContext,
     fetchDeliveries,
     handleRetryDelivery,

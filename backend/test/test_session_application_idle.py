@@ -1,5 +1,3 @@
-import asyncio
-import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -140,7 +138,6 @@ async def test_does_not_send_hidden_query_when_session_is_created(tmp_path) -> N
     # Arrange
     gateway = SimpleNamespace(
         set_permission_mode=AsyncMock(),
-        open_fresh_connection=AsyncMock(),
         send_query=Mock(),
     )
     service = _create_service(Mock(), gateway)
@@ -166,7 +163,6 @@ async def test_creates_session_workspace_under_user_agents_when_project_is_missi
     monkeypatch.setenv("PROJECTS_ROOT_DIR", str(tmp_path / "velpos"))
     gateway = SimpleNamespace(
         set_permission_mode=AsyncMock(),
-        open_fresh_connection=AsyncMock(),
     )
     service = _create_service(Mock(), gateway)
     service._project_repository = None

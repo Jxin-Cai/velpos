@@ -66,10 +66,6 @@ class InboundVoice:
     attachment: Mapping[str, Any] | None = None
 
     @property
-    def display_text(self) -> str:
-        return self.transcript.strip() or VOICE_PLACEHOLDER_TEXT
-
-    @property
     def attachments(self) -> list[dict[str, Any]]:
         return [dict(self.attachment)] if self.attachment else []
 

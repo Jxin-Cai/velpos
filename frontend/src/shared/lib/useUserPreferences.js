@@ -37,7 +37,6 @@ export function useUserPreferences() {
 
   return {
     enterBehavior: currentEnterBehavior,
-    enterBehaviors: ENTER_BEHAVIORS,
     setEnterBehavior,
     shouldEnterSend,
     shouldCtrlEnterSend,

@@ -53,9 +53,6 @@ class TraceSpan:
     SPAN_TYPE_AGENT = "agent"
     SPAN_TYPE_SUBAGENT = "subagent"
     SPAN_TYPE_RUN = "run"
-    SPAN_TYPE_INTERACTION = "interaction"
-    SPAN_TYPE_LLM_REQUEST = "llm_request"
-    SPAN_TYPE_TOOL = "tool"
     SPAN_TYPE_TOOL_EXECUTION = "tool_execution"
     SPAN_TYPE_PERMISSION_WAIT = "permission_wait"
     SPAN_TYPE_HOOK = "hook"
@@ -63,7 +60,6 @@ class TraceSpan:
     STATUS_RUNNING = "running"
     STATUS_COMPLETED = "completed"
     STATUS_FAILED = "failed"
-    STATUS_DENIED = "denied"
     STATUS_CANCELLED = "cancelled"
     STATUS_ABANDONED = "abandoned"
 
@@ -167,13 +163,6 @@ class TraceSpan:
             self.metadata["error"] = error
         if metadata:
             self.metadata.update(metadata)
-        self.ended_time = datetime.now()
-        self.duration_ms = max(int((self.ended_time - self.started_time).total_seconds() * 1000), 0)
-
-    def deny(self, reason: str | None = None) -> None:
-        self.status = self.STATUS_DENIED
-        if reason:
-            self.metadata["deny_reason"] = reason
         self.ended_time = datetime.now()
         self.duration_ms = max(int((self.ended_time - self.started_time).total_seconds() * 1000), 0)
 

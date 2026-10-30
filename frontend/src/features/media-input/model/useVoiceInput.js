@@ -21,14 +21,11 @@ export function useVoiceInput() {
     isRecording.value = true
 
     recognition.onresult = (event) => {
-      let interim = ''
       let final = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const t = event.results[i][0].transcript
         if (event.results[i].isFinal) {
           final += t
-        } else {
-          interim += t
         }
       }
       if (final) {

@@ -36,6 +36,8 @@ from application.project.plugin_init_application_service import PluginInitApplic
 from application.project.project_application_service import ProjectApplicationService
 from application.project.workspace_application_service import WorkspaceApplicationService
 from application.scheduler.scheduler_application_service import SchedulerApplicationService
+from application.session.execution_trace_query_service import ExecutionTraceQueryService
+from application.session.llm_request_query_service import LlmRequestQueryService
 from application.session.session_application_service import SessionApplicationService
 from application.session.session_branch_application_service import SessionBranchApplicationService
 from application.session.session_run_timeline_service import SessionRunTimelineService
@@ -674,16 +676,13 @@ async def get_execution_ledger_event_repository(
 
 async def get_llm_request_query_service(
     db_session: AsyncSession = Depends(get_async_session),
-) -> "LlmRequestQueryService":
-    from application.session.llm_request_query_service import LlmRequestQueryService
-
+) -> LlmRequestQueryService:
     return LlmRequestQueryService(ExecutionLedgerEventRepositoryImpl(db_session))
 
 
 async def get_execution_trace_query_service(
     db_session: AsyncSession = Depends(get_async_session),
-) -> "ExecutionTraceQueryService":
-    from application.session.execution_trace_query_service import ExecutionTraceQueryService
+) -> ExecutionTraceQueryService:
     from infr.client.transcript_reader import ClaudeTranscriptReader
 
     return ExecutionTraceQueryService(
@@ -692,10 +691,6 @@ async def get_execution_trace_query_service(
         trace_span_repository=TraceSpanRepositoryImpl(db_session),
         transcript_reader=ClaudeTranscriptReader(),
     )
-
-
-def get_workspace_root_resolver() -> WorkspaceRootResolverImpl:
-    return _workspace_root_resolver
 
 
 async def get_agent_template_application_service(

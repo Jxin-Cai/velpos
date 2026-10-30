@@ -39,9 +39,6 @@ class ImInboxRepository(ABC):
         ...
 
     @abstractmethod
-    async def has_processable(self, now: datetime) -> bool: ...
-
-    @abstractmethod
     async def find_recent_by_session(
         self,
         session_id: str,
@@ -74,9 +71,6 @@ class ImOutboxRepository(ABC):
 
     @abstractmethod
     async def save(self, message: ImOutboxMessage) -> None: ...
-
-    @abstractmethod
-    async def has_processable(self, now: datetime) -> bool: ...
 
     @abstractmethod
     async def find_recent_by_session(

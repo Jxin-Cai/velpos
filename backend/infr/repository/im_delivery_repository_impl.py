@@ -150,28 +150,6 @@ class ImInboxRepositoryImpl(ImInboxRepository):
             )
         return model
 
-    async def has_processable(self, now: datetime) -> bool:
-        return bool(
-            await self._session.scalar(
-                select(
-                    exists().where(
-                        or_(
-                            and_(
-                                ImInboxEventModel.status.in_(
-                                    [ImInboxStatus.RECEIVED.value, ImInboxStatus.RETRY.value]
-                                ),
-                                ImInboxEventModel.next_attempt_at <= now,
-                            ),
-                            and_(
-                                ImInboxEventModel.status == ImInboxStatus.PROCESSING.value,
-                                ImInboxEventModel.lease_until <= now,
-                            ),
-                        )
-                    )
-                )
-            )
-        )
-
     async def find_recent_by_session(
         self,
         session_id: str,
@@ -360,28 +338,6 @@ class ImOutboxRepositoryImpl(ImOutboxRepository):
             )
         self._apply(model, message)
         await self._session.flush()
-
-    async def has_processable(self, now: datetime) -> bool:
-        return bool(
-            await self._session.scalar(
-                select(
-                    exists().where(
-                        or_(
-                            and_(
-                                ImOutboxMessageModel.status.in_(
-                                    [ImOutboxStatus.PENDING.value, ImOutboxStatus.RETRY.value]
-                                ),
-                                ImOutboxMessageModel.next_attempt_at <= now,
-                            ),
-                            and_(
-                                ImOutboxMessageModel.status == ImOutboxStatus.SENDING.value,
-                                ImOutboxMessageModel.lease_until <= now,
-                            ),
-                        )
-                    )
-                )
-            )
-        )
 
     async def find_recent_by_session(
         self,

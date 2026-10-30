@@ -46,10 +46,6 @@ export function initializeChannel(channelId, params = {}) {
   return post(`/im/channels/${encodeURIComponent(channelId)}/init`, { params })
 }
 
-export function resetChannel(channelId) {
-  return del(`/im/channels/${encodeURIComponent(channelId)}/init`)
-}
-
 export function syncContext(sessionId) {
   return post(`/im/bindings/${encodeURIComponent(sessionId)}/sync-context`, {})
 }

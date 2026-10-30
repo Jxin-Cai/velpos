@@ -100,7 +100,6 @@ const {
 
 const {
   enterBehavior,
-  enterBehaviors,
   setEnterBehavior,
 } = useUserPreferences()
 

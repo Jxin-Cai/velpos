@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.session.model.trace_span import TraceSpan
@@ -95,41 +95,6 @@ class TraceSpanRepositoryImpl(TraceSpanRepository):
         )
         result = await self._session.execute(stmt)
         return [self._to_domain(model) for model in result.scalars().all()]
-
-    async def find_running_by_tool_use_id(self, session_id: str, tool_use_id: str) -> TraceSpan | None:
-        stmt = (
-            select(TraceSpanModel)
-            .where(
-                TraceSpanModel.session_id == session_id,
-                TraceSpanModel.tool_use_id == tool_use_id,
-                TraceSpanModel.status == TraceSpan.STATUS_RUNNING,
-            )
-            .limit(1)
-        )
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return self._to_domain(model) if model else None
-
-    async def find_running_by_agent_id(self, session_id: str, agent_id: str) -> TraceSpan | None:
-        stmt = (
-            select(TraceSpanModel)
-            .where(
-                TraceSpanModel.session_id == session_id,
-                TraceSpanModel.agent_id == agent_id,
-                TraceSpanModel.status == TraceSpan.STATUS_RUNNING,
-            )
-            .order_by(TraceSpanModel.started_time.desc())
-            .limit(1)
-        )
-        result = await self._session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return self._to_domain(model) if model else None
-
-    async def delete_by_session(self, session_id: str) -> int:
-        stmt = delete(TraceSpanModel).where(TraceSpanModel.session_id == session_id)
-        result = await self._session.execute(stmt)
-        await self._session.flush()
-        return result.rowcount  # type: ignore[return-value]
 
     async def commit(self) -> None:
         try:

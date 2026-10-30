@@ -5,9 +5,7 @@ import json
 import pytest
 
 import infr.client.claude_agent_gateway as claude_agent_gateway_module
-import infr.client.claude_command_gateway as claude_command_gateway_module
 from infr.client.claude_agent_gateway import ClaudeAgentGateway
-from infr.client.claude_command_gateway import ClaudeCommandGateway
 from infr.client.claude_settings_env import (
     CLAUDE_CODE_GENERAL_ENV_DEFAULTS,
     load_claude_settings_env,

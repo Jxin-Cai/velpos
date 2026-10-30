@@ -91,9 +91,6 @@ class User:
             _is_active=is_active,
         )
 
-    def update_display_name(self, display_name: str) -> None:
-        self._display_name = display_name
-
     def update_password(self, hashed_password: str) -> None:
         self._hashed_password = hashed_password
 

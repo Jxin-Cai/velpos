@@ -12,43 +12,11 @@ class SessionAssembler:
 
     @staticmethod
     def _recovery_to_dict(session: Session) -> dict[str, Any]:
-        pending_request = session.pending_request_context
-        queued_command = session.queued_command
-
-        pending_summary = None
-        if pending_request:
-            tool_name = pending_request.get("tool_name", "")
-            if tool_name == "AskUserQuestion":
-                pending_summary = {
-                    "interaction_type": "user_choice",
-                    "tool_name": tool_name,
-                    "questions": pending_request.get("questions", []),
-                }
-            else:
-                pending_summary = {
-                    "interaction_type": "permission",
-                    "tool_name": tool_name,
-                    "tool_input": pending_request.get("tool_input", ""),
-                }
-
-        queued_summary = None
-        if queued_command:
-            queued_summary = {
-                "message_id": queued_command.get("client_message_id", ""),
-                "prompt": queued_command.get("prompt", ""),
-                "image_count": len(queued_command.get("image_paths", [])),
-                "attachment_count": len(queued_command.get("attachments", [])),
-            }
-
-        return {
-            "pending_request": pending_summary,
-            "queued_command": queued_summary,
-            "cancel_requested": session.cancel_requested,
-        }
+        return SessionPresenter.recovery_to_dict(session)
 
     @staticmethod
     def _public_sdk_session_id(sdk_session_id: str) -> str:
-        return "" if sdk_session_id.startswith("fork:") else sdk_session_id
+        return SessionPresenter.public_sdk_session_id(sdk_session_id)
 
     @staticmethod
     def to_summary(session: Session, git_branch: str = "") -> dict[str, Any]:

@@ -26,9 +26,6 @@ class ChannelCapability(str, enum.Enum):
     RICH_CARD = "rich_card"
     """能够发送富文本或交互式卡片."""
 
-    CARD_CALLBACK = "card_callback"
-    """能够接收卡片按钮回调事件."""
-
     # -- 路由 --
     THREAD_REPLY = "thread_reply"
     """能够针对特定消息发起线程内回复."""
@@ -52,7 +49,3 @@ class ChannelCapability(str, enum.Enum):
 
     MESSAGE_ID_ECHO = "message_id_echo"
     """发送成功后会返回渠道侧消息标识, 可用于校验投递结果."""
-
-
-#: 飞书具备的能力全集, 作为其余渠道的对齐基准.
-FULL_CAPABILITIES: frozenset[ChannelCapability] = frozenset(ChannelCapability)
